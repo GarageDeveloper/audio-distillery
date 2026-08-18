@@ -30,6 +30,8 @@ export const api = {
   getProjectView: () => invoke<ProjectView>("get_project_view"),
   getPeaks: (startSample: number, endSample: number, maxBuckets: number) =>
     invoke<PeakSlice>("get_peaks", { startSample, endSample, maxBuckets }),
+  getPeaksSplit: (startSample: number, endSample: number, maxBuckets: number) =>
+    invoke<PeakSlice[]>("get_peaks_split", { startSample, endSample, maxBuckets }),
   addRegion: (start: number, end: number, title?: string) =>
     invoke<ProjectView>("add_region", {
       start: Math.round(start),

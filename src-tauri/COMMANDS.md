@@ -41,10 +41,14 @@ beyond the scanned duration are dropped on project load.
 | Command | Parameters | Returns | Errors |
 |---|---|---|---|
 | `get_peaks` | `startSample: number`, `endSample: number`, `maxBuckets: number` | `PeakSlice` | no audio loaded |
+| `get_peaks_split` | same | `PeakSlice[]` (one per layer, same grid, each scaled by that layer's effective gain) | no audio loaded |
 
 The backend picks the resolution level and returns the peaks of the
-GAIN-WEIGHTED MIX of all audible layers (mutes and faders applied), so the
-waveform always shows what will be heard/exported. The frontend only draws
+GAIN-WEIGHTED MIX of all audible layers — mutes, faders AND per-track gain
+overrides applied at their exact timeline positions — so the waveform always
+shows what will be heard/exported. `get_peaks_split` returns the same window
+as one slice per layer (the "Layers" waveform view), each already scaled the
+same way. The frontend only draws
 the returned buckets. `PeakSlice.channels` holds interleaved `[min, max, …]`
 i8 pairs per channel.
 

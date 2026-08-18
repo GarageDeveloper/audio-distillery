@@ -17,6 +17,8 @@ interface Props {
   view: ProjectView;
   viewport: Viewport;
   playheadSample: number;
+  /** "mix" = summed waveform; "layers" = one lane per layer. */
+  waveMode: "mix" | "layers";
   proposals: RegionSpan[] | null;
   /// Auto-split candidates rejected by the minimum-length filter (faint).
   ignoredProposals?: RegionSpan[] | null;
@@ -60,6 +62,7 @@ export function Waveform(p: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sizeRef = useRef({ w: 0, h: 0 });
   const sliceRef = useRef<PeakSlice | null>(null);
+  const lanesRef = useRef<PeakSlice[] | null>(null);
   const fetchSeq = useRef(0);
   const hoverEdge = useRef<EdgeRef | null>(null);
   const drag = useRef<DragState | null>(null);
@@ -146,54 +149,114 @@ export function Waveform(p: Props) {
     ctx.lineTo(w, RULER_H + 0.5);
     ctx.stroke();
 
-    // Waveform channels.
-    const slice = sliceRef.current;
+    // Waveform: summed mix (per audio channel) or one lane per layer.
     const area = h - RULER_H;
-    const chCount = slice?.channels.length ?? view.audio.channels;
-    const laneH = area / chCount;
-    const amp = laneH * 0.42;
     const peakColors = [css("--wave-l-peak"), css("--wave-r-peak")];
     const rmsColors = [css("--wave-l-rms"), css("--wave-r-rms")];
     const centerColor = css("--wave-center");
+    const waveMode = propsRef.current.waveMode;
 
-    for (let c = 0; c < chCount; c++) {
-      const cy = RULER_H + laneH * (c + 0.5);
-      ctx.strokeStyle = centerColor;
-      ctx.beginPath();
-      ctx.moveTo(0, Math.round(cy) + 0.5);
-      ctx.lineTo(w, Math.round(cy) + 0.5);
-      ctx.stroke();
-
-      const ch = slice?.channels[c];
-      if (!ch || !slice) continue;
-      const spb = slice.samples_per_bucket;
+    const drawLane = (
+      data: PeakSlice,
+      chIdx: number | "mono",
+      cy: number,
+      amp: number,
+      colorIdx: number,
+      dim: boolean
+    ) => {
+      const spb = data.samples_per_bucket;
       const grad = ctx.createLinearGradient(0, cy - amp, 0, cy + amp);
       const lo = css("--copper-lo");
       grad.addColorStop(0, lo);
-      grad.addColorStop(0.5, rmsColors[Math.min(c, 1)]);
+      grad.addColorStop(0.5, rmsColors[Math.min(colorIdx, 1)]);
       grad.addColorStop(1, lo);
-
-      // Peak layer.
-      ctx.fillStyle = peakColors[Math.min(c, 1)];
-      for (let b = 0; b < ch.length / 2; b++) {
-        const s0 = slice.start_sample + b * spb;
+      const buckets = data.channels[0]?.length ?? 0;
+      const sampleAt = (b: number, off: 0 | 1) => {
+        if (chIdx === "mono") {
+          // Merge all channels of this slice into one lane.
+          let v = off === 0 ? 127 : -127;
+          for (const ch of data.channels) {
+            const x = ch[b * 2 + off];
+            v = off === 0 ? Math.min(v, x) : Math.max(v, x);
+          }
+          return v;
+        }
+        return data.channels[chIdx][b * 2 + off];
+      };
+      if (dim) ctx.globalAlpha = 0.35;
+      ctx.fillStyle = peakColors[Math.min(colorIdx, 1)];
+      for (let b = 0; b < buckets / 2; b++) {
+        const s0 = data.start_sample + b * spb;
         const x = sampleToX(s0, vp);
         const bw = Math.max(spb / vp.spp, 1);
         if (x + bw < 0 || x > w) continue;
-        const mn = (ch[b * 2] / 127) * amp;
-        const mx = (ch[b * 2 + 1] / 127) * amp;
+        const mn = (sampleAt(b, 0) / 127) * amp;
+        const mx = (sampleAt(b, 1) / 127) * amp;
         ctx.fillRect(x, cy - Math.max(mx, 0), bw, Math.max(mx - mn, 1));
       }
-      // Inner "hot" layer (45 % of peak height, accent gradient).
       ctx.fillStyle = grad;
-      for (let b = 0; b < ch.length / 2; b++) {
-        const s0 = slice.start_sample + b * spb;
+      for (let b = 0; b < buckets / 2; b++) {
+        const s0 = data.start_sample + b * spb;
         const x = sampleToX(s0, vp);
         const bw = Math.max(spb / vp.spp, 1);
         if (x + bw < 0 || x > w) continue;
-        const mn = (ch[b * 2] / 127) * amp * 0.45;
-        const mx = (ch[b * 2 + 1] / 127) * amp * 0.45;
+        const mn = (sampleAt(b, 0) / 127) * amp * 0.45;
+        const mx = (sampleAt(b, 1) / 127) * amp * 0.45;
         ctx.fillRect(x, cy - Math.max(mx, 0), bw, Math.max(mx - mn, 1));
+      }
+      ctx.globalAlpha = 1;
+    };
+
+    if (waveMode === "layers" && lanesRef.current) {
+      const lanes = lanesRef.current;
+      const layerViews = view.layers;
+      const n = Math.max(lanes.length, 1);
+      const laneH = area / n;
+      const amp = laneH * 0.42;
+      ctx.font = "600 10px ui-monospace, Menlo, Consolas, monospace";
+      for (let li = 0; li < lanes.length; li++) {
+        const cy = RULER_H + laneH * (li + 0.5);
+        ctx.strokeStyle = centerColor;
+        ctx.beginPath();
+        ctx.moveTo(0, Math.round(cy) + 0.5);
+        ctx.lineTo(w, Math.round(cy) + 0.5);
+        ctx.stroke();
+        if (li > 0) {
+          ctx.strokeStyle = css("--line-soft");
+          ctx.beginPath();
+          ctx.moveTo(0, Math.round(RULER_H + laneH * li) + 0.5);
+          ctx.lineTo(w, Math.round(RULER_H + laneH * li) + 0.5);
+          ctx.stroke();
+        }
+        const muted = layerViews[li]?.muted ?? false;
+        drawLane(lanes[li], "mono", cy, amp, 0, muted);
+        // Lane label: layer name (+ muted flag).
+        const name = layerViews[li]?.name ?? `Layer ${li + 1}`;
+        const label = muted ? `${name} · muted` : name;
+        ctx.fillStyle = css("--panel-2");
+        const tw = ctx.measureText(label).width;
+        ctx.beginPath();
+        ctx.roundRect(6, RULER_H + laneH * li + 6, tw + 12, 16, 4);
+        ctx.fill();
+        ctx.fillStyle = css("--text-2");
+        ctx.textBaseline = "middle";
+        ctx.fillText(label, 12, RULER_H + laneH * li + 14);
+      }
+    } else {
+      const slice = sliceRef.current;
+      const chCount = slice?.channels.length ?? view.audio.channels;
+      const laneH = area / chCount;
+      const amp = laneH * 0.42;
+      for (let c = 0; c < chCount; c++) {
+        const cy = RULER_H + laneH * (c + 0.5);
+        ctx.strokeStyle = centerColor;
+        ctx.beginPath();
+        ctx.moveTo(0, Math.round(cy) + 0.5);
+        ctx.lineTo(w, Math.round(cy) + 0.5);
+        ctx.stroke();
+        if (slice?.channels[c]) {
+          drawLane(slice, c, cy, amp, c, false);
+        }
       }
     }
 
@@ -472,31 +535,47 @@ export function Waveform(p: Props) {
     return () => ro.disconnect();
   }, [draw]);
 
-  // Fetch peaks whenever the visible window OR the layer mix changes (the
-  // backend returns the peaks of the gain-weighted mix).
-  const mixKey = p.view.layers
-    .map((l) => `${l.id}:${l.gain_db}:${l.muted}`)
-    .join(",");
+  // Fetch peaks whenever the visible window, the layer mix, the per-track
+  // overrides or the view mode change (the backend applies all gains).
+  const mixKey =
+    p.view.layers.map((l) => `${l.id}:${l.gain_db}:${l.muted}`).join(",") +
+    "|" +
+    p.view.tracks
+      .map((t) => `${t.id}@${t.start_sample}-${t.end_sample}:${JSON.stringify(t.gain_overrides)}`)
+      .join(",");
   useEffect(() => {
     const w = sizeRef.current.w || 1000;
     const start = Math.floor(p.viewport.start);
     const end = Math.ceil(p.viewport.start + w * p.viewport.spp);
     const seq = ++fetchSeq.current;
-    api
-      .getPeaks(start, end, Math.max(Math.round(w), 100))
-      .then((slice) => {
-        if (seq === fetchSeq.current) {
-          sliceRef.current = slice;
-          draw();
-        }
-      })
-      .catch(() => {});
-  }, [p.viewport.start, p.viewport.spp, p.view.audio.path, p.view.audio.duration_samples, mixKey, draw]);
+    const buckets = Math.max(Math.round(w), 100);
+    if (p.waveMode === "layers") {
+      api
+        .getPeaksSplit(start, end, buckets)
+        .then((lanes) => {
+          if (seq === fetchSeq.current) {
+            lanesRef.current = lanes;
+            draw();
+          }
+        })
+        .catch(() => {});
+    } else {
+      api
+        .getPeaks(start, end, buckets)
+        .then((slice) => {
+          if (seq === fetchSeq.current) {
+            sliceRef.current = slice;
+            draw();
+          }
+        })
+        .catch(() => {});
+    }
+  }, [p.viewport.start, p.viewport.spp, p.view.audio.path, p.view.audio.duration_samples, mixKey, p.waveMode, draw]);
 
   // Redraw on any relevant prop change.
   useEffect(() => {
     draw();
-  }, [p.view, p.viewport, p.playheadSample, p.proposals, p.ignoredProposals, p.selection, p.pendingStart, p.selectedTrack, draw]);
+  }, [p.view, p.viewport, p.playheadSample, p.waveMode, p.proposals, p.ignoredProposals, p.selection, p.pendingStart, p.selectedTrack, draw]);
 
   // Auto-follow the playhead past the right edge.
   useEffect(() => {

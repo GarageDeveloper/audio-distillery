@@ -769,3 +769,6 @@ kbd {
 .mix-fader { width: 100%; accent-color: var(--copper); }
 .track-mix-row.inheriting .mix-fader { accent-color: var(--text-3); opacity: .55; }
 .track-mix-row.inheriting .mix-fader:hover { opacity: .85; }
+
+.wave-mode { padding: 2px; }
+.wave-mode button { padding: 0 10px; height: 24px; flex: none; }

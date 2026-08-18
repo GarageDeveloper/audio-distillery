@@ -263,40 +263,103 @@ impl ProjectState {
         self.peaks = peaks;
     }
 
-    /// (linear gain, pyramid) pairs of the audible layers, for display mixes.
-    pub fn active_peaks(&self) -> Vec<(f32, &PeakPyramid)> {
-        self.project
+    /// Position-dependent linear gain per layer: session fader (or 0 when
+    /// muted) everywhere, replaced inside a track region by that track's
+    /// overrides — so the waveform shows overrides exactly where they apply.
+    fn gain_resolver(&self) -> impl Fn(u64, usize) -> f32 + '_ {
+        let defaults: Vec<f32> = self
+            .project
             .layers
             .iter()
-            .zip(self.peaks.iter())
-            .filter(|(l, _)| !l.muted)
-            .map(|(l, p)| (db_to_linear(l.gain_db), p))
-            .collect()
+            .map(|l| if l.muted { 0.0 } else { db_to_linear(l.gain_db) })
+            .collect();
+        let mut overridden: Vec<(u64, u64, Vec<f32>)> = Vec::new();
+        for r in &self.project.regions {
+            if r.gain_overrides.is_empty() {
+                continue;
+            }
+            let gains = self
+                .project
+                .layers
+                .iter()
+                .enumerate()
+                .map(|(i, l)| {
+                    if l.muted {
+                        0.0
+                    } else {
+                        r.gain_overrides
+                            .get(&l.id.to_string())
+                            .map(|db| db_to_linear(*db))
+                            .unwrap_or(defaults[i])
+                    }
+                })
+                .collect();
+            overridden.push((r.start, r.end, gains));
+        }
+        move |sample, li| {
+            for (s, e, gains) in &overridden {
+                if sample >= *s && sample < *e {
+                    return gains.get(li).copied().unwrap_or(0.0);
+                }
+            }
+            defaults.get(li).copied().unwrap_or(0.0)
+        }
     }
 
-    /// Display peaks of the current mix over a window.
+    /// Display peaks of the current mix over a window (mutes, faders and
+    /// per-track overrides applied).
     pub fn peaks_slice(
         &self,
         start_sample: u64,
         end_sample: u64,
         max_buckets: u32,
     ) -> crate::peaks::PeakSlice {
-        crate::peaks::merged_query(
-            &self.active_peaks(),
+        let pyramids: Vec<&PeakPyramid> = self.peaks.iter().collect();
+        crate::peaks::merged_query_with(
+            &pyramids,
             self.info.channels.max(1) as usize,
             start_sample,
             end_sample,
             max_buckets,
+            self.gain_resolver(),
         )
+    }
+
+    /// One display slice PER LAYER over a window, each scaled by that layer's
+    /// effective gain at every position (session fader, mute, and the track
+    /// overrides where they apply) — the "layers" waveform view.
+    pub fn layer_slices(
+        &self,
+        start_sample: u64,
+        end_sample: u64,
+        max_buckets: u32,
+    ) -> Vec<crate::peaks::PeakSlice> {
+        let resolver = self.gain_resolver();
+        self.peaks
+            .iter()
+            .enumerate()
+            .map(|(li, p)| {
+                crate::peaks::scaled_query_with(p, start_sample, end_sample, max_buckets, |s| {
+                    resolver(s, li)
+                })
+            })
+            .collect()
     }
 
     /// Base-resolution pyramid of the current mix (silence detection input).
     pub fn merged_pyramid(&self) -> PeakPyramid {
-        crate::peaks::merged_base_pyramid(
-            &self.active_peaks(),
-            self.info.channels.max(1) as usize,
-            self.info.duration_samples,
-        )
+        let buckets = self
+            .info
+            .duration_samples
+            .div_ceil(crate::peaks::BASE_SAMPLES_PER_BUCKET as u64)
+            .max(1);
+        let slice = self.peaks_slice(0, self.info.duration_samples, buckets as u32);
+        PeakPyramid {
+            levels: vec![crate::peaks::PeakLevel {
+                samples_per_bucket: slice.samples_per_bucket,
+                channels: slice.channels,
+            }],
+        }
     }
 
     fn layer_index(&self, id: u32) -> Result<usize> {
@@ -981,6 +1044,49 @@ mod tests {
         assert_eq!(s.tracks().len(), 3);
         assert!(s.undo());
         assert_eq!(s.tracks().len(), 1);
+    }
+
+    #[test]
+    fn peaks_reflect_track_overrides_in_place() {
+        use crate::peaks::PeakBuilder;
+        // Two mono layers of constant 0.5 amplitude over 60 s.
+        let n = 60 * SEC as usize;
+        let make_pyr = || {
+            let mut b = PeakBuilder::new(1);
+            b.push_interleaved(&vec![0.5f32; n]);
+            b.finish().0
+        };
+        let mut s = state(60);
+        s.project = Project::new_layers(vec![
+            vec!["/tmp/a.wav".into()],
+            vec!["/tmp/b.wav".into()],
+        ]);
+        s.peaks = vec![make_pyr(), make_pyr()];
+        // A track covering [10 s, 20 s) that silences layer 2.
+        let track = s.add_region(10 * SEC, 20 * SEC, None).unwrap();
+        let layer2 = s.project.layers[1].id;
+        s.set_track_layer_gain(track, layer2, Some(-60.0)).unwrap();
+
+        let slice = s.peaks_slice(0, 60 * SEC, 600);
+        let spb = slice.samples_per_bucket as u64;
+        let value_at = |sec: u64| slice.channels[0][((sec * SEC / spb) as usize) * 2 + 1];
+        // Outside the track: 0.5 + 0.5 = 1.0 → 127. Inside: 0.5 alone → ~63.
+        assert!(value_at(5) > 120, "outside = {}", value_at(5));
+        assert!(
+            (55..=72).contains(&value_at(15)),
+            "inside override = {}",
+            value_at(15)
+        );
+        assert!(value_at(30) > 120, "after = {}", value_at(30));
+
+        // Per-layer view: layer 2's lane is silent inside the track only.
+        let lanes = s.layer_slices(0, 60 * SEC, 600);
+        let lane_at = |li: usize, sec: u64| {
+            lanes[li].channels[0][((sec * SEC / spb) as usize) * 2 + 1]
+        };
+        assert!((55..=72).contains(&lane_at(1, 5)), "{}", lane_at(1, 5));
+        assert_eq!(lane_at(1, 15), 0);
+        assert!((55..=72).contains(&lane_at(0, 15)), "{}", lane_at(0, 15));
     }
 
     #[test]

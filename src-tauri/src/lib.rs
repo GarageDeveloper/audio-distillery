@@ -23,6 +23,7 @@ pub fn run() {
             commands::save_project,
             commands::get_project_view,
             commands::get_peaks,
+            commands::get_peaks_split,
             commands::add_region,
             commands::add_regions,
             commands::move_region_edge,

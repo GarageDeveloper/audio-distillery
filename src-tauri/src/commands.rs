@@ -326,6 +326,20 @@ pub fn get_peaks(
     })
 }
 
+/// Per-layer display peaks (same window/grid), for the "layers" waveform
+/// view. Each slice is already scaled by that layer's effective gain.
+#[tauri::command]
+pub fn get_peaks_split(
+    state: State<'_, AppState>,
+    start_sample: u64,
+    end_sample: u64,
+    max_buckets: u32,
+) -> CmdResult<Vec<PeakSlice>> {
+    with_session(&state, |s| {
+        Ok(s.layer_slices(start_sample, end_sample, max_buckets))
+    })
+}
+
 fn with_session<T>(
     state: &State<'_, AppState>,
     f: impl FnOnce(&mut ProjectState) -> CmdResult<T>,

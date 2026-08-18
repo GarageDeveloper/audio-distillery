@@ -37,6 +37,7 @@ export default function App() {
   const [proposals, setProposals] = useState<RegionSpan[] | null>(null);
   const [dropChoice, setDropChoice] = useState<string[] | null>(null);
   const [minTrackSecs, setMinTrackSecs] = useState(60);
+  const [waveMode, setWaveMode] = useState<"mix" | "layers">("mix");
   const [selection, setSelection] = useState<RegionSpan | null>(null);
   const [pendingStart, setPendingStart] = useState<number | null>(null);
   const [selectedTrack, setSelectedTrack] = useState<number | null>(null);
@@ -380,6 +381,8 @@ export default function App() {
         panelOpen={panelOpen}
         theme={theme}
         onThemeChange={setTheme}
+        waveMode={waveMode}
+        onWaveModeChange={setWaveMode}
         onOpen={openFile}
         onAddClips={() => void addClips()}
         onTogglePlay={() =>
@@ -403,6 +406,7 @@ export default function App() {
                 view={view}
                 viewport={viewport}
                 playheadSample={playheadSample}
+                waveMode={view.layers.length > 1 ? waveMode : "mix"}
                 proposals={proposals ? keptProposals : null}
                 ignoredProposals={proposals ? ignoredProposals : null}
                 selection={selection}

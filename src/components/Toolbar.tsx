@@ -18,6 +18,8 @@ interface Props {
   panelOpen: boolean;
   theme: Theme;
   onThemeChange: (t: Theme) => void;
+  waveMode: "mix" | "layers";
+  onWaveModeChange: (m: "mix" | "layers") => void;
   onOpen: () => void;
   onAddClips: () => void;
   onTogglePlay: () => void;
@@ -127,6 +129,22 @@ export function Toolbar(p: Props) {
       </div>
 
       <div className="toolbar-right">
+        {p.view && p.view.layers.length > 1 && (
+          <div className="segmented wave-mode" title="Waveform view: summed mix, or one lane per layer">
+            <button
+              className={p.waveMode === "mix" ? "on" : ""}
+              onClick={() => p.onWaveModeChange("mix")}
+            >
+              Mix
+            </button>
+            <button
+              className={p.waveMode === "layers" ? "on" : ""}
+              onClick={() => p.onWaveModeChange("layers")}
+            >
+              Layers
+            </button>
+          </div>
+        )}
         <select
           className="theme-select"
           value={p.theme}

@@ -210,36 +210,40 @@ impl PeakPyramid {
     }
 }
 
-/// Merge several layers' peaks into one display slice: each layer's values
-/// are scaled by its linear gain and summed (then clamped), so the waveform
-/// reflects the mix the user is dialing in. A mono layer contributes its
-/// single channel to every output channel. Display-only approximation (the
-/// true peak of a sum is not the sum of peaks).
-pub fn merged_query(
-    layers: &[(f32, &PeakPyramid)],
+/// Merge several layers' peaks into one display slice, with a
+/// position-dependent gain per layer: `gain_at(sample, layer_index)` returns
+/// the linear gain to apply at that timeline position (this is how per-track
+/// gain overrides show up on the waveform). Values are scaled, summed and
+/// clamped. A mono layer contributes its single channel to every output
+/// channel. Display-only approximation (the true peak of a sum is not the
+/// sum of peaks).
+pub fn merged_query_with(
+    layers: &[&PeakPyramid],
     out_channels: usize,
     start_sample: u64,
     end_sample: u64,
     max_buckets: u32,
+    gain_at: impl Fn(u64, usize) -> f32,
 ) -> PeakSlice {
     let span = end_sample.saturating_sub(start_sample).max(1);
     let spb = target_spb(span, max_buckets);
-    let slices: Vec<(f32, PeakSlice)> = layers
+    let slices: Vec<PeakSlice> = layers
         .iter()
-        .map(|(g, p)| (*g, p.query_with_spb(spb, start_sample, end_sample)))
+        .map(|p| p.query_with_spb(spb, start_sample, end_sample))
         .collect();
     let start_aligned = (start_sample / spb) * spb;
     let bucket_count = slices
         .iter()
-        .map(|(_, s)| s.channels.first().map_or(0, |c| c.len() / 2))
+        .map(|s| s.channels.first().map_or(0, |c| c.len() / 2))
         .max()
         .unwrap_or(0);
     let mut channels = vec![vec![0i8; bucket_count * 2]; out_channels];
     for b in 0..bucket_count {
+        let sample = start_aligned + b as u64 * spb + spb / 2;
         for c in 0..out_channels {
             let mut mn = 0f32;
             let mut mx = 0f32;
-            for (gain, slice) in &slices {
+            for (li, slice) in slices.iter().enumerate() {
                 let Some(ch) = slice
                     .channels
                     .get(c.min(slice.channels.len().saturating_sub(1)))
@@ -247,6 +251,7 @@ pub fn merged_query(
                     continue;
                 };
                 if b * 2 + 1 < ch.len() {
+                    let gain = gain_at(sample, li);
                     mn += ch[b * 2] as f32 * gain;
                     mx += ch[b * 2 + 1] as f32 * gain;
                 }
@@ -260,6 +265,50 @@ pub fn merged_query(
         start_sample: start_aligned,
         channels,
     }
+}
+
+/// One layer's peaks scaled by a position-dependent gain (per-layer display
+/// lanes). Muted layers are handled by passing a zero gain.
+pub fn scaled_query_with(
+    pyramid: &PeakPyramid,
+    start_sample: u64,
+    end_sample: u64,
+    max_buckets: u32,
+    gain_at: impl Fn(u64) -> f32,
+) -> PeakSlice {
+    let span = end_sample.saturating_sub(start_sample).max(1);
+    let spb = target_spb(span, max_buckets);
+    let mut slice = pyramid.query_with_spb(spb, start_sample, end_sample);
+    let start_aligned = slice.start_sample;
+    for ch in &mut slice.channels {
+        for b in 0..ch.len() / 2 {
+            let sample = start_aligned + b as u64 * spb + spb / 2;
+            let gain = gain_at(sample);
+            ch[b * 2] = (ch[b * 2] as f32 * gain).clamp(-127.0, 127.0) as i8;
+            ch[b * 2 + 1] = (ch[b * 2 + 1] as f32 * gain).clamp(-127.0, 127.0) as i8;
+        }
+    }
+    slice
+}
+
+/// Constant-gain convenience wrapper around [`merged_query_with`].
+pub fn merged_query(
+    layers: &[(f32, &PeakPyramid)],
+    out_channels: usize,
+    start_sample: u64,
+    end_sample: u64,
+    max_buckets: u32,
+) -> PeakSlice {
+    let pyramids: Vec<&PeakPyramid> = layers.iter().map(|(_, p)| *p).collect();
+    let gains: Vec<f32> = layers.iter().map(|(g, _)| *g).collect();
+    merged_query_with(
+        &pyramids,
+        out_channels,
+        start_sample,
+        end_sample,
+        max_buckets,
+        |_, li| gains[li],
+    )
 }
 
 /// A single-level pyramid of the merged mix at base resolution — used by
