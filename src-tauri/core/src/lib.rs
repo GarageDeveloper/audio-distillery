@@ -16,8 +16,8 @@ pub mod project;
 pub mod silence;
 
 pub use audio::{
-    clip_segments, scan_file, scan_files, scan_layers, snap_to_zero_crossing, AudioInfo,
-    ClipInfo, ScannedLayer, SUPPORTED_EXTENSIONS,
+    clip_segments, layer_parts, scan_file, scan_files, scan_layers, snap_to_zero_crossing,
+    AudioInfo, ClipInfo, ScannedLayer, TimelinePart, SUPPORTED_EXTENSIONS,
 };
 pub use error::{Result, StillError};
 pub use export::{
@@ -29,6 +29,7 @@ pub use peaks::{merged_base_pyramid, merged_query, PeakPyramid, PeakSlice};
 pub use playback::{LayerPlay, PlaybackState, PlayerHandle, VolumeAutomation};
 pub use project::{
     db_to_linear, read_project, sanitize_regions, save_project, ExportConfig, ExportFormat,
-    Layer, LayerView, Project, ProjectState, ProjectView, RegionEdge, RegionSpan, TrackInfo,
+    Layer, LayerView, Project, ProjectState, ProjectView, RegionEdge, RegionSpan, SourceRef,
+    TrackInfo,
 };
 pub use silence::{detect_track_regions, SilenceParams};

@@ -22,6 +22,7 @@ interface Props {
   onWaveModeChange: (m: "mix" | "layers") => void;
   onOpen: () => void;
   onAddClips: () => void;
+  onAddTake: () => void;
   onTogglePlay: () => void;
   onSave: () => void;
   onSaveAs: () => void;
@@ -77,10 +78,19 @@ export function Toolbar(p: Props) {
           <button
             className="btn"
             onClick={p.onAddClips}
-            title="Append audio files to the end of the timeline"
+            title="Append audio files to the end of the timeline (base layer)"
           >
             + Clip
           </button>
+          {p.view.layers.length > 1 && (
+            <button
+              className="btn"
+              onClick={p.onAddTake}
+              title="Append a whole synced take: one file per layer, starting together after the current timeline"
+            >
+              + Take
+            </button>
+          )}
           <button className="btn" onClick={p.onSave} title="Save project (⌘S)">
             Save
           </button>

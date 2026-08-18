@@ -13,6 +13,7 @@ pub fn run() {
             commands::load_audio,
             commands::load_multitrack,
             commands::add_clips,
+            commands::add_take,
             commands::add_layers,
             commands::set_layer_gain,
             commands::set_layer_muted,

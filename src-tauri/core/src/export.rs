@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::audio::{clip_segments, ClipInfo};
+use crate::audio::{layer_parts, ClipInfo, TimelinePart};
 use crate::error::{Result, StillError};
 use crate::naming::render_track_filename;
 use crate::project::{ExportConfig, ExportFormat, TrackInfo};
@@ -281,13 +281,17 @@ fn export_one(
     // at t = 0 (otherwise players show leading silence).
     // Volumes were resolved per track by the core (gains, mutes, solos and
     // this track's overrides): silent layers are simply skipped.
-    let active: Vec<(&LayerMix, f32, Vec<(usize, u64, u64)>)> = layers
+    let active: Vec<(&LayerMix, f32, Vec<TimelinePart>)> = layers
         .iter()
         .enumerate()
         .map(|(i, l)| (l, job.layer_volumes.get(i).copied().unwrap_or(1.0)))
         .filter(|(_, vol)| *vol > 0.0)
-        .map(|(l, vol)| (l, vol, clip_segments(&l.clips, job.start_sample, job.end_sample)))
-        .filter(|(_, _, segs)| !segs.is_empty())
+        .map(|(l, vol)| (l, vol, layer_parts(&l.clips, job.start_sample, job.end_sample)))
+        .filter(|(_, _, parts)| {
+            parts
+                .iter()
+                .any(|p| matches!(p, TimelinePart::File { .. }))
+        })
         .collect();
     if active.is_empty() {
         return Err(StillError::Ffmpeg(
@@ -302,16 +306,22 @@ fn export_one(
         .arg("error")
         .arg("-progress")
         .arg("pipe:1");
-    for (layer, _, segs) in &active {
-        for (clip_idx, _, _) in segs {
-            cmd.arg("-i").arg(&layer.clips[*clip_idx].path);
+    for (layer, _, parts) in &active {
+        for part in parts {
+            if let TimelinePart::File { clip, .. } = part {
+                cmd.arg("-i").arg(&layer.clips[*clip].path);
+            }
         }
     }
 
-    let single_plain =
-        active.len() == 1 && active[0].2.len() == 1 && (active[0].1 - 1.0).abs() < 1e-6;
+    let single_plain = active.len() == 1
+        && active[0].2.len() == 1
+        && matches!(active[0].2[0], TimelinePart::File { .. })
+        && (active[0].1 - 1.0).abs() < 1e-6;
     if single_plain {
-        let (_, s, e) = active[0].2[0];
+        let TimelinePart::File { start: s, end: e, .. } = active[0].2[0] else {
+            unreachable!()
+        };
         cmd.arg("-map").arg("0:a:0").arg("-af").arg(format!(
             "atrim=start_sample={s}:end_sample={e},asetpts=PTS-STARTPTS"
         ));
@@ -320,15 +330,26 @@ fn export_one(
         let mut filter = String::new();
         let mut input_idx = 0usize;
         let mut layer_labels: Vec<String> = Vec::new();
-        for (li, (_, volume, segs)) in active.iter().enumerate() {
+        for (li, (_, volume, parts)) in active.iter().enumerate() {
             let mut seg_labels: Vec<String> = Vec::new();
-            for (k, (_, s, e)) in segs.iter().enumerate() {
+            for (k, part) in parts.iter().enumerate() {
                 let label = format!("t{li}x{k}");
-                filter.push_str(&format!(
-                    "[{input_idx}:a:0]atrim=start_sample={s}:end_sample={e},asetpts=PTS-STARTPTS[{label}];"
-                ));
+                match part {
+                    TimelinePart::File { start: s, end: e, .. } => {
+                        filter.push_str(&format!(
+                            "[{input_idx}:a:0]atrim=start_sample={s}:end_sample={e},asetpts=PTS-STARTPTS[{label}];"
+                        ));
+                        input_idx += 1;
+                    }
+                    TimelinePart::Silence { samples } => {
+                        // Sample-exact silence keeps this layer aligned with
+                        // the others across take gaps.
+                        filter.push_str(&format!(
+                            "anullsrc=r={sample_rate}:cl={layout},atrim=end_sample={samples},asetpts=PTS-STARTPTS[{label}];"
+                        ));
+                    }
+                }
                 seg_labels.push(label);
-                input_idx += 1;
             }
             let joined = if seg_labels.len() > 1 {
                 let label = format!("c{li}");

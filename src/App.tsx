@@ -92,7 +92,7 @@ export default function App() {
   const loadPaths = useCallback(
     async (
       paths: string[],
-      mode: "open" | "append" | "project" | "multitrack" | "layers"
+      mode: "open" | "append" | "project" | "multitrack" | "layers" | "take"
     ) => {
       const first = paths[0].split(/[/\\]/).pop() ?? paths[0];
       const fileName = paths.length > 1 ? `${first} +${paths.length - 1}` : first;
@@ -104,8 +104,10 @@ export default function App() {
             ? await api.loadProject(paths[0])
             : mode === "append"
               ? await api.addClips(paths)
-              : mode === "layers"
-                ? await api.addLayers(paths)
+              : mode === "take"
+                ? await api.addTake(paths)
+                : mode === "layers"
+                  ? await api.addLayers(paths)
                 : mode === "multitrack"
                   ? await api.loadMultitrack(paths)
                   : await api.loadAudio(paths);
@@ -119,7 +121,7 @@ export default function App() {
         // Always re-fit so the freshly appended clip is visible; only a new
         // session clears the working state.
         fitFile(v, waveWidth);
-        if (mode !== "append" && mode !== "layers") {
+        if (mode !== "append" && mode !== "layers" && mode !== "take") {
           setProposals(null);
           setSelection(null);
           setPendingStart(null);
@@ -225,6 +227,11 @@ export default function App() {
   const addLayers = useCallback(async () => {
     const paths = await pickAudioPaths(false);
     if (paths.length > 0) void loadPaths(paths, "layers");
+  }, [pickAudioPaths, loadPaths]);
+
+  const addTake = useCallback(async () => {
+    const paths = await pickAudioPaths(false);
+    if (paths.length > 0) void loadPaths(paths, "take");
   }, [pickAudioPaths, loadPaths]);
 
   const saveProject = useCallback(
@@ -394,6 +401,7 @@ export default function App() {
         onWaveModeChange={setWaveMode}
         onOpen={openFile}
         onAddClips={() => void addClips()}
+        onAddTake={() => void addTake()}
         onTogglePlay={() =>
           api.playerToggle().then(playback.adopt).catch((e) => showError(String(e)))
         }
@@ -627,6 +635,21 @@ export default function App() {
               <strong>{view ? "Add as synced layers" : "Synced multitrack"}</strong>
               <span>Time-aligned recordings of the same session (Zoom inputs), mixed together</span>
             </button>
+            {view && view.layers.length > 1 && (
+              <button
+                className="btn choice"
+                onClick={() => {
+                  void loadPaths(dropChoice, "take");
+                  setDropChoice(null);
+                }}
+              >
+                <strong>Append as next take</strong>
+                <span>
+                  One file per layer ({view.layers.length} expected, matched by name order),
+                  starting together right after the current timeline
+                </span>
+              </button>
+            )}
             <div className="modal-foot">
               <button className="btn" onClick={() => setDropChoice(null)}>
                 Cancel

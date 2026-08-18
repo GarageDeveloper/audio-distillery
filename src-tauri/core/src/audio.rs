@@ -64,6 +64,50 @@ pub struct AudioInfo {
     pub duration_seconds: f64,
 }
 
+/// A piece of a layer over a timeline range: either part of a source file,
+/// or a silent gap (between takes / after the layer's end).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TimelinePart {
+    /// (clip index, local start sample, local end sample)
+    File { clip: usize, start: u64, end: u64 },
+    Silence { samples: u64 },
+}
+
+/// Decompose a timeline range into file parts and silent gaps for one layer.
+/// The parts always cover [start, end) exactly, keeping layers in sync at
+/// export even across take gaps.
+pub fn layer_parts(clips: &[ClipInfo], start: u64, end: u64) -> Vec<TimelinePart> {
+    let mut parts = Vec::new();
+    let mut cursor = start;
+    for (i, c) in clips.iter().enumerate() {
+        let cs = c.start_sample;
+        let ce = cs + c.duration_samples;
+        if ce <= cursor {
+            continue;
+        }
+        if cs >= end {
+            break;
+        }
+        if cs > cursor {
+            parts.push(TimelinePart::Silence { samples: cs - cursor });
+            cursor = cs;
+        }
+        let e = end.min(ce);
+        if cursor < e {
+            parts.push(TimelinePart::File {
+                clip: i,
+                start: cursor - cs,
+                end: e - cs,
+            });
+            cursor = e;
+        }
+    }
+    if cursor < end {
+        parts.push(TimelinePart::Silence { samples: end - cursor });
+    }
+    parts
+}
+
 /// Map a timeline range onto the clips it covers: (clip index, local start,
 /// local end) — local positions are samples within that clip's file.
 pub fn clip_segments(clips: &[ClipInfo], start: u64, end: u64) -> Vec<(usize, u64, u64)> {
@@ -191,7 +235,7 @@ fn decode_into(
 /// layer must share the layer's sample rate and channel count.
 /// `sample_rate_lock`: Some(rate) enforces the session rate.
 fn scan_group(
-    paths: &[PathBuf],
+    paths: &[(PathBuf, Option<u64>)],
     sample_rate_lock: Option<u32>,
     cancel: &AtomicBool,
     mut progress: impl FnMut(usize, f32),
@@ -204,7 +248,7 @@ fn scan_group(
     let mut channels = 0u16;
     let mut clips = Vec::with_capacity(paths.len());
 
-    for (i, path) in paths.iter().enumerate() {
+    for (i, (path, pinned_start)) in paths.iter().enumerate() {
         let mut o = open(path)?;
         match &builder {
             None => {
@@ -235,6 +279,14 @@ fn scan_group(
             Some(_) => {}
         }
         let b = builder.as_mut().expect("builder initialized above");
+        // Take alignment: a pinned clip starts at its explicit timeline
+        // position; the gap up to there is silence.
+        if let Some(start) = pinned_start {
+            let cur = b.total_frames();
+            if *start > cur {
+                b.push_silence(*start - cur);
+            }
+        }
         let start_sample = b.total_frames();
         let frames = decode_into(&mut o, b, cancel, |f| progress(i, f))?;
         if frames == 0 {
@@ -272,7 +324,7 @@ fn scan_group(
 /// differ (a mono Zoom input next to the stereo mic is fine).
 /// `progress` receives 0.0..=1.0 over all files of all layers.
 pub fn scan_layers(
-    groups: &[Vec<PathBuf>],
+    groups: &[Vec<(PathBuf, Option<u64>)>],
     cancel: &AtomicBool,
     mut progress: impl FnMut(f32),
 ) -> Result<(AudioInfo, Vec<PeakPyramid>)> {
@@ -299,7 +351,7 @@ pub fn scan_layers(
     let sample_rate = sample_rate.expect("at least one layer scanned");
     let duration_samples = layers.iter().map(|l| l.duration_samples).max().unwrap_or(0);
     let channels = layers.iter().map(|l| l.channels).max().unwrap_or(0);
-    let first = &groups[0][0];
+    let first = &groups[0][0].0;
     let format_name = first
         .extension()
         .map(|e| e.to_string_lossy().to_uppercase())
@@ -325,7 +377,8 @@ pub fn scan_files(
     cancel: &AtomicBool,
     progress: impl FnMut(f32),
 ) -> Result<(AudioInfo, PeakPyramid)> {
-    let (info, mut pyramids) = scan_layers(&[paths.to_vec()], cancel, progress)?;
+    let group: Vec<(PathBuf, Option<u64>)> = paths.iter().map(|p| (p.clone(), None)).collect();
+    let (info, mut pyramids) = scan_layers(&[group], cancel, progress)?;
     Ok((info, pyramids.remove(0)))
 }
 

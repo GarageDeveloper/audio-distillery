@@ -16,6 +16,7 @@ export const api = {
     invoke<ProjectView>("load_multitrack", { paths }),
   addClips: (paths: string[]) => invoke<ProjectView>("add_clips", { paths }),
   addLayers: (paths: string[]) => invoke<ProjectView>("add_layers", { paths }),
+  addTake: (paths: string[]) => invoke<ProjectView>("add_take", { paths }),
   setLayerGain: (id: number, gainDb: number) =>
     invoke<ProjectView>("set_layer_gain", { id, gainDb }),
   setLayerMuted: (id: number, muted: boolean) =>

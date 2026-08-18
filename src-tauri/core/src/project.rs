@@ -8,7 +8,7 @@ use crate::audio::AudioInfo;
 use crate::error::{Result, StillError};
 use crate::peaks::PeakPyramid;
 
-pub const PROJECT_VERSION: u32 = 4;
+pub const PROJECT_VERSION: u32 = 5;
 pub const MIN_GAIN_DB: f32 = -60.0;
 pub const MAX_GAIN_DB: f32 = 12.0;
 /// A track region may never be shorter than this.
@@ -94,15 +94,29 @@ impl Default for ExportConfig {
     }
 }
 
-/// The declarative "recipe": everything persisted in a `.still` file.
-/// The source audio is only ever referenced, never touched (SPEC §3 bis).
+/// One source file of a layer, optionally pinned at an explicit timeline
+/// position (take alignment). `start: None` = right after the previous clip;
+/// `Some(pos)` opens a silent gap up to `pos` when needed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceRef {
+    pub path: String,
+    #[serde(default)]
+    pub start: Option<u64>,
+}
+
+impl SourceRef {
+    pub fn sequential(path: String) -> Self {
+        Self { path, start: None }
+    }
+}
+
 /// One time-synchronized layer of the session (e.g. one input of a Zoom
-/// recorder). All layers start at t = 0; each holds its own sequential
-/// source files, a mix gain and a mute flag.
+/// recorder). All layers start at t = 0; each holds its own source clips
+/// (sequential, or pinned for take alignment), a mix gain, mute and solo.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Layer {
     pub id: u32,
-    pub sources: Vec<String>,
+    pub sources: Vec<SourceRef>,
     pub gain_db: f32,
     pub muted: bool,
     /// Solo: when any layer is soloed, only soloed layers are audible.
@@ -133,7 +147,7 @@ impl Project {
             .enumerate()
             .map(|(i, sources)| Layer {
                 id: (i + 1) as u32,
-                sources,
+                sources: sources.into_iter().map(SourceRef::sequential).collect(),
                 gain_db: 0.0,
                 muted: false,
                 solo: false,
@@ -157,7 +171,7 @@ impl Project {
         Self::new_layers(vec![sources])
     }
 
-    pub fn source_groups(&self) -> Vec<Vec<String>> {
+    pub fn source_groups(&self) -> Vec<Vec<SourceRef>> {
         self.layers.iter().map(|l| l.sources.clone()).collect()
     }
 }
@@ -817,7 +831,7 @@ impl ProjectState {
                     name: l
                         .sources
                         .first()
-                        .and_then(|s| Path::new(s).file_name())
+                        .and_then(|s| Path::new(&s.path).file_name())
                         .map(|s| s.to_string_lossy().to_string())
                         .unwrap_or_else(|| format!("Layer {}", i + 1)),
                     channels: scanned.map(|s| s.channels).unwrap_or(0),
@@ -969,6 +983,55 @@ fn migrate_v1(legacy: LegacyProjectV1) -> Project {
     )
 }
 
+/// v4 `.still` files stored layer sources as plain strings (always
+/// sequential); v5 stores SourceRef with optional take-alignment offsets.
+#[derive(Deserialize)]
+struct LegacyLayerV4 {
+    id: u32,
+    sources: Vec<String>,
+    gain_db: f32,
+    muted: bool,
+    #[serde(default)]
+    solo: bool,
+    #[serde(default)]
+    collapsed: bool,
+}
+
+#[derive(Deserialize)]
+struct LegacyProjectV4 {
+    layers: Vec<LegacyLayerV4>,
+    regions: Vec<Region>,
+    #[serde(default)]
+    snap_to_zero: bool,
+    #[serde(default)]
+    export_config: Option<ExportConfig>,
+    next_region_id: u32,
+    next_layer_id: u32,
+}
+
+fn migrate_v4(legacy: LegacyProjectV4) -> Project {
+    Project {
+        version: PROJECT_VERSION,
+        layers: legacy
+            .layers
+            .into_iter()
+            .map(|l| Layer {
+                id: l.id,
+                sources: l.sources.into_iter().map(SourceRef::sequential).collect(),
+                gain_db: l.gain_db,
+                muted: l.muted,
+                solo: l.solo,
+                collapsed: l.collapsed,
+            })
+            .collect(),
+        regions: legacy.regions,
+        snap_to_zero: legacy.snap_to_zero,
+        export_config: legacy.export_config.unwrap_or_default(),
+        next_region_id: legacy.next_region_id,
+        next_layer_id: legacy.next_layer_id,
+    }
+}
+
 pub fn read_project(path: &Path) -> Result<Project> {
     let data = std::fs::read_to_string(path)
         .map_err(|_| StillError::FileNotFound(path.display().to_string()))?;
@@ -995,6 +1058,11 @@ pub fn read_project(path: &Path) -> Result<Project> {
         let legacy: LegacyProjectV3 = serde_json::from_str(&data)
             .map_err(|e| StillError::InvalidProject(e.to_string()))?;
         return Ok(migrate_v3(legacy));
+    }
+    if version == 4 {
+        let legacy: LegacyProjectV4 = serde_json::from_str(&data)
+            .map_err(|e| StillError::InvalidProject(e.to_string()))?;
+        return Ok(migrate_v4(legacy));
     }
     serde_json::from_str(&data).map_err(|e| StillError::InvalidProject(e.to_string()))
 }
@@ -1338,7 +1406,9 @@ mod tests {
         let p = read_project(&path).unwrap();
         assert_eq!(p.version, PROJECT_VERSION);
         assert_eq!(p.layers.len(), 1);
-        assert_eq!(p.layers[0].sources, vec!["/tmp/test.wav".to_string()]);
+        assert_eq!(p.layers[0].sources.len(), 1);
+        assert_eq!(p.layers[0].sources[0].path, "/tmp/test.wav");
+        assert_eq!(p.layers[0].sources[0].start, None);
         assert_eq!(p.regions.len(), 1);
         assert_eq!(p.regions[0].title.as_deref(), Some("Intro"));
         assert_eq!(p.next_region_id, 2);
