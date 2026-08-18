@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+
 import type { ProjectView } from "../types/ProjectView";
 import { formatDuration } from "../lib/format";
 import { LayersPanel } from "./LayersPanel";
@@ -35,6 +36,16 @@ export function TrackList({
 }: Props) {
   const [editing, setEditing] = useState<number | null>(null);
   const [mixOpen, setMixOpen] = useState<number | null>(null);
+  const overrideThrottle = useRef<Record<string, number>>({});
+
+  const sendOverride = (trackId: number, layerId: number, value: number, force: boolean) => {
+    const key = `${trackId}:${layerId}`;
+    const now = performance.now();
+    if (force || now - (overrideThrottle.current[key] ?? 0) >= 80) {
+      overrideThrottle.current[key] = now;
+      onTrackLayerGain(trackId, layerId, value);
+    }
+  };
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -158,30 +169,57 @@ export function TrackList({
                   const key = String(l.id);
                   const override = t.gain_overrides[key];
                   const hasOverride = override !== undefined;
+                  const shown = hasOverride ? override : l.gain_db;
                   return (
-                    <div key={l.id} className="track-mix-row">
-                      <span className="layer-name" title={l.name}>
-                        {l.name}
-                      </span>
-                      <GainInput
-                        value={hasOverride ? override : null}
-                        placeholder={`${l.gain_db > 0 ? "+" : ""}${Number(l.gain_db.toFixed(1))}`}
-                        clearable
-                        onCommit={(v) => onTrackLayerGain(t.id, l.id, v)}
-                        title="Override this layer's gain for this track only — empty = inherit the session fader"
+                    <div key={l.id} className={`track-mix-row ${hasOverride ? "overridden" : "inheriting"}`}>
+                      <div className="track-mix-top">
+                        <span className="layer-name" title={l.name}>
+                          {l.name}
+                        </span>
+                        <span className="mix-state">
+                          {hasOverride ? "override" : "session"}
+                        </span>
+                        <GainInput
+                          value={hasOverride ? override : null}
+                          placeholder={`${l.gain_db > 0 ? "+" : ""}${Number(l.gain_db.toFixed(1))}`}
+                          clearable
+                          onCommit={(v) => onTrackLayerGain(t.id, l.id, v)}
+                          title="Override this layer's gain for this track only — empty = inherit the session fader"
+                        />
+                        <span className="layer-db-unit">dB</span>
+                        <button
+                          className={`del ${hasOverride ? "" : "hidden-btn"}`}
+                          title="Back to the session fader (clear the override)"
+                          onClick={() => onTrackLayerGain(t.id, l.id, null)}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                      <input
+                        type="range"
+                        className="mix-fader"
+                        min={-60}
+                        max={12}
+                        step={0.5}
+                        value={shown}
+                        title={
+                          hasOverride
+                            ? "This track's own level for this layer — double-click to go back to the session fader"
+                            : "Following the session fader — drag to give this track its own level"
+                        }
+                        onChange={(e) => sendOverride(t.id, l.id, Number(e.target.value), false)}
+                        onPointerUp={(e) =>
+                          sendOverride(t.id, l.id, Number((e.target as HTMLInputElement).value), true)
+                        }
+                        onDoubleClick={() => onTrackLayerGain(t.id, l.id, null)}
                       />
-                      <span className="layer-db-unit">dB</span>
-                      <button
-                        className={`del ${hasOverride ? "" : "hidden-btn"}`}
-                        title="Clear the override (inherit the session fader)"
-                        onClick={() => onTrackLayerGain(t.id, l.id, null)}
-                      >
-                        ✕
-                      </button>
                     </div>
                   );
                 })}
-                <div className="hint">Empty = inherit session fader · applies at export</div>
+                <div className="hint">
+                  Grey fader = follows the session mix · drag it (or type a value) to set this
+                  track's own level · double-click / ✕ = back to session · applies at export
+                </div>
               </div>
             )}
             </div>
