@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ProjectView } from "../types/ProjectView";
 import type { PeakSlice } from "../types/PeakSlice";
 import type { RegionSpan } from "../types/RegionSpan";
@@ -612,15 +612,19 @@ export function Waveform(p: Props) {
     }
   }, []);
 
-  // Resize observer.
+  // Resize observer. Bump sizeTick so the peaks fetch runs again for the
+  // new width (e.g. when the side panel collapses and the canvas widens).
+  const [sizeTick, setSizeTick] = useState(0);
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
     const ro = new ResizeObserver(() => {
       const r = el.getBoundingClientRect();
+      const changed = Math.abs(sizeRef.current.w - r.width) >= 1;
       sizeRef.current = { w: r.width, h: r.height };
       propsRef.current.onWidthChange(r.width);
       draw();
+      if (changed) setSizeTick((t) => t + 1);
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -661,7 +665,7 @@ export function Waveform(p: Props) {
         })
         .catch(() => {});
     }
-  }, [p.viewport.start, p.viewport.spp, p.view.audio.path, p.view.audio.duration_samples, mixKey, p.waveMode, draw]);
+  }, [p.viewport.start, p.viewport.spp, p.view.audio.path, p.view.audio.duration_samples, mixKey, p.waveMode, sizeTick, draw]);
 
   // Redraw on any relevant prop change.
   useEffect(() => {
