@@ -434,8 +434,9 @@ export default function App() {
                 onSeek={seekTo}
                 onSelectionChange={setSelection}
                 onAddRegion={addRegion}
+                onBeginEdgeDrag={() => void api.beginRegionEdit().catch(() => {})}
                 onMoveEdge={(id, edge, pos) =>
-                  void apply(() => api.moveRegionEdge(id, edge, pos))
+                  void apply(() => api.moveRegionEdgePreview(id, edge, pos))
                 }
                 onSelectTrack={setSelectedTrack}
                 onToggleLayerCollapsed={(id, c) =>

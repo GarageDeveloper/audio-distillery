@@ -31,6 +31,8 @@ pub fn run() {
             commands::get_peaks_split,
             commands::add_region,
             commands::add_regions,
+            commands::begin_region_edit,
+            commands::move_region_edge_preview,
             commands::move_region_edge,
             commands::remove_region,
             commands::rename_track,

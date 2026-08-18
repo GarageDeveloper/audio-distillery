@@ -638,10 +638,36 @@ impl ProjectState {
         added
     }
 
-    /// Move one edge of a region. The position is clamped to the file bounds,
-    /// the neighboring regions and the minimum track length. Returns the
-    /// final (validated) position.
+    /// Take an undo snapshot explicitly — called once at the START of an
+    /// interactive edge drag, so the whole drag undoes in one step while the
+    /// individual move previews stay undo-free.
+    pub fn begin_edit(&mut self) {
+        self.push_undo();
+    }
+
+    /// Move one edge WITHOUT touching the undo stack (live drag preview).
+    /// Same clamping as `move_edge`.
+    pub fn move_edge_preview(&mut self, id: u32, edge: RegionEdge, position: u64) -> Result<u64> {
+        self.move_edge_inner(id, edge, position)
+    }
+
+    /// Move one edge of a region as a single undoable operation. The position
+    /// is clamped to the file bounds, the neighboring regions and the minimum
+    /// track length. Returns the final (validated) position.
     pub fn move_edge(&mut self, id: u32, edge: RegionEdge, position: u64) -> Result<u64> {
+        self.push_undo();
+        match self.move_edge_inner(id, edge, position) {
+            Ok(p) => Ok(p),
+            Err(e) => {
+                // Drop the snapshot taken for a move that never happened.
+                self.undo();
+                self.redo.clear();
+                Err(e)
+            }
+        }
+    }
+
+    fn move_edge_inner(&mut self, id: u32, edge: RegionEdge, position: u64) -> Result<u64> {
         let min_len = self.min_len();
         let dur = self.info.duration_samples;
         let region = self
@@ -680,7 +706,6 @@ impl ProjectState {
             return Err(StillError::InvalidMarker("no room to move this marker".into()));
         }
         let clamped = position.clamp(lo, hi);
-        self.push_undo();
         let region = self
             .project
             .regions

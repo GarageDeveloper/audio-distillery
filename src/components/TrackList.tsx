@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { ProjectView } from "../types/ProjectView";
-import { formatDuration } from "../lib/format";
+import { formatDuration, formatTimecode } from "../lib/format";
 import { LayersPanel } from "./LayersPanel";
 import { GainInput } from "./GainInput";
 
@@ -147,7 +147,12 @@ export function TrackList({
                   {t.title}
                 </span>
               )}
-              <span className="dur">{formatDuration(t.duration_seconds)}</span>
+              <span
+                className="dur"
+                title={`${formatTimecode(t.start_sample / view.audio.sample_rate)} → ${formatTimecode(t.end_sample / view.audio.sample_rate)}`}
+              >
+                {formatDuration(t.duration_seconds)}
+              </span>
               {view.layers.length > 1 && (
                 <button
                   className={`mix-toggle ${Object.keys(t.gain_overrides).length > 0 ? "has-override" : ""} ${

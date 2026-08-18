@@ -516,6 +516,34 @@ pub fn add_regions(
     })
 }
 
+/// Take ONE undo snapshot at the start of an interactive edge drag; the
+/// following `move_region_edge_preview` calls then update live without
+/// polluting the undo history.
+#[tauri::command]
+pub fn begin_region_edit(state: State<'_, AppState>) -> CmdResult<()> {
+    with_session(&state, |s| {
+        s.begin_edit();
+        Ok(())
+    })
+}
+
+/// Live, undo-free edge move used while dragging (durations in the track
+/// panel follow in real time). The backend still clamps and snaps.
+#[tauri::command]
+pub fn move_region_edge_preview(
+    state: State<'_, AppState>,
+    id: u32,
+    edge: RegionEdge,
+    position: u64,
+) -> CmdResult<ProjectView> {
+    with_session(&state, |s| {
+        let pos = snapped(s, position);
+        s.move_edge_preview(id, edge, pos).map_err(err)?;
+        sync_playback(&state, s);
+        Ok(s.view())
+    })
+}
+
 #[tauri::command]
 pub fn move_region_edge(
     state: State<'_, AppState>,

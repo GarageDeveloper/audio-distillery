@@ -54,6 +54,13 @@ export const api = {
         end: Math.round(r.end),
       })),
     }),
+  beginRegionEdit: () => invoke<void>("begin_region_edit"),
+  moveRegionEdgePreview: (id: number, edge: RegionEdge, position: number) =>
+    invoke<ProjectView>("move_region_edge_preview", {
+      id,
+      edge,
+      position: Math.round(position),
+    }),
   moveRegionEdge: (id: number, edge: RegionEdge, position: number) =>
     invoke<ProjectView>("move_region_edge", {
       id,
