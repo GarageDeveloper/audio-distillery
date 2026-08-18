@@ -12,7 +12,15 @@ import type { RegionEdge } from "./types/RegionEdge";
 
 export const api = {
   loadAudio: (paths: string[]) => invoke<ProjectView>("load_audio", { paths }),
+  loadMultitrack: (paths: string[]) =>
+    invoke<ProjectView>("load_multitrack", { paths }),
   addClips: (paths: string[]) => invoke<ProjectView>("add_clips", { paths }),
+  addLayers: (paths: string[]) => invoke<ProjectView>("add_layers", { paths }),
+  setLayerGain: (id: number, gainDb: number) =>
+    invoke<ProjectView>("set_layer_gain", { id, gainDb }),
+  setLayerMuted: (id: number, muted: boolean) =>
+    invoke<ProjectView>("set_layer_muted", { id, muted }),
+  removeLayer: (id: number) => invoke<ProjectView>("remove_layer", { id }),
   loadProject: (path: string) => invoke<ProjectView>("load_project", { path }),
   cancelLoad: () => invoke<void>("cancel_load"),
   saveProject: (path?: string) =>

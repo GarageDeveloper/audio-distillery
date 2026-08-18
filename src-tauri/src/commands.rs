@@ -37,21 +37,25 @@ fn check_extensions(paths: &[String]) -> CmdResult<()> {
     Ok(())
 }
 
-/// Scan an ordered list of source clips (read-only) laid back-to-back on one
-/// timeline. Emits `load:progress` events (f32, 0..1) over the whole batch.
-/// Cancellable at any time via `cancel_load`.
+/// Scan the session's layer groups (read-only): each group is one
+/// time-synchronized layer, its files laid back-to-back. Emits
+/// `load:progress` events (f32, 0..1) over the whole batch. Cancellable at
+/// any time via `cancel_load`.
 async fn scan_sources(
     app: &AppHandle,
     state: &State<'_, AppState>,
-    sources: &[String],
-) -> CmdResult<(still_core::AudioInfo, still_core::PeakPyramid)> {
-    let paths: Vec<PathBuf> = sources.iter().map(PathBuf::from).collect();
+    groups: &[Vec<String>],
+) -> CmdResult<(still_core::AudioInfo, Vec<still_core::PeakPyramid>)> {
+    let path_groups: Vec<Vec<PathBuf>> = groups
+        .iter()
+        .map(|g| g.iter().map(PathBuf::from).collect())
+        .collect();
     let app2 = app.clone();
     state.scan_cancel.store(false, Ordering::SeqCst);
     let cancel = state.scan_cancel.clone();
     let scanned = tauri::async_runtime::spawn_blocking(move || {
         let mut last = Instant::now() - Duration::from_secs(1);
-        still_core::scan_files(&paths, &cancel, |p| {
+        still_core::scan_layers(&path_groups, &cancel, |p| {
             if last.elapsed() >= Duration::from_millis(80) {
                 last = Instant::now();
                 let _ = app2.emit("load:progress", p);
@@ -74,30 +78,44 @@ pub fn cancel_load(state: State<'_, AppState>) -> CmdResult<()> {
     Ok(())
 }
 
-fn playlist_of(info: &still_core::AudioInfo) -> Vec<(PathBuf, f64)> {
-    info.clips
+/// Per-layer playlists + current linear volumes for the playback thread.
+fn playlists_of(info: &still_core::AudioInfo, project: &Project) -> Vec<still_core::LayerPlay> {
+    let sr = info.sample_rate.max(1) as f64;
+    info.layers
         .iter()
-        .map(|c| {
-            (
-                PathBuf::from(&c.path),
-                c.duration_samples as f64 / info.sample_rate as f64,
-            )
+        .enumerate()
+        .map(|(i, scanned)| {
+            let volume = project
+                .layers
+                .get(i)
+                .map(|l| {
+                    if l.muted {
+                        0.0
+                    } else {
+                        still_core::db_to_linear(l.gain_db)
+                    }
+                })
+                .unwrap_or(1.0);
+            still_core::LayerPlay {
+                playlist: scanned
+                    .clips
+                    .iter()
+                    .map(|c| (PathBuf::from(&c.path), c.duration_samples as f64 / sr))
+                    .collect(),
+                volume,
+            }
         })
         .collect()
 }
 
-/// Scan sources and install them as the current session.
+/// Scan layer groups and install them as the current session.
 async fn load_session(
     app: AppHandle,
     state: State<'_, AppState>,
-    sources: Vec<String>,
+    groups: Vec<Vec<String>>,
     project: Option<(Project, PathBuf)>,
 ) -> CmdResult<ProjectView> {
-    let (info, peaks) = scan_sources(&app, &state, &sources).await?;
-    state
-        .player
-        .load(playlist_of(&info), info.duration_seconds)
-        .map_err(err)?;
+    let (info, peaks) = scan_sources(&app, &state, &groups).await?;
 
     let mut ps = match project {
         Some((project, project_path)) => {
@@ -105,8 +123,12 @@ async fn load_session(
             ps.project_path = Some(project_path);
             ps
         }
-        None => ProjectState::new(Project::new(sources), info, peaks),
+        None => ProjectState::new(Project::new_layers(groups), info, peaks),
     };
+    state
+        .player
+        .load(playlists_of(&ps.info, &ps.project), ps.info.duration_seconds)
+        .map_err(err)?;
     // Clamp regions against the real scanned duration (source may have
     // changed since the project was saved) and drop degenerate ones.
     still_core::sanitize_regions(&mut ps.project, ps.info.duration_samples, ps.info.sample_rate);
@@ -115,7 +137,8 @@ async fn load_session(
     Ok(view)
 }
 
-/// Open one or more audio files as a NEW session (clips in the given order).
+/// Open one or more audio files as a NEW session (sequential clips of the
+/// base layer, in the given order).
 #[tauri::command]
 pub async fn load_audio(
     app: AppHandle,
@@ -126,11 +149,47 @@ pub async fn load_audio(
         return Err("No audio file given.".to_string());
     }
     check_extensions(&paths)?;
-    load_session(app, state, paths, None).await
+    load_session(app, state, vec![paths], None).await
 }
 
-/// Append clips to the existing session's timeline. Existing regions, titles
-/// and undo history are preserved (audio is only ever appended at the end).
+/// Open several files as a NEW multitrack session: each file becomes one
+/// time-synchronized layer (all starting at t = 0), mixed together.
+#[tauri::command]
+pub async fn load_multitrack(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    paths: Vec<String>,
+) -> CmdResult<ProjectView> {
+    if paths.is_empty() {
+        return Err("No audio file given.".to_string());
+    }
+    check_extensions(&paths)?;
+    let groups = paths.into_iter().map(|p| vec![p]).collect();
+    load_session(app, state, groups, None).await
+}
+
+/// Rescan with new groups while keeping the current project recipe.
+async fn rescan_with_groups(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    groups: Vec<Vec<String>>,
+    update: impl FnOnce(&mut ProjectState),
+) -> CmdResult<ProjectView> {
+    let (info, peaks) = scan_sources(&app, &state, &groups).await?;
+    with_session(&state, |s| {
+        update(s);
+        s.set_audio(info, peaks);
+        still_core::sanitize_regions(&mut s.project, s.info.duration_samples, s.info.sample_rate);
+        state
+            .player
+            .load(playlists_of(&s.info, &s.project), s.info.duration_seconds)
+            .map_err(err)?;
+        Ok(s.view())
+    })
+}
+
+/// Append clips to the END of the base layer's timeline. Existing regions,
+/// titles and undo history are preserved.
 #[tauri::command]
 pub async fn add_clips(
     app: AppHandle,
@@ -141,21 +200,97 @@ pub async fn add_clips(
         return Err("No audio file given.".to_string());
     }
     check_extensions(&paths)?;
-    let sources = with_session(&state, |s| {
-        let mut sources = s.project.sources.clone();
-        sources.extend(paths.iter().cloned());
-        Ok(sources)
+    let groups = with_session(&state, |s| {
+        let mut groups = s.project.source_groups();
+        groups[0].extend(paths.iter().cloned());
+        Ok(groups)
     })?;
-    let (info, peaks) = scan_sources(&app, &state, &sources).await?;
-    state
-        .player
-        .load(playlist_of(&info), info.duration_seconds)
-        .map_err(err)?;
+    rescan_with_groups(app, state, groups.clone(), move |s| {
+        s.project.layers[0].sources = groups[0].clone();
+    })
+    .await
+}
+
+/// Add each given file as a new synced LAYER of the existing session.
+#[tauri::command]
+pub async fn add_layers(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    paths: Vec<String>,
+) -> CmdResult<ProjectView> {
+    if paths.is_empty() {
+        return Err("No audio file given.".to_string());
+    }
+    check_extensions(&paths)?;
+    let (groups, new_layers) = with_session(&state, |s| {
+        let mut groups = s.project.source_groups();
+        let mut new_layers = Vec::new();
+        for p in &paths {
+            groups.push(vec![p.clone()]);
+            let id = s.project.next_layer_id;
+            s.project.next_layer_id += 1;
+            new_layers.push(still_core::Layer {
+                id,
+                sources: vec![p.clone()],
+                gain_db: 0.0,
+                muted: false,
+            });
+        }
+        Ok((groups, new_layers))
+    })?;
+    rescan_with_groups(app, state, groups, move |s| {
+        s.project.layers.extend(new_layers);
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn set_layer_gain(
+    state: State<'_, AppState>,
+    id: u32,
+    gain_db: f32,
+) -> CmdResult<ProjectView> {
     with_session(&state, |s| {
-        s.project.sources = sources.clone();
-        s.set_audio(info.clone(), peaks);
+        s.set_layer_gain(id, gain_db).map_err(err)?;
+        sync_player_volumes(&state, s);
         Ok(s.view())
     })
+}
+
+#[tauri::command]
+pub fn set_layer_muted(
+    state: State<'_, AppState>,
+    id: u32,
+    muted: bool,
+) -> CmdResult<ProjectView> {
+    with_session(&state, |s| {
+        s.set_layer_muted(id, muted).map_err(err)?;
+        sync_player_volumes(&state, s);
+        Ok(s.view())
+    })
+}
+
+#[tauri::command]
+pub fn remove_layer(state: State<'_, AppState>, id: u32) -> CmdResult<ProjectView> {
+    with_session(&state, |s| {
+        s.remove_layer(id).map_err(err)?;
+        let _ = state
+            .player
+            .load(playlists_of(&s.info, &s.project), s.info.duration_seconds);
+        Ok(s.view())
+    })
+}
+
+/// Push the current gains/mutes to the running playback sinks (live).
+fn sync_player_volumes(state: &State<'_, AppState>, s: &ProjectState) {
+    for (i, l) in s.project.layers.iter().enumerate() {
+        let vol = if l.muted {
+            0.0
+        } else {
+            still_core::db_to_linear(l.gain_db)
+        };
+        let _ = state.player.set_volume(i, vol);
+    }
 }
 
 #[tauri::command]
@@ -171,7 +306,7 @@ pub fn get_peaks(
     max_buckets: u32,
 ) -> CmdResult<PeakSlice> {
     with_session(&state, |s| {
-        Ok(s.peaks.query(start_sample, end_sample, max_buckets))
+        Ok(s.peaks_slice(start_sample, end_sample, max_buckets))
     })
 }
 
@@ -295,8 +430,10 @@ pub fn detect_silences(
     params: SilenceParams,
 ) -> CmdResult<Vec<RegionSpan>> {
     with_session(&state, |s| {
+        // Detection runs on the same mix the user sees/hears.
+        let merged = s.merged_pyramid();
         Ok(still_core::detect_track_regions(
-            &s.peaks,
+            &merged,
             s.info.sample_rate,
             s.info.duration_samples,
             &params,
@@ -330,9 +467,20 @@ pub async fn export_tracks(
         s.project.export_config = config.clone();
         let source = PathBuf::from(&s.info.path);
         let jobs = still_core::plan_export(&tracks, &config, &source).map_err(err)?;
-        Ok((s.info.clips.clone(), s.info.sample_rate, jobs))
+        let layers: Vec<still_core::LayerMix> = s
+            .project
+            .layers
+            .iter()
+            .zip(s.info.layers.iter())
+            .map(|(l, scanned)| still_core::LayerMix {
+                clips: scanned.clips.clone(),
+                gain_db: l.gain_db,
+                muted: l.muted,
+            })
+            .collect();
+        Ok((layers, s.info.channels, s.info.sample_rate, jobs))
     });
-    let (clips, sample_rate, jobs) = match prepared {
+    let (layers, session_channels, sample_rate, jobs) = match prepared {
         Ok(x) => x,
         Err(e) => {
             state.export_running.store(false, Ordering::SeqCst);
@@ -349,7 +497,8 @@ pub async fn export_tracks(
         let last = std::sync::Mutex::new(Instant::now() - Duration::from_secs(1));
         Ok::<ExportReport, still_core::StillError>(still_core::run_export(
             &ffmpeg,
-            &clips,
+            &layers,
+            session_channels,
             sample_rate,
             &jobs,
             &config,
@@ -398,15 +547,17 @@ pub async fn load_project(
 ) -> CmdResult<ProjectView> {
     let project_path = PathBuf::from(&path);
     let project = still_core::read_project(&project_path).map_err(err)?;
-    for source in &project.sources {
-        if !Path::new(source).is_file() {
-            return Err(format!(
-                "A source audio file referenced by this project was not found: {source}"
-            ));
+    for layer in &project.layers {
+        for source in &layer.sources {
+            if !Path::new(source).is_file() {
+                return Err(format!(
+                    "A source audio file referenced by this project was not found: {source}"
+                ));
+            }
         }
     }
-    let sources = project.sources.clone();
-    load_session(app, state, sources, Some((project, project_path))).await
+    let groups = project.source_groups();
+    load_session(app, state, groups, Some((project, project_path))).await
 }
 
 // ---- Playback ----------------------------------------------------------

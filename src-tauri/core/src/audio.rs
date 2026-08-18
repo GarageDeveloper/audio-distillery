@@ -33,17 +33,31 @@ pub struct ClipInfo {
     pub duration_samples: u64,
 }
 
+/// Scan result for one layer: its clips (sequential), channel count and
+/// total length. Layers are time-synchronized: they all start at t = 0.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../src/types/")]
+pub struct ScannedLayer {
+    pub clips: Vec<ClipInfo>,
+    pub channels: u16,
+    #[ts(type = "number")]
+    pub duration_samples: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../src/types/")]
 pub struct AudioInfo {
-    /// First clip's path (kept for display/naming convenience).
+    /// First clip's path of the base layer (display/naming convenience).
     pub path: String,
-    /// Ordered clips forming the timeline.
+    /// Base layer's clips (timeline boundaries shown in the UI).
     pub clips: Vec<ClipInfo>,
-    /// Total timeline length.
+    /// All layers, in order (index-aligned with the project's layer list).
+    pub layers: Vec<ScannedLayer>,
+    /// Total timeline length (longest layer).
     #[ts(type = "number")]
     pub duration_samples: u64,
     pub sample_rate: u32,
+    /// Session channel count (max over layers).
     pub channels: u16,
     /// Display string, e.g. "FLAC".
     pub format: String,
@@ -173,28 +187,37 @@ fn decode_into(
     Ok(builder.total_frames() - start_frames)
 }
 
-/// Decode a sequence of files once (streaming, constant memory), laying them
-/// back-to-back on one timeline: one shared peak pyramid, exact per-clip
-/// frame counts. All files must share the same sample rate and channel
-/// count. `progress` receives 0.0..=1.0 over the whole batch.
-pub fn scan_files(
+/// Decode one layer's sequential clips into one pyramid. Clips within a
+/// layer must share the layer's sample rate and channel count.
+/// `sample_rate_lock`: Some(rate) enforces the session rate.
+fn scan_group(
     paths: &[PathBuf],
+    sample_rate_lock: Option<u32>,
     cancel: &AtomicBool,
-    mut progress: impl FnMut(f32),
-) -> Result<(AudioInfo, PeakPyramid)> {
-    let first = paths
-        .first()
-        .ok_or_else(|| StillError::Decode("no audio file given".into()))?;
+    mut progress: impl FnMut(usize, f32),
+) -> Result<(ScannedLayer, u32, PeakPyramid)> {
+    if paths.is_empty() {
+        return Err(StillError::Decode("no audio file given".into()));
+    }
     let mut builder: Option<PeakBuilder> = None;
     let mut sample_rate = 0u32;
     let mut channels = 0u16;
     let mut clips = Vec::with_capacity(paths.len());
-    let n = paths.len() as f32;
 
     for (i, path) in paths.iter().enumerate() {
         let mut o = open(path)?;
         match &builder {
             None => {
+                if let Some(rate) = sample_rate_lock {
+                    if o.sample_rate != rate {
+                        return Err(StillError::UnsupportedFormat(format!(
+                            "{}: every layer must share the session sample rate ({} Hz expected — this file is {} Hz)",
+                            path.display(),
+                            rate,
+                            o.sample_rate
+                        )));
+                    }
+                }
                 sample_rate = o.sample_rate;
                 channels = o.channels;
                 builder = Some(PeakBuilder::new(channels as usize));
@@ -213,7 +236,7 @@ pub fn scan_files(
         }
         let b = builder.as_mut().expect("builder initialized above");
         let start_sample = b.total_frames();
-        let frames = decode_into(&mut o, b, cancel, |f| progress((i as f32 + f) / n))?;
+        let frames = decode_into(&mut o, b, cancel, |f| progress(i, f))?;
         if frames == 0 {
             return Err(StillError::Decode(format!(
                 "{}: the file contains no decodable audio",
@@ -232,7 +255,51 @@ pub fn scan_files(
     }
 
     let (pyramid, frames) = builder.expect("at least one file").finish();
+    Ok((
+        ScannedLayer {
+            clips,
+            channels,
+            duration_samples: frames,
+        },
+        sample_rate,
+        pyramid,
+    ))
+}
+
+/// Decode a whole multitrack session: each group of paths is one LAYER
+/// (time-synchronized, starting at t = 0), each layer's paths are laid
+/// back-to-back. Layers must share the sample rate; channel counts may
+/// differ (a mono Zoom input next to the stereo mic is fine).
+/// `progress` receives 0.0..=1.0 over all files of all layers.
+pub fn scan_layers(
+    groups: &[Vec<PathBuf>],
+    cancel: &AtomicBool,
+    mut progress: impl FnMut(f32),
+) -> Result<(AudioInfo, Vec<PeakPyramid>)> {
+    if groups.is_empty() || groups[0].is_empty() {
+        return Err(StillError::Decode("no audio file given".into()));
+    }
+    let total_files: usize = groups.iter().map(|g| g.len()).sum();
+    let mut done_files = 0usize;
+    let mut sample_rate: Option<u32> = None;
+    let mut layers = Vec::with_capacity(groups.len());
+    let mut pyramids = Vec::with_capacity(groups.len());
+
+    for group in groups {
+        let (layer, rate, pyramid) = scan_group(group, sample_rate, cancel, |i, f| {
+            progress(((done_files + i) as f32 + f) / total_files as f32)
+        })?;
+        done_files += group.len();
+        sample_rate = Some(rate);
+        layers.push(layer);
+        pyramids.push(pyramid);
+    }
     progress(1.0);
+
+    let sample_rate = sample_rate.expect("at least one layer scanned");
+    let duration_samples = layers.iter().map(|l| l.duration_samples).max().unwrap_or(0);
+    let channels = layers.iter().map(|l| l.channels).max().unwrap_or(0);
+    let first = &groups[0][0];
     let format_name = first
         .extension()
         .map(|e| e.to_string_lossy().to_uppercase())
@@ -240,15 +307,26 @@ pub fn scan_files(
     Ok((
         AudioInfo {
             path: first.display().to_string(),
-            clips,
-            duration_samples: frames,
+            clips: layers[0].clips.clone(),
+            layers,
+            duration_samples,
             sample_rate,
             channels,
             format: format_name,
-            duration_seconds: frames as f64 / sample_rate as f64,
+            duration_seconds: duration_samples as f64 / sample_rate as f64,
         },
-        pyramid,
+        pyramids,
     ))
+}
+
+/// Single-layer convenience wrapper around [`scan_layers`].
+pub fn scan_files(
+    paths: &[PathBuf],
+    cancel: &AtomicBool,
+    progress: impl FnMut(f32),
+) -> Result<(AudioInfo, PeakPyramid)> {
+    let (info, mut pyramids) = scan_layers(&[paths.to_vec()], cancel, progress)?;
+    Ok((info, pyramids.remove(0)))
 }
 
 /// Single-file, non-cancellable convenience wrapper around [`scan_files`].

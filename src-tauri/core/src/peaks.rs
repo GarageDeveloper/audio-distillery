@@ -137,6 +137,18 @@ fn downsample(level: &PeakLevel) -> PeakLevel {
     }
 }
 
+/// Smallest power-of-two multiple of the base resolution that fits `span`
+/// into `max_buckets` buckets. Used so several pyramids (one per layer) can
+/// be queried on a COMMON grid and merged bucket-wise.
+pub fn target_spb(span: u64, max_buckets: u32) -> u64 {
+    let max_buckets = max_buckets.max(1) as u64;
+    let mut spb = BASE_SAMPLES_PER_BUCKET as u64;
+    while span.div_ceil(spb) > max_buckets {
+        spb *= 2;
+    }
+    spb
+}
+
 impl PeakPyramid {
     pub fn channel_count(&self) -> usize {
         self.levels.first().map_or(0, |l| l.channels.len())
@@ -146,23 +158,28 @@ impl PeakPyramid {
     /// `max_buckets`, and return the matching window of peaks.
     pub fn query(&self, start_sample: u64, end_sample: u64, max_buckets: u32) -> PeakSlice {
         let span = end_sample.saturating_sub(start_sample).max(1);
-        let max_buckets = max_buckets.max(1) as u64;
-        let mut level = self.levels.last().expect("pyramid has at least one level");
-        for l in &self.levels {
-            if span.div_ceil(l.samples_per_bucket as u64) <= max_buckets {
-                level = l;
-                break;
-            }
-        }
-        let spb = level.samples_per_bucket as u64;
-        // If even the coarsest level exceeds max_buckets, aggregate k buckets
-        // into one on the fly.
-        let k = span.div_ceil(spb).div_ceil(max_buckets).max(1);
-        let eff_spb = spb * k;
+        self.query_with_spb(target_spb(span, max_buckets), start_sample, end_sample)
+    }
+
+    /// Query on an exact grid of `spb` samples per bucket (must be a
+    /// power-of-two multiple of the base resolution). Aggregates from the
+    /// finest stored level that divides `spb`.
+    pub fn query_with_spb(&self, spb: u64, start_sample: u64, end_sample: u64) -> PeakSlice {
+        let level = self
+            .levels
+            .iter()
+            .rev()
+            .find(|l| {
+                let lspb = l.samples_per_bucket as u64;
+                lspb <= spb && spb % lspb == 0
+            })
+            .or_else(|| self.levels.first())
+            .expect("pyramid has at least one level");
+        let lspb = level.samples_per_bucket as u64;
+        let k = (spb / lspb).max(1);
         let bucket_count = (level.channels[0].len() / 2) as u64;
-        let first = (start_sample / eff_spb) * k;
-        let first = first.min(bucket_count);
-        let last = (end_sample.div_ceil(eff_spb) * k).min(bucket_count);
+        let first = ((start_sample / spb) * k).min(bucket_count);
+        let last = (end_sample.div_ceil(spb) * k).min(bucket_count);
         let channels = level
             .channels
             .iter()
@@ -186,10 +203,80 @@ impl PeakPyramid {
             })
             .collect();
         PeakSlice {
-            samples_per_bucket: eff_spb.min(u32::MAX as u64) as u32,
-            start_sample: first * spb,
+            samples_per_bucket: spb.min(u32::MAX as u64) as u32,
+            start_sample: (first / k) * spb,
             channels,
         }
+    }
+}
+
+/// Merge several layers' peaks into one display slice: each layer's values
+/// are scaled by its linear gain and summed (then clamped), so the waveform
+/// reflects the mix the user is dialing in. A mono layer contributes its
+/// single channel to every output channel. Display-only approximation (the
+/// true peak of a sum is not the sum of peaks).
+pub fn merged_query(
+    layers: &[(f32, &PeakPyramid)],
+    out_channels: usize,
+    start_sample: u64,
+    end_sample: u64,
+    max_buckets: u32,
+) -> PeakSlice {
+    let span = end_sample.saturating_sub(start_sample).max(1);
+    let spb = target_spb(span, max_buckets);
+    let slices: Vec<(f32, PeakSlice)> = layers
+        .iter()
+        .map(|(g, p)| (*g, p.query_with_spb(spb, start_sample, end_sample)))
+        .collect();
+    let start_aligned = (start_sample / spb) * spb;
+    let bucket_count = slices
+        .iter()
+        .map(|(_, s)| s.channels.first().map_or(0, |c| c.len() / 2))
+        .max()
+        .unwrap_or(0);
+    let mut channels = vec![vec![0i8; bucket_count * 2]; out_channels];
+    for b in 0..bucket_count {
+        for c in 0..out_channels {
+            let mut mn = 0f32;
+            let mut mx = 0f32;
+            for (gain, slice) in &slices {
+                let Some(ch) = slice
+                    .channels
+                    .get(c.min(slice.channels.len().saturating_sub(1)))
+                else {
+                    continue;
+                };
+                if b * 2 + 1 < ch.len() {
+                    mn += ch[b * 2] as f32 * gain;
+                    mx += ch[b * 2 + 1] as f32 * gain;
+                }
+            }
+            channels[c][b * 2] = mn.clamp(-127.0, 127.0) as i8;
+            channels[c][b * 2 + 1] = mx.clamp(-127.0, 127.0) as i8;
+        }
+    }
+    PeakSlice {
+        samples_per_bucket: spb.min(u32::MAX as u64) as u32,
+        start_sample: start_aligned,
+        channels,
+    }
+}
+
+/// A single-level pyramid of the merged mix at base resolution — used by
+/// silence detection so it sees the same mix as the user.
+pub fn merged_base_pyramid(
+    layers: &[(f32, &PeakPyramid)],
+    out_channels: usize,
+    duration_samples: u64,
+) -> PeakPyramid {
+    let base = BASE_SAMPLES_PER_BUCKET as u64;
+    let buckets = duration_samples.div_ceil(base).max(1);
+    let slice = merged_query(layers, out_channels, 0, duration_samples, buckets as u32);
+    PeakPyramid {
+        levels: vec![PeakLevel {
+            samples_per_bucket: slice.samples_per_bucket,
+            channels: slice.channels,
+        }],
     }
 }
 

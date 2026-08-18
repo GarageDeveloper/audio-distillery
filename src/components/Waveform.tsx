@@ -454,7 +454,11 @@ export function Waveform(p: Props) {
     return () => ro.disconnect();
   }, [draw]);
 
-  // Fetch peaks whenever the visible window changes.
+  // Fetch peaks whenever the visible window OR the layer mix changes (the
+  // backend returns the peaks of the gain-weighted mix).
+  const mixKey = p.view.layers
+    .map((l) => `${l.id}:${l.gain_db}:${l.muted}`)
+    .join(",");
   useEffect(() => {
     const w = sizeRef.current.w || 1000;
     const start = Math.floor(p.viewport.start);
@@ -469,7 +473,7 @@ export function Waveform(p: Props) {
         }
       })
       .catch(() => {});
-  }, [p.viewport.start, p.viewport.spp, p.view.audio.path, p.view.audio.duration_samples, draw]);
+  }, [p.viewport.start, p.viewport.spp, p.view.audio.path, p.view.audio.duration_samples, mixKey, draw]);
 
   // Redraw on any relevant prop change.
   useEffect(() => {

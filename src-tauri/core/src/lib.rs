@@ -16,18 +16,19 @@ pub mod project;
 pub mod silence;
 
 pub use audio::{
-    clip_segments, scan_file, scan_files, snap_to_zero_crossing, AudioInfo, ClipInfo,
-    SUPPORTED_EXTENSIONS,
+    clip_segments, scan_file, scan_files, scan_layers, snap_to_zero_crossing, AudioInfo,
+    ClipInfo, ScannedLayer, SUPPORTED_EXTENSIONS,
 };
 pub use error::{Result, StillError};
 pub use export::{
     export_concurrency, plan_export, run_export, ExportProgress, ExportReport, ExportedFile,
+    LayerMix,
 };
 pub use ffmpeg::resolve_ffmpeg;
-pub use peaks::{PeakPyramid, PeakSlice};
-pub use playback::{PlaybackState, PlayerHandle};
+pub use peaks::{merged_base_pyramid, merged_query, PeakPyramid, PeakSlice};
+pub use playback::{LayerPlay, PlaybackState, PlayerHandle};
 pub use project::{
-    read_project, sanitize_regions, save_project, ExportConfig, ExportFormat, Project,
-    ProjectState, ProjectView, RegionEdge, RegionSpan, TrackInfo,
+    db_to_linear, read_project, sanitize_regions, save_project, ExportConfig, ExportFormat,
+    Layer, LayerView, Project, ProjectState, ProjectView, RegionEdge, RegionSpan, TrackInfo,
 };
 pub use silence::{detect_track_regions, SilenceParams};

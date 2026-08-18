@@ -11,7 +11,12 @@ pub fn run() {
         .manage(AppState::new())
         .invoke_handler(tauri::generate_handler![
             commands::load_audio,
+            commands::load_multitrack,
             commands::add_clips,
+            commands::add_layers,
+            commands::set_layer_gain,
+            commands::set_layer_muted,
+            commands::remove_layer,
             commands::cancel_load,
             commands::load_project,
             commands::save_project,

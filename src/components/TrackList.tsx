@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ProjectView } from "../types/ProjectView";
 import { formatDuration } from "../lib/format";
+import { LayersPanel } from "./LayersPanel";
 
 interface Props {
   view: ProjectView;
@@ -10,6 +11,10 @@ interface Props {
   onRename: (id: number, title: string) => void;
   onRemoveRegion: (id: number) => void;
   onSeek: (sample: number) => void;
+  onLayerGain: (id: number, gainDb: number) => void;
+  onLayerMute: (id: number, muted: boolean) => void;
+  onLayerRemove: (id: number) => void;
+  onAddLayers: () => void;
 }
 
 export function TrackList({
@@ -20,6 +25,10 @@ export function TrackList({
   onRename,
   onRemoveRegion,
   onSeek,
+  onLayerGain,
+  onLayerMute,
+  onLayerRemove,
+  onAddLayers,
 }: Props) {
   const [editing, setEditing] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
@@ -49,6 +58,15 @@ export function TrackList({
 
   return (
     <aside className="track-panel">
+      {view.layers.length > 1 && (
+        <LayersPanel
+          view={view}
+          onGain={onLayerGain}
+          onMute={onLayerMute}
+          onRemove={onLayerRemove}
+          onAdd={onAddLayers}
+        />
+      )}
       <div className="track-panel-head">
         <span className="label">Tracks</span>
         <span className="meta">

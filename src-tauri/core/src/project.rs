@@ -8,7 +8,9 @@ use crate::audio::AudioInfo;
 use crate::error::{Result, StillError};
 use crate::peaks::PeakPyramid;
 
-pub const PROJECT_VERSION: u32 = 3;
+pub const PROJECT_VERSION: u32 = 4;
+pub const MIN_GAIN_DB: f32 = -60.0;
+pub const MAX_GAIN_DB: f32 = 12.0;
 /// A track region may never be shorter than this.
 pub const MIN_TRACK_MS: u64 = 200;
 
@@ -84,27 +86,69 @@ impl Default for ExportConfig {
 
 /// The declarative "recipe": everything persisted in a `.still` file.
 /// The source audio is only ever referenced, never touched (SPEC §3 bis).
+/// One time-synchronized layer of the session (e.g. one input of a Zoom
+/// recorder). All layers start at t = 0; each holds its own sequential
+/// source files, a mix gain and a mute flag.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Layer {
+    pub id: u32,
+    pub sources: Vec<String>,
+    pub gain_db: f32,
+    pub muted: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
     pub version: u32,
-    /// Ordered source files ("clips") laid back-to-back on the timeline.
-    pub sources: Vec<String>,
+    /// Time-synchronized layers; layer 0 is the base timeline.
+    pub layers: Vec<Layer>,
     pub regions: Vec<Region>,
     pub snap_to_zero: bool,
     pub export_config: ExportConfig,
     pub next_region_id: u32,
+    pub next_layer_id: u32,
 }
 
 impl Project {
-    pub fn new(sources: Vec<String>) -> Self {
+    /// One layer per source group; group 0 is the base timeline.
+    pub fn new_layers(layer_sources: Vec<Vec<String>>) -> Self {
+        let layers: Vec<Layer> = layer_sources
+            .into_iter()
+            .enumerate()
+            .map(|(i, sources)| Layer {
+                id: (i + 1) as u32,
+                sources,
+                gain_db: 0.0,
+                muted: false,
+            })
+            .collect();
+        let next_layer_id = layers.len() as u32 + 1;
         Self {
             version: PROJECT_VERSION,
-            sources,
+            layers,
             regions: Vec::new(),
             snap_to_zero: false,
             export_config: ExportConfig::default(),
             next_region_id: 1,
+            next_layer_id,
         }
+    }
+
+    /// Single-layer convenience (sequential clips only).
+    pub fn new(sources: Vec<String>) -> Self {
+        Self::new_layers(vec![sources])
+    }
+
+    pub fn source_groups(&self) -> Vec<Vec<String>> {
+        self.layers.iter().map(|l| l.sources.clone()).collect()
+    }
+}
+
+pub fn db_to_linear(db: f32) -> f32 {
+    if db <= MIN_GAIN_DB {
+        0.0
+    } else {
+        10f32.powf(db / 20.0)
     }
 }
 
@@ -123,11 +167,25 @@ pub struct TrackInfo {
     pub duration_seconds: f64,
 }
 
+/// Display state of one mix layer.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../src/types/")]
+pub struct LayerView {
+    pub id: u32,
+    /// First source's file name.
+    pub name: String,
+    pub channels: u16,
+    pub duration_seconds: f64,
+    pub gain_db: f32,
+    pub muted: bool,
+}
+
 /// Display snapshot sent to the frontend after every mutation.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../src/types/")]
 pub struct ProjectView {
     pub audio: AudioInfo,
+    pub layers: Vec<LayerView>,
     pub tracks: Vec<TrackInfo>,
     pub snap_to_zero: bool,
     pub export_config: ExportConfig,
@@ -166,7 +224,8 @@ fn split_indexed(title: &str) -> (&str, Option<u32>) {
 pub struct ProjectState {
     pub project: Project,
     pub info: AudioInfo,
-    pub peaks: PeakPyramid,
+    /// One peak pyramid per layer (index-aligned with `project.layers`).
+    pub peaks: Vec<PeakPyramid>,
     /// Path of the `.still` file, once saved/loaded.
     pub project_path: Option<PathBuf>,
     undo: Vec<Snapshot>,
@@ -174,7 +233,7 @@ pub struct ProjectState {
 }
 
 impl ProjectState {
-    pub fn new(project: Project, info: AudioInfo, peaks: PeakPyramid) -> Self {
+    pub fn new(project: Project, info: AudioInfo, peaks: Vec<PeakPyramid>) -> Self {
         Self {
             project,
             info,
@@ -189,12 +248,100 @@ impl ProjectState {
         (self.info.sample_rate as u64 * MIN_TRACK_MS / 1000).max(1)
     }
 
-    /// Replace the scanned audio (after appending clips) while keeping the
-    /// project recipe and the undo/redo history — regions only ever reference
-    /// timeline positions, and appending clips never moves existing audio.
-    pub fn set_audio(&mut self, info: AudioInfo, peaks: PeakPyramid) {
+    /// Replace the scanned audio (after appending clips or layers) while
+    /// keeping the project recipe and the undo/redo history — regions only
+    /// ever reference timeline positions, and appending never moves audio.
+    pub fn set_audio(&mut self, info: AudioInfo, peaks: Vec<PeakPyramid>) {
         self.info = info;
         self.peaks = peaks;
+    }
+
+    /// (linear gain, pyramid) pairs of the audible layers, for display mixes.
+    pub fn active_peaks(&self) -> Vec<(f32, &PeakPyramid)> {
+        self.project
+            .layers
+            .iter()
+            .zip(self.peaks.iter())
+            .filter(|(l, _)| !l.muted)
+            .map(|(l, p)| (db_to_linear(l.gain_db), p))
+            .collect()
+    }
+
+    /// Display peaks of the current mix over a window.
+    pub fn peaks_slice(
+        &self,
+        start_sample: u64,
+        end_sample: u64,
+        max_buckets: u32,
+    ) -> crate::peaks::PeakSlice {
+        crate::peaks::merged_query(
+            &self.active_peaks(),
+            self.info.channels.max(1) as usize,
+            start_sample,
+            end_sample,
+            max_buckets,
+        )
+    }
+
+    /// Base-resolution pyramid of the current mix (silence detection input).
+    pub fn merged_pyramid(&self) -> PeakPyramid {
+        crate::peaks::merged_base_pyramid(
+            &self.active_peaks(),
+            self.info.channels.max(1) as usize,
+            self.info.duration_samples,
+        )
+    }
+
+    fn layer_index(&self, id: u32) -> Result<usize> {
+        self.project
+            .layers
+            .iter()
+            .position(|l| l.id == id)
+            .ok_or_else(|| StillError::InvalidMarker(format!("unknown layer id {id}")))
+    }
+
+    /// Set a layer's mix gain; returns the clamped value actually applied.
+    pub fn set_layer_gain(&mut self, id: u32, gain_db: f32) -> Result<f32> {
+        let idx = self.layer_index(id)?;
+        let clamped = gain_db.clamp(MIN_GAIN_DB, MAX_GAIN_DB);
+        self.project.layers[idx].gain_db = clamped;
+        Ok(clamped)
+    }
+
+    pub fn set_layer_muted(&mut self, id: u32, muted: bool) -> Result<()> {
+        let idx = self.layer_index(id)?;
+        self.project.layers[idx].muted = muted;
+        Ok(())
+    }
+
+    /// Remove a layer (never the base layer 0, which carries the timeline).
+    pub fn remove_layer(&mut self, id: u32) -> Result<()> {
+        let idx = self.layer_index(id)?;
+        if idx == 0 {
+            return Err(StillError::InvalidMarker(
+                "the base layer cannot be removed".into(),
+            ));
+        }
+        self.project.layers.remove(idx);
+        if idx < self.info.layers.len() {
+            self.info.layers.remove(idx);
+        }
+        if idx < self.peaks.len() {
+            self.peaks.remove(idx);
+        }
+        // The timeline may shrink if the removed layer was the longest.
+        let duration = self
+            .info
+            .layers
+            .iter()
+            .map(|l| l.duration_samples)
+            .max()
+            .unwrap_or(0);
+        self.info.duration_samples = duration;
+        self.info.duration_seconds = duration as f64 / self.info.sample_rate as f64;
+        self.info.channels = self.info.layers.iter().map(|l| l.channels).max().unwrap_or(0);
+        sanitize_regions(&mut self.project, duration, self.info.sample_rate);
+        Ok(())
     }
 
     fn push_undo(&mut self) {
@@ -438,8 +585,34 @@ impl ProjectState {
     }
 
     pub fn view(&self) -> ProjectView {
+        let sr = self.info.sample_rate.max(1) as f64;
+        let layers = self
+            .project
+            .layers
+            .iter()
+            .enumerate()
+            .map(|(i, l)| {
+                let scanned = self.info.layers.get(i);
+                LayerView {
+                    id: l.id,
+                    name: l
+                        .sources
+                        .first()
+                        .and_then(|s| Path::new(s).file_name())
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| format!("Layer {}", i + 1)),
+                    channels: scanned.map(|s| s.channels).unwrap_or(0),
+                    duration_seconds: scanned
+                        .map(|s| s.duration_samples as f64 / sr)
+                        .unwrap_or(0.0),
+                    gain_db: l.gain_db,
+                    muted: l.muted,
+                }
+            })
+            .collect();
         ProjectView {
             audio: self.info.clone(),
+            layers,
             tracks: self.tracks(),
             snap_to_zero: self.project.snap_to_zero,
             export_config: self.project.export_config.clone(),
@@ -482,7 +655,23 @@ struct LegacyMarker {
     position: u64,
 }
 
-/// v2 `.still` files had a single `source_path`; v3 has `sources`.
+/// Wrap pre-v4 single-layer data into the layered model.
+fn from_single_layer(
+    sources: Vec<String>,
+    regions: Vec<Region>,
+    snap_to_zero: bool,
+    export_config: ExportConfig,
+    next_region_id: u32,
+) -> Project {
+    let mut p = Project::new_layers(vec![sources]);
+    p.regions = regions;
+    p.snap_to_zero = snap_to_zero;
+    p.export_config = export_config;
+    p.next_region_id = next_region_id;
+    p
+}
+
+/// v2 `.still` files had a single `source_path`; v3 had `sources`.
 #[derive(Deserialize)]
 struct LegacyProjectV2 {
     source_path: String,
@@ -495,14 +684,35 @@ struct LegacyProjectV2 {
 }
 
 fn migrate_v2(legacy: LegacyProjectV2) -> Project {
-    Project {
-        version: PROJECT_VERSION,
-        sources: vec![legacy.source_path],
-        regions: legacy.regions,
-        snap_to_zero: legacy.snap_to_zero,
-        export_config: legacy.export_config.unwrap_or_default(),
-        next_region_id: legacy.next_region_id,
-    }
+    from_single_layer(
+        vec![legacy.source_path],
+        legacy.regions,
+        legacy.snap_to_zero,
+        legacy.export_config.unwrap_or_default(),
+        legacy.next_region_id,
+    )
+}
+
+/// v3 `.still` files had `sources: Vec<String>`; v4 has layers.
+#[derive(Deserialize)]
+struct LegacyProjectV3 {
+    sources: Vec<String>,
+    regions: Vec<Region>,
+    #[serde(default)]
+    snap_to_zero: bool,
+    #[serde(default)]
+    export_config: Option<ExportConfig>,
+    next_region_id: u32,
+}
+
+fn migrate_v3(legacy: LegacyProjectV3) -> Project {
+    from_single_layer(
+        legacy.sources,
+        legacy.regions,
+        legacy.snap_to_zero,
+        legacy.export_config.unwrap_or_default(),
+        legacy.next_region_id,
+    )
 }
 
 fn migrate_v1(legacy: LegacyProjectV1) -> Project {
@@ -526,14 +736,13 @@ fn migrate_v1(legacy: LegacyProjectV1) -> Project {
         });
     }
     let next_region_id = regions.len() as u32 + 1;
-    Project {
-        version: PROJECT_VERSION,
-        sources: vec![legacy.source_path],
+    from_single_layer(
+        vec![legacy.source_path],
         regions,
-        snap_to_zero: legacy.snap_to_zero,
-        export_config: legacy.export_config.unwrap_or_default(),
+        legacy.snap_to_zero,
+        legacy.export_config.unwrap_or_default(),
         next_region_id,
-    }
+    )
 }
 
 pub fn read_project(path: &Path) -> Result<Project> {
@@ -558,6 +767,11 @@ pub fn read_project(path: &Path) -> Result<Project> {
             .map_err(|e| StillError::InvalidProject(e.to_string()))?;
         return Ok(migrate_v2(legacy));
     }
+    if version == 3 {
+        let legacy: LegacyProjectV3 = serde_json::from_str(&data)
+            .map_err(|e| StillError::InvalidProject(e.to_string()))?;
+        return Ok(migrate_v3(legacy));
+    }
     serde_json::from_str(&data).map_err(|e| StillError::InvalidProject(e.to_string()))
 }
 
@@ -580,12 +794,18 @@ mod tests {
     const SEC: u64 = SR as u64;
 
     fn state(duration_secs: u64) -> ProjectState {
+        let clips = vec![crate::audio::ClipInfo {
+            path: "/tmp/test.wav".into(),
+            name: "test.wav".into(),
+            start_sample: 0,
+            duration_samples: duration_secs * SEC,
+        }];
         let info = AudioInfo {
             path: "/tmp/test.wav".into(),
-            clips: vec![crate::audio::ClipInfo {
-                path: "/tmp/test.wav".into(),
-                name: "test.wav".into(),
-                start_sample: 0,
+            clips: clips.clone(),
+            layers: vec![crate::audio::ScannedLayer {
+                clips,
+                channels: 2,
                 duration_samples: duration_secs * SEC,
             }],
             duration_samples: duration_secs * SEC,
@@ -597,7 +817,7 @@ mod tests {
         ProjectState::new(
             Project::new(vec![info.path.clone()]),
             info,
-            PeakPyramid::default(),
+            vec![PeakPyramid::default()],
         )
     }
 
@@ -811,7 +1031,8 @@ mod tests {
         std::fs::write(&path, v2.to_string()).unwrap();
         let p = read_project(&path).unwrap();
         assert_eq!(p.version, PROJECT_VERSION);
-        assert_eq!(p.sources, vec!["/tmp/test.wav".to_string()]);
+        assert_eq!(p.layers.len(), 1);
+        assert_eq!(p.layers[0].sources, vec!["/tmp/test.wav".to_string()]);
         assert_eq!(p.regions.len(), 1);
         assert_eq!(p.regions[0].title.as_deref(), Some("Intro"));
         assert_eq!(p.next_region_id, 2);
