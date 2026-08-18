@@ -331,7 +331,7 @@ fn multitrack_layers_mix_at_export() {
     let (sum_a, sum_b) = (checksum(&stereo), checksum(&mono));
 
     let (info, pyramids) = still_core::scan_layers(
-        &[vec![stereo.clone()], vec![mono.clone()]],
+        &[vec![(stereo.clone(), None)], vec![(mono.clone(), None)]],
         &AtomicBool::new(false),
         |_| {},
     )
@@ -422,6 +422,82 @@ fn multitrack_layers_mix_at_export() {
     // Sources untouched, whatever the mixing.
     assert_eq!(checksum(&stereo), sum_a);
     assert_eq!(checksum(&mono), sum_b);
+}
+
+/// Take alignment: a second multitrack take is pinned at the end of the
+/// longest layer; shorter layers get a silent gap so both takes stay in
+/// sync. Peaks must show real silence in the gap, and an export crossing the
+/// take boundary must keep every layer sample-aligned (silence inserted).
+#[test]
+fn takes_align_with_silent_gaps() {
+    let dir = tempfile::tempdir().unwrap();
+    let a1 = dir.path().join("take1-mic.wav");
+    let b1 = dir.path().join("take1-input.wav");
+    let a2 = dir.path().join("take2-mic.wav");
+    let b2 = dir.path().join("take2-input.wav");
+    write_wav(&a1, &[(2.0, 0.5)]); // layer 1 take 1: 2.0 s
+    write_wav(&b1, &[(1.5, 0.5)]); // layer 2 take 1: 1.5 s (shorter)
+    write_wav(&a2, &[(1.0, 0.5)]);
+    write_wav(&b2, &[(1.0, 0.5)]);
+
+    let take2_start = 2 * SR as u64; // end of the longest layer
+    let (info, pyramids) = still_core::scan_layers(
+        &[
+            vec![(a1.clone(), None), (a2.clone(), Some(take2_start))],
+            vec![(b1.clone(), None), (b2.clone(), Some(take2_start))],
+        ],
+        &AtomicBool::new(false),
+        |_| {},
+    )
+    .unwrap();
+
+    // Timeline: 3 s total; layer 2's second clip starts at 2 s after a
+    // 0.5 s silent gap.
+    assert_eq!(info.duration_samples, 3 * SR as u64);
+    assert_eq!(info.layers[0].clips[1].start_sample, take2_start);
+    assert_eq!(info.layers[1].clips[1].start_sample, take2_start);
+    assert_eq!(info.layers[1].duration_samples, 3 * SR as u64);
+
+    // The gap really is silence in layer 2's peaks (~1.6 s → 1.9 s).
+    let gap = pyramids[1].query(
+        (1.6 * SR as f64) as u64,
+        (1.9 * SR as f64) as u64,
+        64,
+    );
+    assert!(
+        gap.channels.iter().all(|ch| ch.iter().all(|&v| v == 0)),
+        "expected silence in the take gap"
+    );
+
+    // A track crossing the gap and the take boundary: every layer must
+    // contribute exactly the same number of samples (silence included).
+    let mut state = ProjectState::new(
+        Project::new_layers(vec![
+            vec![a1.display().to_string(), a2.display().to_string()],
+            vec![b1.display().to_string(), b2.display().to_string()],
+        ]),
+        info,
+        pyramids,
+    );
+    let region_start = (1.2 * SR as f64) as u64;
+    let region_end = (2.6 * SR as f64) as u64;
+    state.add_region(region_start, region_end, None).unwrap();
+
+    let Ok(ffmpeg) = resolve_ffmpeg(&[]) else {
+        eprintln!("ffmpeg not found — take export test skipped");
+        return;
+    };
+    let cfg = ExportConfig {
+        format: ExportFormat::Wav,
+        dest_dir: dir.path().join("out").display().to_string(),
+        ..Default::default()
+    };
+    let jobs = plan_export(&state.tracks(), &cfg, &a1).unwrap();
+    let cancel = AtomicBool::new(false);
+    let report = run_export(&ffmpeg, &mix_of(&state), 2, SR, &jobs, &cfg, &cancel, |_| {});
+    assert!(report.errors.is_empty(), "export errors: {:?}", report.errors);
+    let reader = hound::WavReader::open(&jobs[0].out_path).unwrap();
+    assert_eq!(reader.duration() as u64, region_end - region_start);
 }
 
 /// Clips with mismatched formats are refused with an actionable error.

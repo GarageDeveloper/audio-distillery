@@ -83,6 +83,53 @@ impl PeakBuilder {
         }
     }
 
+    /// Advance the timeline by `n` silent samples (gaps between takes).
+    pub fn push_silence(&mut self, mut n: u64) {
+        // Finish the current partial bucket sample by sample.
+        while self.filled != 0 && n > 0 {
+            for b in &mut self.current {
+                if 0.0 < b.0 {
+                    b.0 = 0.0;
+                }
+                if 0.0 > b.1 {
+                    b.1 = 0.0;
+                }
+            }
+            self.filled += 1;
+            self.total_frames += 1;
+            n -= 1;
+            if self.filled == BASE_SAMPLES_PER_BUCKET {
+                self.flush_bucket();
+            }
+        }
+        // Bulk-fill whole zero buckets.
+        let full = n / BASE_SAMPLES_PER_BUCKET as u64;
+        if full > 0 {
+            for ch in &mut self.base {
+                ch.extend(std::iter::repeat(0i8).take(full as usize * 2));
+            }
+            self.total_frames += full * BASE_SAMPLES_PER_BUCKET as u64;
+            n -= full * BASE_SAMPLES_PER_BUCKET as u64;
+        }
+        // Remainder starts a new partial bucket.
+        while n > 0 {
+            for b in &mut self.current {
+                if 0.0 < b.0 {
+                    b.0 = 0.0;
+                }
+                if 0.0 > b.1 {
+                    b.1 = 0.0;
+                }
+            }
+            self.filled += 1;
+            self.total_frames += 1;
+            n -= 1;
+            if self.filled == BASE_SAMPLES_PER_BUCKET {
+                self.flush_bucket();
+            }
+        }
+    }
+
     fn flush_bucket(&mut self) {
         for c in 0..self.channels {
             let (mn, mx) = self.current[c];

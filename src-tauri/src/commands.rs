@@ -44,11 +44,11 @@ fn check_extensions(paths: &[String]) -> CmdResult<()> {
 async fn scan_sources(
     app: &AppHandle,
     state: &State<'_, AppState>,
-    groups: &[Vec<String>],
+    groups: &[Vec<still_core::SourceRef>],
 ) -> CmdResult<(still_core::AudioInfo, Vec<still_core::PeakPyramid>)> {
-    let path_groups: Vec<Vec<PathBuf>> = groups
+    let path_groups: Vec<Vec<(PathBuf, Option<u64>)>> = groups
         .iter()
-        .map(|g| g.iter().map(PathBuf::from).collect())
+        .map(|g| g.iter().map(|r| (PathBuf::from(&r.path), r.start)).collect())
         .collect();
     let app2 = app.clone();
     state.scan_cancel.store(false, Ordering::SeqCst);
@@ -78,17 +78,26 @@ pub fn cancel_load(state: State<'_, AppState>) -> CmdResult<()> {
     Ok(())
 }
 
-/// Per-layer playlists for the playback thread.
+/// Per-layer playlists for the playback thread, with silent gaps between
+/// take-aligned clips so every layer keeps the same clock.
 fn playlists_of(info: &still_core::AudioInfo) -> Vec<still_core::LayerPlay> {
     let sr = info.sample_rate.max(1) as f64;
     info.layers
         .iter()
-        .map(|scanned| still_core::LayerPlay {
-            playlist: scanned
-                .clips
-                .iter()
-                .map(|c| (PathBuf::from(&c.path), c.duration_samples as f64 / sr))
-                .collect(),
+        .map(|scanned| {
+            let mut playlist = Vec::new();
+            let mut cursor = 0u64;
+            for c in &scanned.clips {
+                if c.start_sample > cursor {
+                    playlist.push((None, (c.start_sample - cursor) as f64 / sr));
+                }
+                playlist.push((
+                    Some(PathBuf::from(&c.path)),
+                    c.duration_samples as f64 / sr,
+                ));
+                cursor = c.start_sample + c.duration_samples;
+            }
+            still_core::LayerPlay { playlist }
         })
         .collect()
 }
@@ -120,7 +129,11 @@ async fn load_session(
     groups: Vec<Vec<String>>,
     project: Option<(Project, PathBuf)>,
 ) -> CmdResult<ProjectView> {
-    let (info, peaks) = scan_sources(&app, &state, &groups).await?;
+    let refs: Vec<Vec<still_core::SourceRef>> = groups
+        .iter()
+        .map(|g| g.iter().cloned().map(still_core::SourceRef::sequential).collect())
+        .collect();
+    let (info, peaks) = scan_sources(&app, &state, &refs).await?;
 
     let mut ps = match project {
         Some((project, project_path)) => {
@@ -181,7 +194,7 @@ pub async fn load_multitrack(
 async fn rescan_with_groups(
     app: AppHandle,
     state: State<'_, AppState>,
-    groups: Vec<Vec<String>>,
+    groups: Vec<Vec<still_core::SourceRef>>,
     update: impl FnOnce(&mut ProjectState),
 ) -> CmdResult<ProjectView> {
     let (info, peaks) = scan_sources(&app, &state, &groups).await?;
@@ -215,11 +228,60 @@ pub async fn add_clips(
     check_extensions(&paths)?;
     let groups = with_session(&state, |s| {
         let mut groups = s.project.source_groups();
-        groups[0].extend(paths.iter().cloned());
+        groups[0].extend(
+            paths
+                .iter()
+                .cloned()
+                .map(still_core::SourceRef::sequential),
+        );
         Ok(groups)
     })?;
     rescan_with_groups(app, state, groups.clone(), move |s| {
         s.project.layers[0].sources = groups[0].clone();
+    })
+    .await
+}
+
+/// Append a whole synchronized TAKE: one file per existing layer (matched in
+/// order), all starting together right after the current timeline end, with
+/// silent gaps filling any length difference between layers.
+#[tauri::command]
+pub async fn add_take(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    paths: Vec<String>,
+) -> CmdResult<ProjectView> {
+    if paths.is_empty() {
+        return Err("No audio file given.".to_string());
+    }
+    check_extensions(&paths)?;
+    // Sort by name so Zoom-style suffixes (Tr1, Tr2, …) line up with the
+    // layer order across takes.
+    let mut paths = paths;
+    paths.sort();
+    let (groups, take_start) = with_session(&state, |s| {
+        if paths.len() != s.project.layers.len() {
+            return Err(format!(
+                "This session has {} layers but {} file(s) were given. A take needs exactly one file per layer (in order).",
+                s.project.layers.len(),
+                paths.len()
+            ));
+        }
+        let take_start = s.info.duration_samples;
+        let mut groups = s.project.source_groups();
+        for (i, p) in paths.iter().enumerate() {
+            groups[i].push(still_core::SourceRef {
+                path: p.clone(),
+                start: Some(take_start),
+            });
+        }
+        Ok((groups, take_start))
+    })?;
+    let _ = take_start;
+    rescan_with_groups(app, state, groups.clone(), move |s| {
+        for (i, g) in groups.iter().enumerate() {
+            s.project.layers[i].sources = g.clone();
+        }
     })
     .await
 }
@@ -239,12 +301,12 @@ pub async fn add_layers(
         let mut groups = s.project.source_groups();
         let mut new_layers = Vec::new();
         for p in &paths {
-            groups.push(vec![p.clone()]);
+            groups.push(vec![still_core::SourceRef::sequential(p.clone())]);
             let id = s.project.next_layer_id;
             s.project.next_layer_id += 1;
             new_layers.push(still_core::Layer {
                 id,
-                sources: vec![p.clone()],
+                sources: vec![still_core::SourceRef::sequential(p.clone())],
                 gain_db: 0.0,
                 muted: false,
                 solo: false,
@@ -454,6 +516,34 @@ pub fn add_regions(
     })
 }
 
+/// Take ONE undo snapshot at the start of an interactive edge drag; the
+/// following `move_region_edge_preview` calls then update live without
+/// polluting the undo history.
+#[tauri::command]
+pub fn begin_region_edit(state: State<'_, AppState>) -> CmdResult<()> {
+    with_session(&state, |s| {
+        s.begin_edit();
+        Ok(())
+    })
+}
+
+/// Live, undo-free edge move used while dragging (durations in the track
+/// panel follow in real time). The backend still clamps and snaps.
+#[tauri::command]
+pub fn move_region_edge_preview(
+    state: State<'_, AppState>,
+    id: u32,
+    edge: RegionEdge,
+    position: u64,
+) -> CmdResult<ProjectView> {
+    with_session(&state, |s| {
+        let pos = snapped(s, position);
+        s.move_edge_preview(id, edge, pos).map_err(err)?;
+        sync_playback(&state, s);
+        Ok(s.view())
+    })
+}
+
 #[tauri::command]
 pub fn move_region_edge(
     state: State<'_, AppState>,
@@ -645,15 +735,30 @@ pub async fn load_project(
     let project = still_core::read_project(&project_path).map_err(err)?;
     for layer in &project.layers {
         for source in &layer.sources {
-            if !Path::new(source).is_file() {
+            if !Path::new(&source.path).is_file() {
                 return Err(format!(
-                    "A source audio file referenced by this project was not found: {source}"
+                    "A source audio file referenced by this project was not found: {}",
+                    source.path
                 ));
             }
         }
     }
-    let groups = project.source_groups();
-    load_session(app, state, groups, Some((project, project_path))).await
+    let refs = project.source_groups();
+    let (info, peaks) = scan_sources(&app, &state, &refs).await?;
+    let mut ps = ProjectState::new(project, info, peaks);
+    ps.project_path = Some(project_path);
+    state
+        .player
+        .load(
+            playlists_of(&ps.info),
+            ps.info.duration_seconds,
+            automation_of(&ps),
+        )
+        .map_err(err)?;
+    still_core::sanitize_regions(&mut ps.project, ps.info.duration_samples, ps.info.sample_rate);
+    let view = ps.view();
+    *state.session.lock().unwrap() = Some(ps);
+    Ok(view)
 }
 
 // ---- Playback ----------------------------------------------------------

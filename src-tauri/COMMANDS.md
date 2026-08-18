@@ -16,6 +16,7 @@ Shared types are generated from Rust with `ts-rs` into `src/types/` (run
 | `load_multitrack` | `paths: string[]` | `ProjectView` (each file = one synced LAYER starting at t = 0) | same as `load_audio`, sample-rate mismatch |
 | `add_clips` | `paths: string[]` | `ProjectView` (appends to the END of the base layer's timeline; regions and undo history preserved) | same as `load_audio`, no audio loaded |
 | `add_layers` | `paths: string[]` | `ProjectView` (each file = one new synced layer) | same as `load_audio`, no audio loaded |
+| `add_take` | `paths: string[]` (exactly one per layer; sorted by name and matched to the layer order) | `ProjectView` (whole synced take appended: every file starts together right after the current timeline end; shorter layers got a silent gap) | file count ≠ layer count, same as `load_audio` |
 | `set_layer_gain` | `id: number`, `gainDb: number` | `ProjectView` (clamped to [-60, +12] dB; -60 = -∞; applies live to playback) | unknown layer |
 | `set_layer_muted` | `id: number`, `muted: boolean` | `ProjectView` (applies live to playback) | unknown layer |
 | `set_layer_solo` | `id: number`, `solo: boolean` | `ProjectView` (when any layer is soloed, only soloed layers are audible; solo wins over mute) | unknown layer |
@@ -32,8 +33,10 @@ Shared types are generated from Rust with `ts-rs` into `src/types/` (run
 A session's audio is a stack of **layers** (time-synchronized recordings of
 the same session, all starting at t = 0 — e.g. a Zoom recorder's stereo mic
 plus its other inputs). Each layer is an ordered list of **clips** (source
-files) laid back-to-back; the base layer (index 0) carries the timeline shown
-in the UI (`AudioInfo.clips`). Every position in the API is a timeline
+files) laid back-to-back — or pinned at an explicit timeline position for
+TAKE alignment, with silent gaps filling the difference (peaks, playback and
+export all honor those gaps, keeping layers sample-aligned). The base layer
+(index 0) carries the timeline shown in the UI (`AudioInfo.clips`). Every position in the API is a timeline
 sample. Layers must share the session sample rate; channel counts may differ
 (mono inputs next to a stereo mic are fine — session channels = max).
 Scanning is read-only, computes one multi-resolution peak pyramid PER LAYER

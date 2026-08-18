@@ -33,6 +33,7 @@ interface Props {
   onSeek: (sample: number) => void;
   onSelectionChange: (sel: RegionSpan | null) => void;
   onAddRegion: (start: number, end: number) => void;
+  onBeginEdgeDrag: () => void;
   onMoveEdge: (id: number, edge: RegionEdge, sample: number) => void;
   onSelectTrack: (id: number | null) => void;
   onRemoveRegion: (id: number) => void;
@@ -76,6 +77,7 @@ export function Waveform(p: Props) {
   const contentH = useRef(0);
   const labelRects = useRef<{ x: number; y: number; w: number; h: number; id: number; collapsed: boolean }[]>([]);
   const scrollbarDrag = useRef<{ startY: number; startScroll: number } | null>(null);
+  const dragSendAt = useRef(0);
 
   const propsRef = useRef(p);
   propsRef.current = p;
@@ -689,15 +691,19 @@ export function Waveform(p: Props) {
 
   const edgeAt = useCallback(
     (x: number): EdgeRef | null => {
-      const { viewport } = propsRef.current;
+      const { viewport, selectedTrack } = propsRef.current;
       let best: EdgeRef | null = null;
       let bestDist = Infinity;
       for (const e of edges()) {
         const ex = sampleToX(e.sample, viewport);
         const dist = Math.abs(x - ex);
-        if (dist <= EDGE_HIT_PX && dist < bestDist) {
+        if (dist > EDGE_HIT_PX) continue;
+        // When two edges are equally reachable (adjacent tracks), prefer the
+        // selected track's edge so you grab the one you're working on.
+        const bias = selectedTrack != null && e.id === selectedTrack ? -4 : 0;
+        if (dist + bias < bestDist) {
           best = e;
-          bestDist = dist;
+          bestDist = dist + bias;
         }
       }
       return best;
@@ -815,8 +821,19 @@ export function Waveform(p: Props) {
         }
         const d = drag.current;
         if (d?.type === "edge") {
+          const wasMoved = d.moved;
           d.pos = clampSample(xToSample(x, propsRef.current.viewport));
           d.moved = true;
+          // One undo snapshot at the first real move, then throttled LIVE
+          // previews so the track panel (durations) follows the drag.
+          if (!wasMoved) {
+            propsRef.current.onBeginEdgeDrag();
+          }
+          const now = performance.now();
+          if (now - dragSendAt.current >= 90) {
+            dragSendAt.current = now;
+            propsRef.current.onMoveEdge(d.id, d.edge, Math.round(d.pos));
+          }
           draw();
           return;
         }

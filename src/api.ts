@@ -16,6 +16,7 @@ export const api = {
     invoke<ProjectView>("load_multitrack", { paths }),
   addClips: (paths: string[]) => invoke<ProjectView>("add_clips", { paths }),
   addLayers: (paths: string[]) => invoke<ProjectView>("add_layers", { paths }),
+  addTake: (paths: string[]) => invoke<ProjectView>("add_take", { paths }),
   setLayerGain: (id: number, gainDb: number) =>
     invoke<ProjectView>("set_layer_gain", { id, gainDb }),
   setLayerMuted: (id: number, muted: boolean) =>
@@ -52,6 +53,13 @@ export const api = {
         start: Math.round(r.start),
         end: Math.round(r.end),
       })),
+    }),
+  beginRegionEdit: () => invoke<void>("begin_region_edit"),
+  moveRegionEdgePreview: (id: number, edge: RegionEdge, position: number) =>
+    invoke<ProjectView>("move_region_edge_preview", {
+      id,
+      edge,
+      position: Math.round(position),
     }),
   moveRegionEdge: (id: number, edge: RegionEdge, position: number) =>
     invoke<ProjectView>("move_region_edge", {

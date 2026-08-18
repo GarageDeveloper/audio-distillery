@@ -18,8 +18,9 @@ pub struct PlaybackState {
     pub ready: bool,
 }
 
-/// One playable clip: file path + duration in seconds.
-type Playlist = Vec<(PathBuf, f64)>;
+/// One playable item: a file (Some(path)) or a silent gap (None), with its
+/// duration in seconds. Gaps keep take-aligned layers in sync.
+type Playlist = Vec<(Option<PathBuf>, f64)>;
 
 /// One layer to play: its sequential clips.
 #[derive(Debug, Clone)]
@@ -192,17 +193,39 @@ fn audio_thread(rx: Receiver<Cmd>, shared: Arc<Mutex<Shared>>) {
                         cursor += dur;
                         continue;
                     }
-                    let file = File::open(path).map_err(|e| e.to_string())?;
-                    let decoder =
-                        rodio::Decoder::new(BufReader::new(file)).map_err(|e| e.to_string())?;
-                    sink.append(decoder);
-                    if !started {
-                        let local = (from - cursor).max(0.0);
-                        if local > 0.0 {
-                            let _ = sink.try_seek(Duration::from_secs_f64(local));
+                    match path {
+                        Some(path) => {
+                            let file = File::open(path).map_err(|e| e.to_string())?;
+                            let decoder = rodio::Decoder::new(BufReader::new(file))
+                                .map_err(|e| e.to_string())?;
+                            sink.append(decoder);
+                            if !started {
+                                let local = (from - cursor).max(0.0);
+                                if local > 0.0 {
+                                    let _ = sink.try_seek(Duration::from_secs_f64(local));
+                                }
+                                started = true;
+                            }
                         }
-                        started = true;
+                        None => {
+                            // Silent gap: an inaudible source of the right
+                            // length keeps this layer's clock aligned.
+                            let remaining = if started {
+                                *dur
+                            } else {
+                                (cursor + dur - from).max(0.0)
+                            };
+                            if remaining > 0.0 {
+                                use rodio::Source;
+                                sink.append(
+                                    rodio::source::Zero::<f32>::new(2, 44_100)
+                                        .take_duration(Duration::from_secs_f64(remaining)),
+                                );
+                            }
+                            started = true;
+                        }
                     }
+                    cursor += dur;
                 }
                 // A layer shorter than `from` yields an empty sink: fine, it
                 // just keeps indices aligned for live volume changes.
