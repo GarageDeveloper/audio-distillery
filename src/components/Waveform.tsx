@@ -214,13 +214,8 @@ export function Waveform(p: Props) {
       const laneH = area / n;
       const amp = laneH * 0.42;
       ctx.font = "600 10px ui-monospace, Menlo, Consolas, monospace";
+      void amp;
       for (let li = 0; li < lanes.length; li++) {
-        const cy = RULER_H + laneH * (li + 0.5);
-        ctx.strokeStyle = centerColor;
-        ctx.beginPath();
-        ctx.moveTo(0, Math.round(cy) + 0.5);
-        ctx.lineTo(w, Math.round(cy) + 0.5);
-        ctx.stroke();
         if (li > 0) {
           ctx.strokeStyle = css("--line-soft");
           ctx.beginPath();
@@ -229,10 +224,23 @@ export function Waveform(p: Props) {
           ctx.stroke();
         }
         const muted = layerViews[li]?.muted ?? false;
-        drawLane(lanes[li], "mono", cy, amp, 0, muted);
-        // Lane label: layer name (+ muted flag).
+        // Each layer shows its REAL channels: stereo files get two sub-lanes
+        // (L/R, usual channel colors), mono files a single one.
+        const chCount = Math.max(lanes[li].channels.length, 1);
+        const subH = laneH / chCount;
+        for (let c = 0; c < chCount; c++) {
+          const scy = RULER_H + laneH * li + subH * (c + 0.5);
+          ctx.strokeStyle = centerColor;
+          ctx.beginPath();
+          ctx.moveTo(0, Math.round(scy) + 0.5);
+          ctx.lineTo(w, Math.round(scy) + 0.5);
+          ctx.stroke();
+          drawLane(lanes[li], c, scy, subH * 0.42, c, muted);
+        }
+        // Lane label: layer name + channel layout (+ muted flag).
         const name = layerViews[li]?.name ?? `Layer ${li + 1}`;
-        const label = muted ? `${name} · muted` : name;
+        const layout = chCount === 1 ? "mono" : chCount === 2 ? "stereo" : `${chCount} ch`;
+        const label = `${name} · ${layout}${muted ? " · muted" : ""}`;
         ctx.fillStyle = css("--panel-2");
         const tw = ctx.measureText(label).width;
         ctx.beginPath();
