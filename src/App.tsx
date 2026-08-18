@@ -130,6 +130,15 @@ export default function App() {
     [showError, fitFile, waveWidth]
   );
 
+  // Re-clamp the viewport whenever the canvas width actually changes (first
+  // measure after load, side panel collapse/expand, window resize): a
+  // viewport computed for a stale width otherwise leaves a blank strip on
+  // the right until the next zoom re-clamps it.
+  useEffect(() => {
+    if (!view) return;
+    setViewport((vp) => clampViewport(vp, waveWidth, view.audio.duration_samples, 1));
+  }, [waveWidth, view]);
+
   // Esc cancels a running analysis.
   useEffect(() => {
     if (!loading.active) return;
