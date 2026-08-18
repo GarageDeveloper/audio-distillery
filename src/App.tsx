@@ -36,6 +36,7 @@ export default function App() {
   const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null);
   const [proposals, setProposals] = useState<RegionSpan[] | null>(null);
   const [dropChoice, setDropChoice] = useState<string[] | null>(null);
+  const [minTrackSecs, setMinTrackSecs] = useState(60);
   const [selection, setSelection] = useState<RegionSpan | null>(null);
   const [pendingStart, setPendingStart] = useState<number | null>(null);
   const [selectedTrack, setSelectedTrack] = useState<number | null>(null);
@@ -361,6 +362,15 @@ export default function App() {
 
   const playheadSample = playback.positionSeconds * (view?.audio.sample_rate ?? 44100);
 
+  // Auto-split proposals filtered by the live minimum-length criterion.
+  const sr = view?.audio.sample_rate ?? 44100;
+  const keptProposals = (proposals ?? []).filter(
+    (r) => (r.end - r.start) / sr >= minTrackSecs
+  );
+  const ignoredProposals = (proposals ?? []).filter(
+    (r) => (r.end - r.start) / sr < minTrackSecs
+  );
+
   return (
     <div className="app">
       <Toolbar
@@ -393,7 +403,8 @@ export default function App() {
                 view={view}
                 viewport={viewport}
                 playheadSample={playheadSample}
-                proposals={proposals}
+                proposals={proposals ? keptProposals : null}
+                ignoredProposals={proposals ? ignoredProposals : null}
                 selection={selection}
                 pendingStart={pendingStart}
                 selectedTrack={selectedTrack}
@@ -466,17 +477,37 @@ export default function App() {
               )}
               {proposals && (
                 <div className="proposal-bar">
-                  <span>
-                    {proposals.length} track{proposals.length > 1 ? "s" : ""} detected
+                  <span className="proposal-count">
+                    <strong>{keptProposals.length}</strong> track
+                    {keptProposals.length !== 1 ? "s" : ""} kept
+                    {ignoredProposals.length > 0 && (
+                      <span className="proposal-ignored">
+                        {" "}· {ignoredProposals.length} ignored (&lt; {minTrackSecs}s)
+                      </span>
+                    )}
                   </span>
+                  <label className="proposal-min">
+                    min
+                    <input
+                      type="number"
+                      min={0}
+                      step={5}
+                      value={minTrackSecs}
+                      onChange={(e) =>
+                        setMinTrackSecs(Math.max(0, Number(e.target.value) || 0))
+                      }
+                    />
+                    s
+                  </label>
                   <button
                     className="btn btn-primary"
+                    disabled={keptProposals.length === 0}
                     onClick={() => {
-                      void apply(() => api.addRegions(proposals));
+                      void apply(() => api.addRegions(keptProposals));
                       setProposals(null);
                     }}
                   >
-                    Add tracks
+                    Add {keptProposals.length} track{keptProposals.length !== 1 ? "s" : ""}
                   </button>
                   <button className="btn" onClick={() => setProposals(null)}>
                     Dismiss
@@ -526,6 +557,9 @@ export default function App() {
             onLayerMute={(id, m) => void apply(() => api.setLayerMuted(id, m))}
             onLayerRemove={(id) => void apply(() => api.removeLayer(id))}
             onAddLayers={() => void addLayers()}
+            onTrackLayerGain={(trackId, layerId, db) =>
+              void apply(() => api.setTrackLayerGain(trackId, layerId, db))
+            }
           />
         )}
       </div>

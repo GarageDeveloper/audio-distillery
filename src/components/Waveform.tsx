@@ -18,6 +18,8 @@ interface Props {
   viewport: Viewport;
   playheadSample: number;
   proposals: RegionSpan[] | null;
+  /// Auto-split candidates rejected by the minimum-length filter (faint).
+  ignoredProposals?: RegionSpan[] | null;
   selection: RegionSpan | null;
   pendingStart: number | null;
   selectedTrack: number | null;
@@ -296,7 +298,10 @@ export function Waveform(p: Props) {
       ctx.restore();
     }
 
-    // Silence-detection proposals (ghost regions).
+    // Silence-detection proposals (ghost regions). Candidates rejected by
+    // the minimum-length filter stay barely visible so raising/lowering the
+    // threshold gives immediate feedback.
+    const { ignoredProposals } = propsRef.current;
     if (proposals) {
       ctx.save();
       ctx.strokeStyle = css("--copper");
@@ -309,6 +314,19 @@ export function Waveform(p: Props) {
         ctx.fillStyle = css("--copper");
         ctx.fillRect(Math.max(x0, 0), RULER_H, Math.min(x1, w) - Math.max(x0, 0), area);
         ctx.globalAlpha = 0.6;
+        ctx.strokeRect(Math.max(x0, 0) + 0.5, RULER_H + 1.5, Math.min(x1, w) - Math.max(x0, 0) - 1, area - 3);
+      }
+      ctx.restore();
+    }
+    if (ignoredProposals && ignoredProposals.length > 0) {
+      ctx.save();
+      ctx.strokeStyle = css("--text-3");
+      ctx.setLineDash([2, 4]);
+      ctx.globalAlpha = 0.35;
+      for (const r of ignoredProposals) {
+        const x0 = sampleToX(r.start, vp);
+        const x1 = sampleToX(r.end, vp);
+        if (x1 < 0 || x0 > w) continue;
         ctx.strokeRect(Math.max(x0, 0) + 0.5, RULER_H + 1.5, Math.min(x1, w) - Math.max(x0, 0) - 1, area - 3);
       }
       ctx.restore();
@@ -478,7 +496,7 @@ export function Waveform(p: Props) {
   // Redraw on any relevant prop change.
   useEffect(() => {
     draw();
-  }, [p.view, p.viewport, p.playheadSample, p.proposals, p.selection, p.pendingStart, p.selectedTrack, draw]);
+  }, [p.view, p.viewport, p.playheadSample, p.proposals, p.ignoredProposals, p.selection, p.pendingStart, p.selectedTrack, draw]);
 
   // Auto-follow the playhead past the right edge.
   useEffect(() => {

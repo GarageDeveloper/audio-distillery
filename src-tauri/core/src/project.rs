@@ -33,6 +33,10 @@ pub struct Region {
     pub end: u64,
     /// None → default title derived from the track number.
     pub title: Option<String>,
+    /// Per-track layer gain overrides (dB), keyed by layer id as a string.
+    /// A layer absent from the map uses its session-wide gain at export.
+    #[serde(default)]
+    pub gain_overrides: HashMap<String, f32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -165,6 +169,9 @@ pub struct TrackInfo {
     #[ts(type = "number")]
     pub end_sample: u64,
     pub duration_seconds: f64,
+    /// Per-track layer gain overrides (dB), keyed by layer id (string).
+    #[ts(type = "Record<string, number>")]
+    pub gain_overrides: HashMap<String, f32>,
 }
 
 /// Display state of one mix layer.
@@ -415,6 +422,7 @@ impl ProjectState {
             start: s,
             end: e,
             title,
+            gain_overrides: HashMap::new(),
         });
         Ok(id)
     }
@@ -433,6 +441,7 @@ impl ProjectState {
                     start: s,
                     end: e,
                     title: None,
+                    gain_overrides: HashMap::new(),
                 });
                 added += 1;
             }
@@ -532,6 +541,41 @@ impl ProjectState {
         Ok(())
     }
 
+    /// Set (or clear, with `None`) a per-track gain override for one layer.
+    /// Undoable like any region edit; returns the clamped value applied.
+    pub fn set_track_layer_gain(
+        &mut self,
+        track_id: u32,
+        layer_id: u32,
+        gain_db: Option<f32>,
+    ) -> Result<Option<f32>> {
+        if !self.project.layers.iter().any(|l| l.id == layer_id) {
+            return Err(StillError::InvalidMarker(format!(
+                "unknown layer id {layer_id}"
+            )));
+        }
+        let idx = self
+            .project
+            .regions
+            .iter()
+            .position(|r| r.id == track_id)
+            .ok_or_else(|| StillError::InvalidMarker(format!("unknown track id {track_id}")))?;
+        self.push_undo();
+        let region = &mut self.project.regions[idx];
+        let key = layer_id.to_string();
+        match gain_db {
+            Some(db) => {
+                let clamped = db.clamp(MIN_GAIN_DB, MAX_GAIN_DB);
+                region.gain_overrides.insert(key, clamped);
+                Ok(Some(clamped))
+            }
+            None => {
+                region.gain_overrides.remove(&key);
+                Ok(None)
+            }
+        }
+    }
+
     /// Suggest a title for the next track: take the most recently titled
     /// region, strip any trailing `-<n>` index, and propose the base with the
     /// next free index. A bare title counts as the first occurrence, so the
@@ -580,6 +624,7 @@ impl ProjectState {
                 start_sample: r.start,
                 end_sample: r.end,
                 duration_seconds: (r.end.saturating_sub(r.start)) as f64 / sr,
+                gain_overrides: r.gain_overrides.clone(),
             })
             .collect()
     }
@@ -733,6 +778,7 @@ fn migrate_v1(legacy: LegacyProjectV1) -> Project {
             start: *start,
             end,
             title: legacy.track_names.get(key).cloned(),
+            gain_overrides: HashMap::new(),
         });
     }
     let next_region_id = regions.len() as u32 + 1;
@@ -1041,8 +1087,8 @@ mod tests {
     #[test]
     fn sanitize_drops_degenerate_regions() {
         let mut p = Project::new(vec!["/tmp/x.wav".into()]);
-        p.regions.push(Region { id: 1, start: 0, end: 10 * SEC, title: None });
-        p.regions.push(Region { id: 2, start: 200 * SEC, end: 300 * SEC, title: None });
+        p.regions.push(Region { id: 1, start: 0, end: 10 * SEC, title: None, gain_overrides: HashMap::new() });
+        p.regions.push(Region { id: 2, start: 200 * SEC, end: 300 * SEC, title: None, gain_overrides: HashMap::new() });
         sanitize_regions(&mut p, 120 * SEC, SR);
         assert_eq!(p.regions.len(), 1);
     }

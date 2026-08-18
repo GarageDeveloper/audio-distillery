@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ProjectView } from "../types/ProjectView";
 import { formatDuration } from "../lib/format";
 import { LayersPanel } from "./LayersPanel";
+import { GainInput } from "./GainInput";
 
 interface Props {
   view: ProjectView;
@@ -15,6 +16,7 @@ interface Props {
   onLayerMute: (id: number, muted: boolean) => void;
   onLayerRemove: (id: number) => void;
   onAddLayers: () => void;
+  onTrackLayerGain: (trackId: number, layerId: number, gainDb: number | null) => void;
 }
 
 export function TrackList({
@@ -29,8 +31,10 @@ export function TrackList({
   onLayerMute,
   onLayerRemove,
   onAddLayers,
+  onTrackLayerGain,
 }: Props) {
   const [editing, setEditing] = useState<number | null>(null);
+  const [mixOpen, setMixOpen] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -84,8 +88,8 @@ export function TrackList({
           const isPlaying =
             playheadSample >= t.start_sample && playheadSample < t.end_sample;
           return (
+            <div key={t.id} className="track-item">
             <div
-              key={t.id}
               className={`track-row ${isPlaying ? "playing" : ""} ${
                 selectedTrack === t.id ? "selected" : ""
               }`}
@@ -123,6 +127,20 @@ export function TrackList({
                 </span>
               )}
               <span className="dur">{formatDuration(t.duration_seconds)}</span>
+              {view.layers.length > 1 && (
+                <button
+                  className={`mix-toggle ${Object.keys(t.gain_overrides).length > 0 ? "has-override" : ""} ${
+                    mixOpen === t.id ? "open" : ""
+                  }`}
+                  title="Per-track layer levels (override the session faders for this track)"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setMixOpen(mixOpen === t.id ? null : t.id);
+                  }}
+                >
+                  mix
+                </button>
+              )}
               <button
                 className="del"
                 title="Remove this track (its audio is then ignored)"
@@ -133,6 +151,39 @@ export function TrackList({
               >
                 ✕
               </button>
+            </div>
+            {mixOpen === t.id && view.layers.length > 1 && (
+              <div className="track-mix" onClick={(e) => e.stopPropagation()}>
+                {view.layers.map((l) => {
+                  const key = String(l.id);
+                  const override = t.gain_overrides[key];
+                  const hasOverride = override !== undefined;
+                  return (
+                    <div key={l.id} className="track-mix-row">
+                      <span className="layer-name" title={l.name}>
+                        {l.name}
+                      </span>
+                      <GainInput
+                        value={hasOverride ? override : null}
+                        placeholder={`${l.gain_db > 0 ? "+" : ""}${Number(l.gain_db.toFixed(1))}`}
+                        clearable
+                        onCommit={(v) => onTrackLayerGain(t.id, l.id, v)}
+                        title="Override this layer's gain for this track only — empty = inherit the session fader"
+                      />
+                      <span className="layer-db-unit">dB</span>
+                      <button
+                        className={`del ${hasOverride ? "" : "hidden-btn"}`}
+                        title="Clear the override (inherit the session fader)"
+                        onClick={() => onTrackLayerGain(t.id, l.id, null)}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  );
+                })}
+                <div className="hint">Empty = inherit session fader · applies at export</div>
+              </div>
+            )}
             </div>
           );
         })}

@@ -18,6 +18,7 @@ Shared types are generated from Rust with `ts-rs` into `src/types/` (run
 | `add_layers` | `paths: string[]` | `ProjectView` (each file = one new synced layer) | same as `load_audio`, no audio loaded |
 | `set_layer_gain` | `id: number`, `gainDb: number` | `ProjectView` (clamped to [-60, +12] dB; -60 = -∞; applies live to playback) | unknown layer |
 | `set_layer_muted` | `id: number`, `muted: boolean` | `ProjectView` (applies live to playback) | unknown layer |
+| `set_track_layer_gain` | `trackId: number`, `layerId: number`, `gainDb: number \| null` | `ProjectView` (per-track override of one layer's gain, applied at export; null clears it; undoable) | unknown track/layer |
 | `remove_layer` | `id: number` | `ProjectView` | unknown layer, base layer |
 | `cancel_load` | — | `void` (the pending scan then fails with "Import cancelled"; any previous session stays untouched) | — |
 | `load_project` | `path: string` (.still file) | `ProjectView` | invalid project JSON, newer project version, missing source file |
@@ -87,8 +88,9 @@ export), then emits `export:progress` events (`ExportProgress`). Only the
 defined track regions are exported (everything else is ignored); it errors
 when no region exists. Cuts are sample-accurate (`atrim` on the decoded
 stream). Each exported track is the SUM of the audible layers at their mix
-gains (ffmpeg `amix` with `normalize=0`; mono layers are upmixed to the
-session layout). Existing files are never overwritten: names are suffixed ` (1)`,
+gains — a track's `gain_overrides` (see `set_track_layer_gain`) replace the
+session-wide layer gains for that track only (ffmpeg `amix` with
+`normalize=0`; mono layers are upmixed to the session layout). Existing files are never overwritten: names are suffixed ` (1)`,
 ` (2)`, … Per-track failures land in `ExportReport.errors`; the other tracks
 still export.
 

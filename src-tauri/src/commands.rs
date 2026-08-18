@@ -270,6 +270,22 @@ pub fn set_layer_muted(
     })
 }
 
+/// Set or clear (null) a per-track gain override for one layer. Overrides
+/// apply at export time on top of the session-wide layer gains.
+#[tauri::command]
+pub fn set_track_layer_gain(
+    state: State<'_, AppState>,
+    track_id: u32,
+    layer_id: u32,
+    gain_db: Option<f32>,
+) -> CmdResult<ProjectView> {
+    with_session(&state, |s| {
+        s.set_track_layer_gain(track_id, layer_id, gain_db)
+            .map_err(err)?;
+        Ok(s.view())
+    })
+}
+
 #[tauri::command]
 pub fn remove_layer(state: State<'_, AppState>, id: u32) -> CmdResult<ProjectView> {
     with_session(&state, |s| {
@@ -473,6 +489,7 @@ pub async fn export_tracks(
             .iter()
             .zip(s.info.layers.iter())
             .map(|(l, scanned)| still_core::LayerMix {
+                id: l.id,
                 clips: scanned.clips.clone(),
                 gain_db: l.gain_db,
                 muted: l.muted,

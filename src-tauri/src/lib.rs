@@ -16,6 +16,7 @@ pub fn run() {
             commands::add_layers,
             commands::set_layer_gain,
             commands::set_layer_muted,
+            commands::set_track_layer_gain,
             commands::remove_layer,
             commands::cancel_load,
             commands::load_project,

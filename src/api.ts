@@ -21,6 +21,8 @@ export const api = {
   setLayerMuted: (id: number, muted: boolean) =>
     invoke<ProjectView>("set_layer_muted", { id, muted }),
   removeLayer: (id: number) => invoke<ProjectView>("remove_layer", { id }),
+  setTrackLayerGain: (trackId: number, layerId: number, gainDb: number | null) =>
+    invoke<ProjectView>("set_track_layer_gain", { trackId, layerId, gainDb }),
   loadProject: (path: string) => invoke<ProjectView>("load_project", { path }),
   cancelLoad: () => invoke<void>("cancel_load"),
   saveProject: (path?: string) =>

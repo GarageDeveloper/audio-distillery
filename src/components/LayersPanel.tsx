@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import type { ProjectView } from "../types/ProjectView";
+import { GainInput } from "./GainInput";
 
 interface Props {
   view: ProjectView;
@@ -69,9 +70,12 @@ export function LayersPanel({ view, onGain, onMute, onRemove, onAdd }: Props) {
               onDoubleClick={() => onGain(l.id, 0)}
               title="Drag to set the mix gain — double-click to reset to 0 dB"
             />
-            <span className="layer-db">
-              {l.gain_db <= -60 ? "-∞" : `${l.gain_db > 0 ? "+" : ""}${l.gain_db.toFixed(1)}`} dB
-            </span>
+            <GainInput
+              value={l.gain_db}
+              onCommit={(v) => v != null && onGain(l.id, v)}
+              title="Type the mix gain in dB (-60 to +12), Enter to apply"
+            />
+            <span className="layer-db-unit">dB</span>
           </div>
         </div>
       ))}

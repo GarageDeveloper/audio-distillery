@@ -18,6 +18,7 @@ fn mix_of(state: &ProjectState) -> Vec<LayerMix> {
         .layers
         .iter()
         .map(|l| LayerMix {
+            id: 1,
             clips: l.clips.clone(),
             gain_db: 0.0,
             muted: false,
@@ -374,6 +375,7 @@ fn multitrack_layers_mix_at_export() {
             .iter()
             .zip(state.info.layers.iter())
             .map(|(l, scanned)| LayerMix {
+                id: l.id,
                 clips: scanned.clips.clone(),
                 gain_db: l.gain_db,
                 muted: l.muted,
@@ -403,6 +405,25 @@ fn multitrack_layers_mix_at_export() {
         (muted_peak - 0.4).abs() < 0.05,
         "expected the stereo layer alone, peak = {muted_peak}"
     );
+
+    // Per-track override: unmute the mono layer globally but override it to
+    // -60 dB (-∞) FOR THIS TRACK only → same audible result as muting it.
+    state.set_layer_muted(mono_id, false).unwrap();
+    let track_id = state.tracks()[0].id;
+    state
+        .set_track_layer_gain(track_id, mono_id, Some(-60.0))
+        .unwrap();
+    let jobs3 = plan_export(&state.tracks(), &cfg, &stereo).unwrap();
+    let report3 = run_export(&ffmpeg, &mix(&state), 2, SR, &jobs3, &cfg, &cancel, |_| {});
+    assert!(report3.errors.is_empty(), "{:?}", report3.errors);
+    let override_peak = peak_of(&jobs3[0].out_path);
+    assert!(
+        (override_peak - 0.4).abs() < 0.05,
+        "override should silence the mono layer for this track, peak = {override_peak}"
+    );
+    // Clearing the override restores the summed mix.
+    state.set_track_layer_gain(track_id, mono_id, None).unwrap();
+    assert!(state.tracks()[0].gain_overrides.is_empty());
 
     // Sources untouched, whatever the mixing.
     assert_eq!(checksum(&stereo), sum_a);
@@ -451,6 +472,7 @@ fn export_report_carries_errors_not_panics() {
     let jobs = plan_export(&state.tracks(), &cfg, &wav).unwrap();
     // Point ffmpeg at a nonexistent source clip: errors must be reported.
     let bad_layers = vec![LayerMix {
+        id: 1,
         clips: vec![still_core::ClipInfo {
             path: "/nonexistent/audio.wav".into(),
             name: "audio.wav".into(),

@@ -8,4 +8,8 @@ id: number,
 /**
  * 1-based track number, ordered by position in the file.
  */
-number: number, title: string, start_sample: number, end_sample: number, duration_seconds: number, };
+number: number, title: string, start_sample: number, end_sample: number, duration_seconds: number, 
+/**
+ * Per-track layer gain overrides (dB), keyed by layer id (string).
+ */
+gain_overrides: Record<string, number>, };
