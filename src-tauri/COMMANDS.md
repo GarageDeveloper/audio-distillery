@@ -1,0 +1,108 @@
+# Tauri command contract — AudioDistillery
+
+Every interaction between the frontend (display terminal) and the backend
+(single source of truth) goes through these commands. All errors are returned
+as actionable English strings. Mutating commands return a fresh `ProjectView`
+snapshot that the frontend must adopt as-is.
+
+Shared types are generated from Rust with `ts-rs` into `src/types/` (run
+`cargo test -p still-core` to regenerate — never edit those files by hand).
+
+## Session & project
+
+| Command | Parameters | Returns | Errors |
+|---|---|---|---|
+| `load_audio` | `paths: string[]` (1..n files, in order) | `ProjectView` | unsupported extension, file not found, decode failure, clip format mismatch |
+| `add_clips` | `paths: string[]` | `ProjectView` (appends to the timeline; regions and undo history preserved) | same as `load_audio`, no audio loaded |
+| `cancel_load` | — | `void` (the pending scan then fails with "Import cancelled"; any previous session stays untouched) | — |
+| `load_project` | `path: string` (.still file) | `ProjectView` | invalid project JSON, newer project version, missing source file |
+| `save_project` | `path?: string` (required the first time) | `ProjectView` | no path known, I/O error |
+| `get_project_view` | — | `ProjectView` | no audio loaded |
+
+A session's audio is an ordered list of **clips** (source files) laid
+back-to-back on ONE timeline; every position in the API is a timeline sample.
+All clips must share the first clip's sample rate and channel count. Scanning
+is read-only, computes one multi-resolution peak pyramid over the whole
+timeline and emits `load:progress` events (`number`, 0..1) over the batch.
+`AudioInfo.clips` describes the layout. Regions beyond the scanned duration
+are dropped on project load.
+
+## Waveform data
+
+| Command | Parameters | Returns | Errors |
+|---|---|---|---|
+| `get_peaks` | `startSample: number`, `endSample: number`, `maxBuckets: number` | `PeakSlice` | no audio loaded |
+
+The backend picks the resolution level; the frontend only draws the returned
+buckets. `PeakSlice.channels` holds interleaved `[min, max, …]` i8 pairs per
+channel.
+
+## Track regions
+
+A track is a **region**: a start marker + an end marker + a title. Audio
+outside every region is ignored at export. Regions never overlap; the backend
+trims or rejects conflicting spans and clamps edge moves.
+
+| Command | Parameters | Returns | Errors |
+|---|---|---|---|
+| `add_region` | `start: number`, `end: number` (samples, any order), `title?: string` | `ProjectView` | span too short (< 200 ms), contains/covered by an existing track |
+| `add_regions` | `regions: RegionSpan[]` | `ProjectView` (misfit spans silently skipped; one undo step) | no audio loaded |
+| `move_region_edge` | `id: number`, `edge: "start" \| "end"`, `position: number` | `ProjectView` (position clamped to neighbors, bounds and min length) | unknown id |
+| `remove_region` | `id: number` | `ProjectView` (the freed audio is then ignored) | unknown id |
+| `rename_track` | `id: number`, `title: string` | `ProjectView` (empty title restores the default `Track NN`) | unknown id |
+| `set_snap_to_zero` | `enabled: boolean` | `ProjectView` | no audio loaded |
+| `undo` / `redo` | — | `ProjectView` | no audio loaded |
+| `detect_silences` | `params: SilenceParams` | `RegionSpan[]` (proposed track regions; leading/trailing silence and gaps excluded) | no audio loaded |
+
+When snap-to-zero is enabled, `add_region`/`move_region_edge` adjust the
+requested positions to the nearest zero crossing (backend decision; the
+returned view holds the final positions).
+
+`ProjectView.suggested_title` is the backend's proposal for the next track
+title: the most recently titled track's base name with the next free `-<n>`
+index ("Jam" → "Jam-2" → "Jam-3" …; empty when nothing is titled yet). The
+frontend prefills the add-track input with it, nothing more.
+
+## Export
+
+| Command | Parameters | Returns | Errors |
+|---|---|---|---|
+| `export_tracks` | `config: ExportConfig` | `ExportReport` | export already running, empty destination, ffmpeg not found |
+| `cancel_export` | — | `void` | — |
+| `set_export_config` | `config: ExportConfig` | `ProjectView` | no audio loaded |
+| `get_default_export_dir` | — | `string` (`~/Music/AudioDistillery`) | — |
+
+`export_tracks` pauses playback first (listening is pointless during an
+export), then emits `export:progress` events (`ExportProgress`). Only the
+defined track regions are exported (everything else is ignored); it errors
+when no region exists. Cuts are sample-accurate (`atrim` on the decoded
+stream). Existing files are never overwritten: names are suffixed ` (1)`,
+` (2)`, … Per-track failures land in `ExportReport.errors`; the other tracks
+still export.
+
+Tracks are encoded **in parallel**: one ffmpeg process per worker, with
+`available cores − 2` workers (never fewer than 1, never more than the track
+count) so the machine stays responsive. `STILL_EXPORT_JOBS` overrides the
+worker count. Each `ExportProgress` event concerns ONE track
+(`track_number`); the frontend keeps a bar per track and reads
+`overall_progress` / `completed_tracks` for the global state. Report order is
+always track order, regardless of finish order.
+
+## Playback
+
+| Command | Parameters | Returns |
+|---|---|---|
+| `player_toggle` | — | `PlaybackState` |
+| `player_pause` | — | `PlaybackState` |
+| `player_seek` | `positionSamples: number` | `PlaybackState` |
+| `player_state` | — | `PlaybackState` |
+
+The backend owns the playback clock; the frontend polls `player_state` and
+only interpolates between polls for smooth drawing.
+
+## Events
+
+| Event | Payload | Emitted during |
+|---|---|---|
+| `load:progress` | `number` (0..1) | `load_audio`, `load_project` |
+| `export:progress` | `ExportProgress` | `export_tracks` |

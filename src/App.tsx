@@ -1,0 +1,531 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+
+import type { ProjectView } from "./types/ProjectView";
+import type { ExportProgress } from "./types/ExportProgress";
+import type { RegionSpan } from "./types/RegionSpan";
+import { api } from "./api";
+import { Toolbar, type Theme } from "./components/Toolbar";
+import { Waveform } from "./components/Waveform";
+import { Minimap } from "./components/Minimap";
+import { TrackList } from "./components/TrackList";
+import { ExportDialog } from "./components/ExportDialog";
+import { EmptyState } from "./components/EmptyState";
+import { StatusBar } from "./components/StatusBar";
+import { usePlayback } from "./hooks/usePlayback";
+import type { Viewport } from "./lib/viewport";
+import { clampViewport } from "./lib/viewport";
+
+const AUDIO_EXTS = ["wav", "flac", "mp3", "aiff", "aif"];
+const THEME_KEY = "still-theme";
+
+interface LoadState {
+  active: boolean;
+  progress: number;
+  fileName: string;
+}
+
+export default function App() {
+  const [view, setView] = useState<ProjectView | null>(null);
+  const [loading, setLoading] = useState<LoadState>({ active: false, progress: 0, fileName: "" });
+  const [error, setError] = useState<string | null>(null);
+  const [panelOpen, setPanelOpen] = useState(true);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null);
+  const [proposals, setProposals] = useState<RegionSpan[] | null>(null);
+  const [selection, setSelection] = useState<RegionSpan | null>(null);
+  const [pendingStart, setPendingStart] = useState<number | null>(null);
+  const [selectedTrack, setSelectedTrack] = useState<number | null>(null);
+  const [viewport, setViewport] = useState<Viewport>({ start: 0, spp: 1 });
+  const [waveWidth, setWaveWidth] = useState(1000);
+  const [theme, setTheme] = useState<Theme>(
+    () => (localStorage.getItem(THEME_KEY) as Theme) || "alambic"
+  );
+  const playback = usePlayback(view?.audio.sample_rate ?? 44100, !!view);
+  const errorTimer = useRef<number | undefined>(undefined);
+
+  // Theme is a pure display preference: applied on <html>, persisted locally.
+  useEffect(() => {
+    if (theme === "alambic") {
+      delete document.documentElement.dataset.theme;
+    } else {
+      document.documentElement.dataset.theme = theme;
+    }
+    localStorage.setItem(THEME_KEY, theme);
+  }, [theme]);
+
+  const showError = useCallback((message: string) => {
+    setError(message);
+    window.clearTimeout(errorTimer.current);
+    errorTimer.current = window.setTimeout(() => setError(null), 7000);
+  }, []);
+
+  /** Run a backend intention and adopt the returned canonical view. */
+  const apply = useCallback(
+    async (op: () => Promise<ProjectView>): Promise<ProjectView | null> => {
+      try {
+        const v = await op();
+        setView(v);
+        return v;
+      } catch (e) {
+        showError(String(e));
+        return null;
+      }
+    },
+    [showError]
+  );
+
+  const fitFile = useCallback((v: ProjectView, width: number) => {
+    const total = v.audio.duration_samples;
+    setViewport({ start: 0, spp: Math.max(total / Math.max(width, 100), 1) });
+  }, []);
+
+  // Keep a ref so event handlers know whether a session exists.
+  const viewRef = useRef<ProjectView | null>(null);
+  viewRef.current = view;
+
+  const loadPaths = useCallback(
+    async (paths: string[], mode: "open" | "append" | "project") => {
+      const first = paths[0].split(/[/\\]/).pop() ?? paths[0];
+      const fileName = paths.length > 1 ? `${first} +${paths.length - 1}` : first;
+      setLoading({ active: true, progress: 0, fileName });
+      let v: ProjectView | null = null;
+      try {
+        v =
+          mode === "project"
+            ? await api.loadProject(paths[0])
+            : mode === "append"
+              ? await api.addClips(paths)
+              : await api.loadAudio(paths);
+        setView(v);
+      } catch (e) {
+        // A user-triggered cancel is not an error worth a toast.
+        if (!/cancel/i.test(String(e))) showError(String(e));
+      }
+      setLoading({ active: false, progress: 0, fileName: "" });
+      if (v) {
+        // Always re-fit so the freshly appended clip is visible; only a new
+        // session clears the working state.
+        fitFile(v, waveWidth);
+        if (mode !== "append") {
+          setProposals(null);
+          setSelection(null);
+          setPendingStart(null);
+          setSelectedTrack(null);
+        }
+      }
+    },
+    [showError, fitFile, waveWidth]
+  );
+
+  // Esc cancels a running analysis.
+  useEffect(() => {
+    if (!loading.active) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") void api.cancelLoad();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [loading.active]);
+
+  // Progress events from the backend.
+  useEffect(() => {
+    const un1 = listen<number>("load:progress", (e) => {
+      setLoading((l) => (l.active ? { ...l, progress: e.payload } : l));
+    });
+    const un2 = listen<ExportProgress>("export:progress", (e) => {
+      setExportProgress(e.payload);
+    });
+    return () => {
+      un1.then((f) => f());
+      un2.then((f) => f());
+    };
+  }, []);
+
+  // Native file drag & drop. Several audio files load back-to-back as clips;
+  // dropping audio on an existing session APPENDS it to the timeline.
+  useEffect(() => {
+    const un = getCurrentWebview().onDragDropEvent((e) => {
+      if (e.payload.type === "drop" && e.payload.paths.length > 0) {
+        const ext = (p: string) => p.split(".").pop()?.toLowerCase() ?? "";
+        const still = e.payload.paths.find((p) => ext(p) === "still");
+        const audio = e.payload.paths.filter((p) => AUDIO_EXTS.includes(ext(p)));
+        if (still) {
+          void loadPaths([still], "project");
+        } else if (audio.length > 0) {
+          void loadPaths(audio, viewRef.current ? "append" : "open");
+        } else {
+          showError("Unsupported file type. Drop WAV, FLAC, MP3, AIFF files or a .still project.");
+        }
+      }
+    });
+    return () => {
+      un.then((f) => f());
+    };
+  }, [loadPaths, showError]);
+
+  const pickAudioPaths = useCallback(async (withProject: boolean) => {
+    const picked = await openDialog({
+      multiple: true,
+      filters: withProject
+        ? [
+            { name: "Audio or project", extensions: [...AUDIO_EXTS, "still"] },
+            { name: "Audio", extensions: AUDIO_EXTS },
+            { name: "AudioDistillery project", extensions: ["still"] },
+          ]
+        : [{ name: "Audio", extensions: AUDIO_EXTS }],
+    });
+    if (!picked) return [];
+    return Array.isArray(picked) ? picked : [picked];
+  }, []);
+
+  const openFile = useCallback(async () => {
+    const paths = await pickAudioPaths(true);
+    if (paths.length === 0) return;
+    if (paths[0].toLowerCase().endsWith(".still")) {
+      void loadPaths([paths[0]], "project");
+    } else {
+      void loadPaths(paths, "open");
+    }
+  }, [pickAudioPaths, loadPaths]);
+
+  const addClips = useCallback(async () => {
+    const paths = await pickAudioPaths(false);
+    if (paths.length > 0) void loadPaths(paths, "append");
+  }, [pickAudioPaths, loadPaths]);
+
+  const saveProject = useCallback(
+    async (forceAsk: boolean) => {
+      if (!view) return;
+      let path = view.project_path ?? undefined;
+      if (!path || forceAsk) {
+        const stem = (view.audio.path.split(/[/\\]/).pop() ?? "project").replace(/\.[^.]+$/, "");
+        const chosen = await saveDialog({
+          defaultPath: `${stem}.still`,
+          filters: [{ name: "AudioDistillery project", extensions: ["still"] }],
+        });
+        if (!chosen) return;
+        path = chosen;
+      }
+      await apply(() => api.saveProject(path));
+    },
+    [view, apply]
+  );
+
+  const addRegion = useCallback(
+    (start: number, end: number, title?: string) => {
+      void apply(() => api.addRegion(start, end, title)).then((v) => {
+        if (v) {
+          setSelection(null);
+          setPendingStart(null);
+          setTitleDraft("");
+        }
+      });
+    },
+    [apply]
+  );
+
+  // Title draft for the "Add track" bar, prefilled with the backend's
+  // suggestion ("Jam" → "Jam-1" → "Jam-2" …) when a selection appears.
+  const [titleDraft, setTitleDraft] = useState("");
+  const hadSelection = useRef(false);
+  useEffect(() => {
+    if (selection && !hadSelection.current) {
+      setTitleDraft(view?.suggested_title ?? "");
+    }
+    hadSelection.current = !!selection;
+  }, [selection, view]);
+
+  // Keyboard shortcuts.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
+        return;
+      }
+      if (!view) return;
+      const sr = view.audio.sample_rate;
+      const playheadSample = playback.positionSeconds * sr;
+      const mod = e.metaKey || e.ctrlKey;
+      if (e.code === "Space") {
+        e.preventDefault();
+        api.playerToggle().then(playback.adopt).catch((err) => showError(String(err)));
+      } else if (e.key === "m" || e.key === "M") {
+        // First M drops a pending start marker at the playhead; the second M
+        // turns the pair into a selection so the title can be given before
+        // the track is created.
+        if (pendingStart == null) {
+          setPendingStart(Math.round(playheadSample));
+        } else {
+          const a = Math.round(Math.min(pendingStart, playheadSample));
+          const b = Math.round(Math.max(pendingStart, playheadSample));
+          setPendingStart(null);
+          setSelection({ start: a, end: b });
+        }
+      } else if (e.key === "Enter" && selection) {
+        e.preventDefault();
+        addRegion(selection.start, selection.end, titleDraft);
+      } else if (e.key === "Escape") {
+        setPendingStart(null);
+        setSelection(null);
+        setProposals(null);
+      } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        e.preventDefault();
+        const delta = (e.key === "ArrowLeft" ? -1 : 1) * (e.shiftKey ? 30 : 5);
+        api
+          .playerSeek(Math.max(0, playheadSample + delta * sr))
+          .then(playback.adopt)
+          .catch((err) => showError(String(err)));
+      } else if (mod && e.key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        void apply(() => api.undo());
+      } else if (mod && (e.key === "Z" || (e.shiftKey && e.key === "z") || e.key === "y")) {
+        e.preventDefault();
+        void apply(() => api.redo());
+      } else if (mod && e.key === "s") {
+        e.preventDefault();
+        void saveProject(false);
+      } else if ((e.key === "Delete" || e.key === "Backspace") && selectedTrack != null) {
+        e.preventDefault();
+        setSelectedTrack(null);
+        void apply(() => api.removeRegion(selectedTrack));
+      } else if (e.key === "e" && mod) {
+        e.preventDefault();
+        setExportOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [view, playback, apply, selectedTrack, selection, pendingStart, titleDraft, addRegion, saveProject, showError]);
+
+  const onViewportChange = useCallback(
+    (vp: Viewport) => {
+      if (!view) return;
+      setViewport(clampViewport(vp, waveWidth, view.audio.duration_samples, 1));
+    },
+    [view, waveWidth]
+  );
+
+  const seekTo = useCallback(
+    (sample: number) => {
+      api.playerSeek(sample).then(playback.adopt).catch((e) => showError(String(e)));
+    },
+    [playback, showError]
+  );
+
+  const detectSilences = useCallback(async () => {
+    try {
+      const found = await api.detectSilences({
+        threshold_db: -40,
+        min_silence_ms: 1500,
+        min_track_seconds: 15,
+      });
+      // Hide proposals fully covered by an existing track already.
+      const fresh = found.filter(
+        (r) =>
+          !view?.tracks.some(
+            (t) => t.start_sample <= r.start && r.end <= t.end_sample
+          )
+      );
+      if (fresh.length === 0) {
+        showError("No track regions matching the current settings were found.");
+      } else {
+        setProposals(fresh);
+      }
+    } catch (e) {
+      showError(String(e));
+    }
+  }, [view, showError]);
+
+  const playheadSample = playback.positionSeconds * (view?.audio.sample_rate ?? 44100);
+
+  return (
+    <div className="app">
+      <Toolbar
+        view={view}
+        playing={playback.playing}
+        positionSeconds={playback.positionSeconds}
+        panelOpen={panelOpen}
+        theme={theme}
+        onThemeChange={setTheme}
+        onOpen={openFile}
+        onAddClips={() => void addClips()}
+        onTogglePlay={() =>
+          api.playerToggle().then(playback.adopt).catch((e) => showError(String(e)))
+        }
+        onSave={() => void saveProject(false)}
+        onSaveAs={() => void saveProject(true)}
+        onUndo={() => void apply(() => api.undo())}
+        onRedo={() => void apply(() => api.redo())}
+        onDetectSilences={() => void detectSilences()}
+        onExport={() => setExportOpen(true)}
+        onTogglePanel={() => setPanelOpen((p) => !p)}
+        onToggleSnap={() => view && void apply(() => api.setSnapToZero(!view.snap_to_zero))}
+      />
+
+      <div className="main">
+        <div className="wave-area">
+          {view ? (
+            <>
+              <Waveform
+                view={view}
+                viewport={viewport}
+                playheadSample={playheadSample}
+                proposals={proposals}
+                selection={selection}
+                pendingStart={pendingStart}
+                selectedTrack={selectedTrack}
+                onWidthChange={setWaveWidth}
+                onViewportChange={onViewportChange}
+                onSeek={seekTo}
+                onSelectionChange={setSelection}
+                onAddRegion={addRegion}
+                onMoveEdge={(id, edge, pos) =>
+                  void apply(() => api.moveRegionEdge(id, edge, pos))
+                }
+                onSelectTrack={setSelectedTrack}
+                onRemoveRegion={(id) => {
+                  setSelectedTrack(null);
+                  void apply(() => api.removeRegion(id));
+                }}
+              />
+              <Minimap
+                view={view}
+                viewport={viewport}
+                width={waveWidth}
+                playheadSample={playheadSample}
+                onViewportChange={onViewportChange}
+              />
+              {selection && !proposals && (
+                <div className="proposal-bar">
+                  <input
+                    className="text-input add-track-title"
+                    placeholder="Track title (optional)"
+                    value={titleDraft}
+                    autoFocus
+                    onFocus={(e) => e.target.select()}
+                    onChange={(e) => setTitleDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        addRegion(selection.start, selection.end, titleDraft);
+                      } else if (e.key === "Escape") {
+                        setSelection(null);
+                        setTitleDraft("");
+                      }
+                    }}
+                  />
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => addRegion(selection.start, selection.end, titleDraft)}
+                  >
+                    Add track (⏎)
+                  </button>
+                  <button
+                    className="btn"
+                    onClick={() => {
+                      setSelection(null);
+                      setTitleDraft("");
+                    }}
+                  >
+                    Clear
+                  </button>
+                </div>
+              )}
+              {pendingStart != null && !selection && (
+                <div className="proposal-bar">
+                  <span>
+                    Track start set — press <kbd>M</kbd> again at the end position
+                  </span>
+                  <button className="btn" onClick={() => setPendingStart(null)}>
+                    Cancel
+                  </button>
+                </div>
+              )}
+              {proposals && (
+                <div className="proposal-bar">
+                  <span>
+                    {proposals.length} track{proposals.length > 1 ? "s" : ""} detected
+                  </span>
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => {
+                      void apply(() => api.addRegions(proposals));
+                      setProposals(null);
+                    }}
+                  >
+                    Add tracks
+                  </button>
+                  <button className="btn" onClick={() => setProposals(null)}>
+                    Dismiss
+                  </button>
+                </div>
+              )}
+            </>
+          ) : (
+            <EmptyState onOpen={openFile} />
+          )}
+          {loading.active && (
+            <div className="loading-overlay">
+              <div className="loading-card">
+                <div className="loading-title">Analyzing {loading.fileName}…</div>
+                <div className="progress-track">
+                  <div
+                    className="progress-fill"
+                    style={{ width: `${Math.round(loading.progress * 100)}%` }}
+                  />
+                </div>
+                <div className="loading-foot">
+                  <span className="loading-pct">{Math.round(loading.progress * 100)}%</span>
+                  <button
+                    className="btn"
+                    onClick={() => {
+                      void api.cancelLoad();
+                    }}
+                  >
+                    Cancel (Esc)
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {view && panelOpen && (
+          <TrackList
+            view={view}
+            playheadSample={playheadSample}
+            selectedTrack={selectedTrack}
+            onSelectTrack={setSelectedTrack}
+            onRename={(id, title) => void apply(() => api.renameTrack(id, title))}
+            onRemoveRegion={(id) => void apply(() => api.removeRegion(id))}
+            onSeek={seekTo}
+          />
+        )}
+      </div>
+
+      <StatusBar view={view} />
+
+      {error && (
+        <div className="toast toast-error" onClick={() => setError(null)}>
+          {error}
+        </div>
+      )}
+
+      {exportOpen && view && (
+        <ExportDialog
+          view={view}
+          progress={exportProgress}
+          onClose={() => {
+            setExportOpen(false);
+            setExportProgress(null);
+          }}
+          onError={showError}
+          onViewChange={setView}
+        />
+      )}
+    </div>
+  );
+}

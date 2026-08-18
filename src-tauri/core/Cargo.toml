@@ -1,0 +1,17 @@
+[package]
+name = "still-core"
+version = "0.1.0"
+description = "AudioDistillery core — pure business logic, no Tauri dependency"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+symphonia = { version = "0.5", features = ["all"] }
+rodio = { version = "0.19", default-features = false, features = ["symphonia-all"] }
+ts-rs = { version = "10", features = ["serde-compat"] }
+
+[dev-dependencies]
+hound = "3"
+tempfile = "3"

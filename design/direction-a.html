@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Still — Direction A « Alambic »</title>
+<style>
+/* ============================================================
+   DIRECTION A — « ALAMBIC »
+   Hardware analogique chaleureux. Cuivre de chaudière sur
+   brun-noir fumé. La waveform est de la matière en fusion.
+   ============================================================ */
+:root{
+  --bg:        #17130E;   /* brun-noir fumé */
+  --bg-deep:   #100D09;
+  --panel:     #1F1A13;
+  --panel-2:   #262018;
+  --raised:    #2B241B;
+  --line:      #322A20;
+  --line-soft: #262017;
+  --text:      #EFE6D8;
+  --text-2:    #B3A48D;
+  --text-3:    #7D7060;
+  --copper:    #E0883A;   /* cuivre incandescent */
+  --copper-hi: #F4B269;
+  --copper-lo: #A85E24;
+  --copper-dim:rgba(224,136,58,.14);
+  --playhead:  #F8EFE2;
+  --ok:        #8FBF6E;
+  --err:       #E0584A;
+  --sel:       rgba(244,178,105,.10);
+  --r-s:4px; --r-m:7px; --r-l:11px;
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  --shadow-modal: 0 24px 64px rgba(0,0,0,.55), 0 2px 8px rgba(0,0,0,.4);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{color-scheme:dark}
+body{
+  background:#0A0908; color:var(--text);
+  font-family:var(--font-ui); font-size:13px; line-height:1.45;
+  padding:48px 32px 96px;
+}
+:focus-visible{outline:2px solid var(--copper-hi); outline-offset:2px}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* ---- Annotations de présentation (hors produit) ---- */
+.note{max-width:1360px;margin:0 auto 20px;color:#8d8478}
+.note h1{font-size:20px;font-weight:600;color:#efe6d8;letter-spacing:.01em}
+.note h1 b{color:var(--copper-hi);font-weight:600}
+.note p{max-width:70ch;margin-top:6px;font-size:13px}
+.note + .frame{margin-top:16px}
+.caption{max-width:1360px;margin:44px auto 12px;font-size:11px;text-transform:uppercase;
+  letter-spacing:.14em;color:#7d7466}
+
+/* ---- Cadre fenêtre ---- */
+.frame{
+  max-width:1360px;margin:0 auto;background:var(--bg);
+  border:1px solid #2b241b;border-radius:10px;overflow:hidden;
+  box-shadow:0 30px 80px rgba(0,0,0,.6);
+  display:flex;flex-direction:column;height:860px;position:relative;
+}
+
+/* ============ TOOLBAR ============ */
+.toolbar{
+  height:52px;flex:none;display:flex;align-items:center;gap:8px;
+  padding:0 12px;background:linear-gradient(#211B13,#1C1710);
+  border-bottom:1px solid var(--line);
+}
+.brand{display:flex;align-items:center;gap:9px;padding-right:14px;margin-right:6px;
+  border-right:1px solid var(--line)}
+.brand svg{display:block}
+.brand .word{font-size:13px;font-weight:600;letter-spacing:.30em;color:var(--text);
+  font-variant-caps:all-small-caps}
+.btn{
+  display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 12px;
+  border-radius:var(--r-m);border:1px solid var(--line);background:var(--panel-2);
+  color:var(--text);font:inherit;font-weight:500;cursor:pointer;
+}
+.btn:hover{background:var(--raised);border-color:#3d3426}
+.btn svg{flex:none}
+.btn-icon{width:30px;padding:0;justify-content:center}
+.btn-primary{
+  background:linear-gradient(#E89043,#CB742B);border-color:#8a5620;color:#1C1207;
+  font-weight:600;text-shadow:0 1px 0 rgba(255,255,255,.18);
+}
+.btn-primary:hover{background:linear-gradient(#F49B4D,#D67D30);border-color:#9a6124}
+.btn-ghost{background:transparent;border-color:transparent;color:var(--text-2)}
+.btn-ghost:hover{background:var(--panel-2);color:var(--text);border-color:var(--line)}
+.file-chip{display:flex;align-items:baseline;gap:8px;margin-left:4px;min-width:0}
+.file-chip .name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.file-chip .meta{color:var(--text-3);font-size:11px;font-family:var(--font-mono)}
+.toolbar .spacer{flex:1}
+.transport{display:flex;align-items:center;gap:4px;padding:0 10px}
+.t-play{
+  width:34px;height:34px;border-radius:50%;border:1px solid #4a3b26;
+  background:radial-gradient(circle at 35% 30%, #352A1E, #241D13);
+  color:var(--copper-hi);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;
+}
+.t-play:hover{border-color:var(--copper-lo);color:#fff}
+.timecode{
+  font-family:var(--font-mono);font-size:15px;letter-spacing:.02em;padding:0 12px;
+  color:var(--copper-hi);font-variant-numeric:tabular-nums;
+}
+.timecode .total{color:var(--text-3);font-size:12px}
+
+/* ============ CORPS ============ */
+.body{flex:1;display:flex;min-height:0}
+.stage{flex:1;display:flex;flex-direction:column;min-width:0}
+
+/* ---- Règle temporelle ---- */
+.ruler{
+  height:26px;flex:none;position:relative;background:var(--bg-deep);
+  border-bottom:1px solid var(--line-soft);
+  font-family:var(--font-mono);font-size:10px;color:var(--text-3);
+}
+.ruler .tick{position:absolute;top:0;bottom:0;border-left:1px solid var(--line-soft);padding:5px 0 0 5px}
+
+/* ---- Zone waveform ---- */
+.wave-zone{flex:1;position:relative;background:
+  radial-gradient(120% 90% at 50% 45%, #1B1610 0%, var(--bg-deep) 100%);min-height:0}
+.wave-zone svg.wave{position:absolute;inset:0;width:100%;height:100%}
+.midline{position:absolute;left:0;right:0;top:50%;height:1px;background:#2b2318}
+
+/* segments + numéro de piste */
+.seg{position:absolute;top:0;bottom:0;pointer-events:none}
+.seg .chip{
+  position:absolute;top:12px;left:50%;transform:translateX(-50%);
+  font-family:var(--font-mono);font-size:10px;letter-spacing:.08em;color:var(--text-2);
+  background:rgba(23,19,14,.72);border:1px solid var(--line);border-radius:99px;
+  padding:2px 9px;white-space:nowrap;
+}
+.seg.playing .chip{color:#1C1207;background:var(--copper);border-color:var(--copper-lo);font-weight:700}
+
+/* ---- Marqueurs : étiquette d'alambic ---- */
+.marker{position:absolute;top:0;bottom:0;width:24px;margin-left:-12px;cursor:ew-resize}
+.marker .line{position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--copper);
+  box-shadow:0 0 8px rgba(224,136,58,.5)}
+.marker .flag{
+  position:absolute;top:0;left:50%;height:20px;padding:0 9px 0 7px;display:flex;align-items:center;
+  background:linear-gradient(#E89043,#C06D28);color:#1C1207;
+  font-family:var(--font-mono);font-size:10px;font-weight:700;
+  clip-path:polygon(0 0,100% 0,calc(100% - 7px) 50%,100% 100%,0 100%);
+}
+.marker:hover .line{width:3px;margin-left:-1px}
+.marker.dragging .line{width:3px;margin-left:-1px;box-shadow:0 0 14px rgba(244,178,105,.8)}
+.marker.dragging .flag{background:linear-gradient(#F7B266,#D97F2E)}
+/* infobulle de drag */
+.drag-tip{
+  position:absolute;top:26px;left:50%;transform:translateX(10px);
+  font-family:var(--font-mono);font-size:11px;color:var(--copper-hi);
+  background:#241C11;border:1px solid #4a3b26;border-radius:var(--r-s);padding:3px 7px;white-space:nowrap;
+}
+
+/* ---- Playhead ---- */
+.playhead{position:absolute;top:0;bottom:0;width:1px;background:var(--playhead);
+  box-shadow:0 0 10px rgba(248,239,226,.65);pointer-events:none}
+.playhead::before{content:"";position:absolute;top:-1px;left:-5px;
+  border:6px solid transparent;border-top:7px solid var(--playhead);border-bottom:none}
+
+/* ---- Minimap (sous la waveform) ---- */
+.minimap{
+  height:64px;flex:none;position:relative;background:var(--bg-deep);
+  border-top:1px solid var(--line);cursor:pointer;
+}
+.minimap svg{position:absolute;inset:0;width:100%;height:100%;opacity:.75}
+.minimap .vp{
+  position:absolute;top:3px;bottom:3px;border:1px solid var(--copper);
+  border-radius:3px;background:rgba(224,136,58,.08);
+  box-shadow:inset 0 0 0 1px rgba(0,0,0,.4);cursor:grab;
+}
+.minimap .m-mark{position:absolute;top:0;bottom:0;width:1px;background:rgba(244,178,105,.55)}
+.minimap .m-ph{position:absolute;top:0;bottom:0;width:1px;background:var(--playhead)}
+
+/* ============ PANNEAU PISTES ============ */
+.tracks{
+  width:284px;flex:none;background:var(--panel);border-left:1px solid var(--line);
+  display:flex;flex-direction:column;
+}
+.tracks header{
+  height:40px;flex:none;display:flex;align-items:center;justify-content:space-between;
+  padding:0 14px;border-bottom:1px solid var(--line);
+}
+.tracks header h2{font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--text-2)}
+.tracks header .count{font-family:var(--font-mono);font-size:11px;color:var(--text-3)}
+.track-list{flex:1;overflow:auto;padding:6px}
+.track{
+  display:grid;grid-template-columns:26px 1fr auto;align-items:center;gap:8px;
+  padding:9px 8px;border-radius:var(--r-m);cursor:default;border:1px solid transparent;
+}
+.track:hover{background:var(--panel-2)}
+.track.playing{background:var(--copper-dim);border-color:rgba(224,136,58,.28)}
+.track .num{
+  font-family:var(--font-mono);font-size:11px;color:var(--text-3);text-align:right;
+}
+.track.playing .num{color:var(--copper-hi);font-weight:700}
+.track .name{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.track .dur{font-family:var(--font-mono);font-size:11px;color:var(--text-3);font-variant-numeric:tabular-nums}
+/* renommage inline */
+.track.editing{background:var(--panel-2);border-color:var(--copper-lo)}
+.track.editing input{
+  font:inherit;font-weight:500;color:var(--text);background:var(--bg-deep);
+  border:1px solid var(--copper-lo);border-radius:var(--r-s);padding:3px 6px;width:100%;
+}
+.tracks footer{
+  flex:none;padding:10px 14px;border-top:1px solid var(--line);
+  display:flex;justify-content:space-between;color:var(--text-3);
+  font-family:var(--font-mono);font-size:11px;
+}
+.tracks footer b{color:var(--text-2);font-weight:600}
+
+/* ============ STATUS BAR ============ */
+.status{
+  height:28px;flex:none;display:flex;align-items:center;gap:18px;padding:0 14px;
+  background:var(--bg-deep);border-top:1px solid var(--line);
+  color:var(--text-3);font-size:11px;
+}
+.status .spacer{flex:1}
+kbd{
+  font-family:var(--font-mono);font-size:10px;color:var(--text-2);
+  background:var(--panel-2);border:1px solid var(--line);border-bottom-width:2px;
+  border-radius:4px;padding:1px 5px;margin-right:4px;
+}
+.status .fmt{font-family:var(--font-mono)}
+
+/* ============ EXPORT ============ */
+.dim{position:absolute;inset:0;background:rgba(10,8,5,.62);backdrop-filter:blur(2px);z-index:5}
+.modal{
+  position:absolute;z-index:6;left:50%;top:50%;transform:translate(-50%,-50%);
+  width:480px;background:var(--panel);border:1px solid #3d3426;border-radius:var(--r-l);
+  box-shadow:var(--shadow-modal);overflow:hidden;
+}
+.modal>header{padding:18px 20px 0;display:flex;align-items:baseline;justify-content:space-between}
+.modal>header h3{font-size:16px;font-weight:600}
+.modal>header .sub{color:var(--text-3);font-size:12px}
+.modal .content{padding:16px 20px 20px;display:flex;flex-direction:column;gap:14px}
+.field label{display:block;font-size:11px;font-weight:600;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--text-2);margin-bottom:6px}
+.segmented{display:flex;background:var(--bg-deep);border:1px solid var(--line);
+  border-radius:var(--r-m);padding:3px;gap:2px}
+.segmented button{
+  flex:1;height:28px;border:0;border-radius:5px;background:transparent;color:var(--text-2);
+  font:inherit;font-weight:600;cursor:pointer;
+}
+.segmented button:hover{color:var(--text)}
+.segmented button[aria-pressed="true"]{
+  background:linear-gradient(#E89043,#CB742B);color:#1C1207;
+}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.select,.input{
+  width:100%;height:32px;border-radius:var(--r-m);border:1px solid var(--line);
+  background:var(--bg-deep);color:var(--text);font:inherit;padding:0 10px;
+}
+.input.mono{font-family:var(--font-mono);font-size:12px}
+.hint{margin-top:5px;font-size:11px;color:var(--text-3)}
+.hint code{font-family:var(--font-mono);color:var(--text-2)}
+.dest{display:flex;gap:8px}
+.dest .path{
+  flex:1;display:flex;align-items:center;gap:7px;height:32px;padding:0 10px;
+  border:1px solid var(--line);border-radius:var(--r-m);background:var(--bg-deep);
+  font-family:var(--font-mono);font-size:12px;color:var(--text-2);
+  white-space:nowrap;overflow:hidden;
+}
+.modal>footer{
+  display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;
+  border-top:1px solid var(--line);background:var(--panel-2);
+}
+
+/* progression */
+.prog-list{display:flex;flex-direction:column;gap:2px}
+.prog{display:grid;grid-template-columns:22px 1fr 84px 60px;align-items:center;gap:10px;
+  padding:7px 6px;border-radius:var(--r-s);font-size:12px}
+.prog .n{font-family:var(--font-mono);font-size:11px;color:var(--text-3);text-align:right}
+.prog .bar{height:4px;border-radius:2px;background:var(--line-soft);overflow:hidden}
+.prog .bar i{display:block;height:100%;background:var(--copper);border-radius:2px}
+.prog .st{font-size:11px;color:var(--text-3);text-align:right;font-family:var(--font-mono)}
+.prog.done .st{color:var(--ok)}
+.prog.active{background:var(--copper-dim)}
+.prog.active .st{color:var(--copper-hi)}
+.global{margin-top:6px}
+.global .bar{height:7px;border-radius:4px;background:var(--bg-deep);border:1px solid var(--line);overflow:hidden}
+.global .bar i{display:block;height:100%;border-radius:3px;
+  background:linear-gradient(90deg,var(--copper-lo),var(--copper-hi))}
+.global .lbl{display:flex;justify-content:space-between;margin-top:6px;
+  font-family:var(--font-mono);font-size:11px;color:var(--text-2)}
+
+/* rapport */
+.report-ok{display:flex;align-items:center;gap:12px;padding:14px;border-radius:var(--r-m);
+  background:rgba(143,191,110,.08);border:1px solid rgba(143,191,110,.3)}
+.report-ok .ico{width:34px;height:34px;flex:none;border-radius:50%;display:flex;align-items:center;
+  justify-content:center;background:rgba(143,191,110,.15);color:var(--ok)}
+.report-ok b{display:block;font-size:13px}
+.report-ok span{font-size:12px;color:var(--text-2)}
+.report-files{font-family:var(--font-mono);font-size:11px;color:var(--text-3);
+  line-height:1.8;padding:4px 2px}
+.report-files .ok-mark{color:var(--ok);margin-right:8px}
+
+/* mise en page des 2 cartes export secondaires */
+.export-row{max-width:1360px;margin:12px auto 0;display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap}
+.export-row .modal{position:static;transform:none;flex:none}
+</style>
+</head>
+<body>
+
+<div class="note">
+  <h1>Direction A — <b>« Alambic »</b></h1>
+  <p>Le cuivre de la chaudière comme matériau central : la waveform est de la matière en fusion
+  sur un brun-noir fumé. Références : hardware analogique, VU-mètres, machines à bande.
+  Chiffres en monospace tabulaire, filets gravés, marqueurs en étiquettes de fût.</p>
+</div>
+
+<div class="caption">Écran principal — état édition</div>
+
+<!-- ================= ÉCRAN 1 : ÉDITION ================= -->
+<div class="frame" role="application" aria-label="Still — main window">
+
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <div class="brand" title="Still">
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+        <path d="M9 1.5C9 1.5 3.6 7.4 3.6 11.2a5.4 5.4 0 0 0 10.8 0C14.4 7.4 9 1.5 9 1.5Z"
+          stroke="#E0883A" stroke-width="1.5"/>
+        <path d="M6.3 11.4a2.7 2.7 0 0 0 2.7 2.7" stroke="#F4B269" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+      <span class="word">Still</span>
+    </div>
+    <button class="btn">
+      <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M1.5 4.5v6h10v-6m-10 0v-2h3.5l1 1.5h5.5v.5m-10 0h10" stroke="currentColor"/></svg>
+      Open
+    </button>
+    <div class="file-chip">
+      <span class="name">concert-2026-07-14.wav</span>
+      <span class="meta">1:12:36 · 44.1 kHz · stereo</span>
+    </div>
+    <div class="spacer"></div>
+    <div class="transport">
+      <button class="btn btn-ghost btn-icon" title="Previous marker">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><path d="M2 1h1.6v10H2zM10.5 1.6v8.8L4.4 6z"/></svg>
+      </button>
+      <button class="t-play" title="Play/Pause (Space)" aria-label="Pause">
+        <svg width="11" height="12" viewBox="0 0 11 12" fill="currentColor"><path d="M1.5 1h2.6v10H1.5zM6.9 1h2.6v10H6.9z"/></svg>
+      </button>
+      <button class="btn btn-ghost btn-icon" title="Next marker">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><path d="M8.4 1H10v10H8.4zM1.5 1.6v8.8L7.6 6z"/></svg>
+      </button>
+    </div>
+    <div class="timecode">27:35<span class="total"> / 1:12:36</span></div>
+    <div class="spacer"></div>
+    <button class="btn btn-primary">
+      <svg width="12" height="13" viewBox="0 0 12 13" fill="none"><path d="M6 1v7m0 0L3.2 5.4M6 8l2.8-2.6M1.5 11.5h9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      Export…
+    </button>
+    <button class="btn btn-ghost btn-icon" title="Toggle track panel" aria-pressed="true">
+      <svg width="14" height="12" viewBox="0 0 14 12" fill="none"><rect x="1" y="1" width="12" height="10" rx="1.5" stroke="currentColor"/><path d="M9 1v10" stroke="currentColor"/></svg>
+    </button>
+  </div>
+
+  <!-- Corps -->
+  <div class="body">
+    <div class="stage">
+      <div class="ruler" id="rulerA"></div>
+
+      <div class="wave-zone" id="zoneA">
+        <div class="midline" style="top:27%"></div>
+        <div class="midline" style="top:73%"></div>
+        <svg class="wave" id="waveA" viewBox="0 0 1200 520" preserveAspectRatio="none" aria-hidden="true">
+          <defs>
+            <linearGradient id="copperL" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#8A5520"/><stop offset=".5" stop-color="#F4B269"/><stop offset="1" stop-color="#8A5520"/>
+            </linearGradient>
+            <linearGradient id="copperR" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#6E4419"/><stop offset=".5" stop-color="#D89050"/><stop offset="1" stop-color="#6E4419"/>
+            </linearGradient>
+          </defs>
+        </svg>
+        <!-- segments / numéros de piste -->
+        <div class="seg" style="left:0%;width:14%"><span class="chip">1</span></div>
+        <div class="seg" style="left:14%;width:17%"><span class="chip">2</span></div>
+        <div class="seg playing" style="left:31%;width:16%"><span class="chip">3 · Ashes</span></div>
+        <div class="seg" style="left:47%;width:19%"><span class="chip">4</span></div>
+        <div class="seg" style="left:66%;width:18%"><span class="chip">5</span></div>
+        <div class="seg" style="left:84%;width:16%"><span class="chip">6</span></div>
+        <!-- marqueurs -->
+        <div class="marker" style="left:14%"><i class="line"></i><span class="flag">M1</span></div>
+        <div class="marker" style="left:31%"><i class="line"></i><span class="flag">M2</span></div>
+        <div class="marker dragging" style="left:47%"><i class="line"></i><span class="flag">M3</span>
+          <span class="drag-tip">34:10.2</span></div>
+        <div class="marker" style="left:66%"><i class="line"></i><span class="flag">M4</span></div>
+        <div class="marker" style="left:84%"><i class="line"></i><span class="flag">M5</span></div>
+        <!-- playhead -->
+        <div class="playhead" style="left:38%"></div>
+      </div>
+
+      <!-- Minimap -->
+      <div class="minimap" title="Overview">
+        <svg id="miniA" viewBox="0 0 1200 64" preserveAspectRatio="none" aria-hidden="true"></svg>
+        <i class="m-mark" style="left:14%"></i><i class="m-mark" style="left:31%"></i>
+        <i class="m-mark" style="left:47%"></i><i class="m-mark" style="left:66%"></i>
+        <i class="m-mark" style="left:84%"></i>
+        <i class="m-ph" style="left:38%"></i>
+        <div class="vp" style="left:22%;width:34%"></div>
+      </div>
+
+      <!-- Status bar -->
+      <div class="status">
+        <span><kbd>Space</kbd>Play/Pause</span>
+        <span><kbd>M</kbd>Add marker</span>
+        <span><kbd>←</kbd><kbd>→</kbd>Seek</span>
+        <span><kbd>⌫</kbd>Delete marker</span>
+        <span class="spacer"></span>
+        <span class="fmt">WAV · 44.1 kHz · 16-bit · stereo</span>
+      </div>
+    </div>
+
+    <!-- Panneau pistes -->
+    <aside class="tracks" aria-label="Tracks">
+      <header><h2>Tracks</h2><span class="count">6 · 1:12:36</span></header>
+      <div class="track-list">
+        <div class="track"><span class="num">1</span><span class="name">Intro &amp; Tuning</span><span class="dur">10:10</span></div>
+        <div class="track"><span class="num">2</span><span class="name">Night Drive</span><span class="dur">12:20</span></div>
+        <div class="track playing"><span class="num">3</span><span class="name">Ashes</span><span class="dur">11:37</span></div>
+        <div class="track editing"><span class="num">4</span><input value="Boreal" aria-label="Track 4 name"><span class="dur">13:48</span></div>
+        <div class="track"><span class="num">5</span><span class="name">High Water</span><span class="dur">13:04</span></div>
+        <div class="track"><span class="num">6</span><span class="name">Encore — Finale</span><span class="dur">11:37</span></div>
+      </div>
+      <footer><span>Double-click to rename</span><b>6 tracks</b></footer>
+    </aside>
+  </div>
+</div>
+
+<div class="caption">Dialogue d'export — réglages (par-dessus l'app estompée)</div>
+
+<!-- ================= ÉCRAN 2 : EXPORT ================= -->
+<div class="frame" style="height:640px">
+  <div class="toolbar" style="opacity:.5">
+    <div class="brand"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M9 1.5C9 1.5 3.6 7.4 3.6 11.2a5.4 5.4 0 0 0 10.8 0C14.4 7.4 9 1.5 9 1.5Z" stroke="#E0883A" stroke-width="1.5"/></svg><span class="word">Still</span></div>
+    <div class="file-chip"><span class="name">concert-2026-07-14.wav</span></div>
+  </div>
+  <div class="body" style="opacity:.35">
+    <div class="stage"><div class="wave-zone"><svg class="wave" id="waveA2" viewBox="0 0 1200 420" preserveAspectRatio="none"></svg></div></div>
+  </div>
+  <div class="dim"></div>
+
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="exp-title">
+    <header>
+      <h3 id="exp-title">Export 6 tracks</h3>
+      <span class="sub">concert-2026-07-14.wav</span>
+    </header>
+    <div class="content">
+      <div class="field">
+        <label>Format</label>
+        <div class="segmented" role="group" aria-label="Format">
+          <button aria-pressed="false">WAV</button>
+          <button aria-pressed="false">FLAC</button>
+          <button aria-pressed="true">MP3</button>
+          <button aria-pressed="false">AAC</button>
+        </div>
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label>Quality</label>
+          <select class="select"><option>320 kbps</option><option>256 kbps</option><option>192 kbps</option><option>V0 (variable)</option></select>
+        </div>
+        <div class="field">
+          <label>Sample rate</label>
+          <select class="select"><option>Same as source (44.1 kHz)</option><option>48 kHz</option></select>
+        </div>
+      </div>
+      <div class="field">
+        <label>Destination</label>
+        <div class="dest">
+          <span class="path">
+            <svg width="13" height="11" viewBox="0 0 13 11" fill="none" style="flex:none"><path d="M1 2.5v7h11v-5.5H6L5 2.5H1v0Z" stroke="currentColor"/></svg>
+            ~/Music/Concerts/2026-07-14
+          </span>
+          <button class="btn">Choose…</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>File naming</label>
+        <input class="input mono" value="{n} - {title}" aria-label="Naming template">
+        <div class="hint">Preview: <code>03 - Ashes.mp3</code> — placeholders: <code>{n}</code> <code>{title}</code> <code>{date}</code></div>
+      </div>
+    </div>
+    <footer>
+      <button class="btn">Cancel</button>
+      <button class="btn btn-primary">Export 6 tracks</button>
+    </footer>
+  </div>
+</div>
+
+<div class="caption">Export — variante progression &amp; rapport final</div>
+
+<div class="export-row">
+  <!-- Progression -->
+  <div class="modal" style="width:480px">
+    <header><h3>Exporting…</h3><span class="sub">MP3 · 320 kbps</span></header>
+    <div class="content">
+      <div class="prog-list">
+        <div class="prog done"><span class="n">1</span><span>Intro &amp; Tuning</span><span class="bar"><i style="width:100%"></i></span><span class="st">done</span></div>
+        <div class="prog done"><span class="n">2</span><span>Night Drive</span><span class="bar"><i style="width:100%"></i></span><span class="st">done</span></div>
+        <div class="prog done"><span class="n">3</span><span>Ashes</span><span class="bar"><i style="width:100%"></i></span><span class="st">done</span></div>
+        <div class="prog active"><span class="n">4</span><span>Boreal</span><span class="bar"><i style="width:62%"></i></span><span class="st">62%</span></div>
+        <div class="prog"><span class="n">5</span><span>High Water</span><span class="bar"><i style="width:0"></i></span><span class="st">waiting</span></div>
+        <div class="prog"><span class="n">6</span><span>Encore — Finale</span><span class="bar"><i style="width:0"></i></span><span class="st">waiting</span></div>
+      </div>
+      <div class="global">
+        <div class="bar"><i style="width:58%"></i></div>
+        <div class="lbl"><span>Track 4 of 6</span><span>58% · ~1 min left</span></div>
+      </div>
+    </div>
+    <footer><button class="btn">Cancel export</button></footer>
+  </div>
+
+  <!-- Rapport final -->
+  <div class="modal" style="width:480px">
+    <header><h3>Export complete</h3><span class="sub">MP3 · 320 kbps · 2 min 12 s</span></header>
+    <div class="content">
+      <div class="report-ok">
+        <span class="ico">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2.5 8.5 6 12l7.5-8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+        <div><b>6 tracks exported</b><span>~/Music/Concerts/2026-07-14 · 178.4 MB</span></div>
+      </div>
+      <div class="report-files">
+        <div><span class="ok-mark">✓</span>01 - Intro &amp; Tuning.mp3</div>
+        <div><span class="ok-mark">✓</span>02 - Night Drive.mp3</div>
+        <div><span class="ok-mark">✓</span>03 - Ashes.mp3</div>
+        <div><span class="ok-mark">✓</span>04 - Boreal.mp3</div>
+        <div><span class="ok-mark">✓</span>05 - High Water.mp3</div>
+        <div><span class="ok-mark">✓</span>06 - Encore — Finale.mp3</div>
+      </div>
+    </div>
+    <footer>
+      <button class="btn">Show in Finder</button>
+      <button class="btn btn-primary">Done</button>
+    </footer>
+  </div>
+</div>
+
+<script>
+/* Waveform factice, déterministe */
+function makePRNG(seed){let s=seed>>>0;return()=>((s=(s*1664525+1013904223)>>>0)/4294967296);}
+const GAPS=[0.14,0.31,0.47,0.66,0.84];
+function env(t){
+  let e=0.42+0.34*Math.abs(Math.sin(t*7.3+0.5))+0.18*Math.sin(t*31)+0.1*Math.sin(t*97);
+  for(const g of GAPS){const d=Math.abs(t-g);if(d<0.014)e*=0.10+(d/0.014)*0.55;}
+  if(t<0.012)e*=t/0.012; if(t>0.985)e*=(1-t)/0.015;
+  return Math.min(1,Math.max(0.03,e));
+}
+function chanPaths(W,cy,amp,seed,step){
+  const rnd=makePRNG(seed);let peak='',rms='';
+  for(let x=0;x<=W;x+=step){
+    const t=x/W,e=env(t),p=e*(0.45+0.55*rnd())*amp,r=p*(0.42+0.2*rnd());
+    peak+=`M${x} ${(cy-p).toFixed(1)}V${(cy+p).toFixed(1)}`;
+    rms +=`M${x} ${(cy-r).toFixed(1)}V${(cy+r).toFixed(1)}`;
+  }
+  return {peak,rms};
+}
+function path(d,stroke,w,op){return `<path d="${d}" stroke="${stroke}" stroke-width="${w}" opacity="${op}" fill="none"/>`;}
+function drawStereo(id,H,seed){
+  const svg=document.getElementById(id);if(!svg)return;
+  const W=1200,cL=H*0.27,cR=H*0.73,amp=H*0.21;
+  const L=chanPaths(W,cL,amp,seed,3),R=chanPaths(W,cR,amp,seed+7,3);
+  svg.innerHTML+=
+    path(L.peak,'#6E4A22',2,.85)+path(L.rms,'url(#copperL)',2,1)+
+    path(R.peak,'#5A3C1D',2,.85)+path(R.rms,'url(#copperR)',2,1);
+}
+drawStereo('waveA',520,42);
+(function(){const s=document.getElementById('waveA2');if(s){s.innerHTML='<defs><linearGradient id="cl2" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8A5520"/><stop offset=".5" stop-color="#F4B269"/><stop offset="1" stop-color="#8A5520"/></linearGradient></defs>';
+  const W=1200,H=420;const L=chanPaths(W,H*0.27,H*0.21,42,3),R=chanPaths(W,H*0.73,H*0.21,49,3);
+  s.innerHTML+=path(L.peak,'#6E4A22',2,.85)+path(L.rms,'url(#cl2)',2,1)+path(R.peak,'#5A3C1D',2,.85)+path(R.rms,'#D89050',2,1);}})();
+(function(){const s=document.getElementById('miniA');if(!s)return;const W=1200,H=64,rnd=makePRNG(11);let d='';
+  for(let x=0;x<=W;x+=2){const t=x/W,a=env(t)*(0.5+0.5*rnd())*(H*0.42);
+    d+=`M${x} ${(H/2-a).toFixed(1)}V${(H/2+a).toFixed(1)}`;}
+  s.innerHTML=path(d,'#A87B45',1.4,.9);})();
+(function(){const r=document.getElementById('rulerA');if(!r)return;const total=72.6;
+  for(let m=0;m<=70;m+=5){const left=(m/total*100).toFixed(2)+'%';
+    const t=document.createElement('span');t.className='tick';t.style.left=left;
+    t.textContent=(m%10===0)?(m+':00'):'';r.appendChild(t);}})();
+</script>
+</body>
+</html>
