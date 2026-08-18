@@ -276,25 +276,41 @@ export function Waveform(p: Props) {
             drawLane(lanes[li], c, scy, subH * 0.42, c, muted);
           }
         }
-        // Clickable lane label: chevron + name + layout (+ muted).
+        // Clickable lane label: accent chevron + high-contrast file name
+        // + dimmer meta (layout, muted), on a solid bordered chip.
         const name = layerViews[li]?.name ?? `Layer ${li + 1}`;
         const layout = chCount === 1 ? "mono" : chCount === 2 ? "stereo" : `${chCount} ch`;
-        const label = `${collapsed ? "▸" : "▾"} ${name} · ${layout}${muted ? " · muted" : ""}`;
-        const tw = ctx.measureText(label).width;
-        const ly = collapsed ? top + laneH / 2 - 8 : top + 6;
-        ctx.fillStyle = css("--panel-2");
+        const chevron = collapsed ? "▸" : "▾";
+        const meta = ` · ${layout}${muted ? " · muted" : ""}`;
+        ctx.font = "700 11px ui-monospace, Menlo, Consolas, monospace";
+        const chevronW = ctx.measureText(chevron).width;
+        const nameW = ctx.measureText(name).width;
+        ctx.font = "600 10px ui-monospace, Menlo, Consolas, monospace";
+        const metaW = ctx.measureText(meta).width;
+        const chipH = 20;
+        const chipW = chevronW + nameW + metaW + 22;
+        const ly = collapsed ? top + laneH / 2 - chipH / 2 : top + 6;
+        ctx.fillStyle = css("--panel");
+        ctx.strokeStyle = css("--copper-lo");
         ctx.beginPath();
-        ctx.roundRect(6, ly, tw + 12, 16, 4);
+        ctx.roundRect(6.5, ly + 0.5, chipW, chipH, 5);
         ctx.fill();
-        ctx.fillStyle = css("--text-2");
+        ctx.stroke();
         ctx.textBaseline = "middle";
-        ctx.fillText(label, 12, ly + 8);
+        ctx.font = "700 11px ui-monospace, Menlo, Consolas, monospace";
+        ctx.fillStyle = css("--copper-hi");
+        ctx.fillText(chevron, 13, ly + chipH / 2 + 1);
+        ctx.fillStyle = css("--text");
+        ctx.fillText(name, 13 + chevronW + 5, ly + chipH / 2 + 1);
+        ctx.font = "600 10px ui-monospace, Menlo, Consolas, monospace";
+        ctx.fillStyle = css("--text-2");
+        ctx.fillText(meta, 13 + chevronW + 5 + nameW, ly + chipH / 2 + 1);
         if (layerViews[li]) {
           labelRects.current.push({
             x: 6,
             y: ly,
-            w: tw + 12,
-            h: 16,
+            w: chipW + 1,
+            h: chipH,
             id: layerViews[li].id,
             collapsed,
           });
