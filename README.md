@@ -22,9 +22,10 @@ sources are byte-for-byte intact (this is enforced by an integration test).
 
 ## Requirements
 
-- [FFmpeg](https://ffmpeg.org) on the machine (`brew install ffmpeg`,
-  `apt install ffmpeg`, `winget install ffmpeg`) — used for cutting/encoding.
-  You can also point the `STILL_FFMPEG` env var at a specific binary.
+None: a static [FFmpeg](https://ffmpeg.org) is bundled with the app (fetched
+at build time by `scripts/fetch-ffmpeg.mjs`). Resolution order at runtime:
+the `STILL_FFMPEG` env var if set, then the bundled sidecar, then a
+system-installed ffmpeg (Homebrew/PATH) as fallback.
 
 ## Development
 
