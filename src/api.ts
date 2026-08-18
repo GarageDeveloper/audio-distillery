@@ -12,7 +12,19 @@ import type { RegionEdge } from "./types/RegionEdge";
 
 export const api = {
   loadAudio: (paths: string[]) => invoke<ProjectView>("load_audio", { paths }),
+  loadMultitrack: (paths: string[]) =>
+    invoke<ProjectView>("load_multitrack", { paths }),
   addClips: (paths: string[]) => invoke<ProjectView>("add_clips", { paths }),
+  addLayers: (paths: string[]) => invoke<ProjectView>("add_layers", { paths }),
+  setLayerGain: (id: number, gainDb: number) =>
+    invoke<ProjectView>("set_layer_gain", { id, gainDb }),
+  setLayerMuted: (id: number, muted: boolean) =>
+    invoke<ProjectView>("set_layer_muted", { id, muted }),
+  removeLayer: (id: number) => invoke<ProjectView>("remove_layer", { id }),
+  setLayerCollapsed: (id: number, collapsed: boolean) =>
+    invoke<ProjectView>("set_layer_collapsed", { id, collapsed }),
+  setTrackLayerGain: (trackId: number, layerId: number, gainDb: number | null) =>
+    invoke<ProjectView>("set_track_layer_gain", { trackId, layerId, gainDb }),
   loadProject: (path: string) => invoke<ProjectView>("load_project", { path }),
   cancelLoad: () => invoke<void>("cancel_load"),
   saveProject: (path?: string) =>
@@ -20,6 +32,8 @@ export const api = {
   getProjectView: () => invoke<ProjectView>("get_project_view"),
   getPeaks: (startSample: number, endSample: number, maxBuckets: number) =>
     invoke<PeakSlice>("get_peaks", { startSample, endSample, maxBuckets }),
+  getPeaksSplit: (startSample: number, endSample: number, maxBuckets: number) =>
+    invoke<PeakSlice[]>("get_peaks_split", { startSample, endSample, maxBuckets }),
   addRegion: (start: number, end: number, title?: string) =>
     invoke<ProjectView>("add_region", {
       start: Math.round(start),

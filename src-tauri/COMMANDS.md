@@ -13,29 +13,45 @@ Shared types are generated from Rust with `ts-rs` into `src/types/` (run
 | Command | Parameters | Returns | Errors |
 |---|---|---|---|
 | `load_audio` | `paths: string[]` (1..n files, in order) | `ProjectView` | unsupported extension, file not found, decode failure, clip format mismatch |
-| `add_clips` | `paths: string[]` | `ProjectView` (appends to the timeline; regions and undo history preserved) | same as `load_audio`, no audio loaded |
+| `load_multitrack` | `paths: string[]` | `ProjectView` (each file = one synced LAYER starting at t = 0) | same as `load_audio`, sample-rate mismatch |
+| `add_clips` | `paths: string[]` | `ProjectView` (appends to the END of the base layer's timeline; regions and undo history preserved) | same as `load_audio`, no audio loaded |
+| `add_layers` | `paths: string[]` | `ProjectView` (each file = one new synced layer) | same as `load_audio`, no audio loaded |
+| `set_layer_gain` | `id: number`, `gainDb: number` | `ProjectView` (clamped to [-60, +12] dB; -60 = -∞; applies live to playback) | unknown layer |
+| `set_layer_muted` | `id: number`, `muted: boolean` | `ProjectView` (applies live to playback) | unknown layer |
+| `set_layer_collapsed` | `id: number`, `collapsed: boolean` | `ProjectView` (display preference for the Layers waveform view, persisted in the project) | unknown layer |
+| `set_track_layer_gain` | `trackId: number`, `layerId: number`, `gainDb: number \| null` | `ProjectView` (per-track override of one layer's gain, applied at export; null clears it; undoable) | unknown track/layer |
+| `remove_layer` | `id: number` | `ProjectView` | unknown layer, base layer |
 | `cancel_load` | — | `void` (the pending scan then fails with "Import cancelled"; any previous session stays untouched) | — |
 | `load_project` | `path: string` (.still file) | `ProjectView` | invalid project JSON, newer project version, missing source file |
 | `save_project` | `path?: string` (required the first time) | `ProjectView` | no path known, I/O error |
 | `get_project_view` | — | `ProjectView` | no audio loaded |
 
-A session's audio is an ordered list of **clips** (source files) laid
-back-to-back on ONE timeline; every position in the API is a timeline sample.
-All clips must share the first clip's sample rate and channel count. Scanning
-is read-only, computes one multi-resolution peak pyramid over the whole
-timeline and emits `load:progress` events (`number`, 0..1) over the batch.
-`AudioInfo.clips` describes the layout. Regions beyond the scanned duration
-are dropped on project load.
+A session's audio is a stack of **layers** (time-synchronized recordings of
+the same session, all starting at t = 0 — e.g. a Zoom recorder's stereo mic
+plus its other inputs). Each layer is an ordered list of **clips** (source
+files) laid back-to-back; the base layer (index 0) carries the timeline shown
+in the UI (`AudioInfo.clips`). Every position in the API is a timeline
+sample. Layers must share the session sample rate; channel counts may differ
+(mono inputs next to a stereo mic are fine — session channels = max).
+Scanning is read-only, computes one multi-resolution peak pyramid PER LAYER
+and emits `load:progress` events (`number`, 0..1) over the batch. Regions
+beyond the scanned duration are dropped on project load.
 
 ## Waveform data
 
 | Command | Parameters | Returns | Errors |
 |---|---|---|---|
 | `get_peaks` | `startSample: number`, `endSample: number`, `maxBuckets: number` | `PeakSlice` | no audio loaded |
+| `get_peaks_split` | same | `PeakSlice[]` (one per layer, same grid, each scaled by that layer's effective gain) | no audio loaded |
 
-The backend picks the resolution level; the frontend only draws the returned
-buckets. `PeakSlice.channels` holds interleaved `[min, max, …]` i8 pairs per
-channel.
+The backend picks the resolution level and returns the peaks of the
+GAIN-WEIGHTED MIX of all audible layers — mutes, faders AND per-track gain
+overrides applied at their exact timeline positions — so the waveform always
+shows what will be heard/exported. `get_peaks_split` returns the same window
+as one slice per layer (the "Layers" waveform view), each already scaled the
+same way. The frontend only draws
+the returned buckets. `PeakSlice.channels` holds interleaved `[min, max, …]`
+i8 pairs per channel.
 
 ## Track regions
 
@@ -76,7 +92,10 @@ frontend prefills the add-track input with it, nothing more.
 export), then emits `export:progress` events (`ExportProgress`). Only the
 defined track regions are exported (everything else is ignored); it errors
 when no region exists. Cuts are sample-accurate (`atrim` on the decoded
-stream). Existing files are never overwritten: names are suffixed ` (1)`,
+stream). Each exported track is the SUM of the audible layers at their mix
+gains — a track's `gain_overrides` (see `set_track_layer_gain`) replace the
+session-wide layer gains for that track only (ffmpeg `amix` with
+`normalize=0`; mono layers are upmixed to the session layout). Existing files are never overwritten: names are suffixed ` (1)`,
 ` (2)`, … Per-track failures land in `ExportReport.errors`; the other tracks
 still export.
 

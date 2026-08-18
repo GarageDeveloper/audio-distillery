@@ -35,6 +35,9 @@ export default function App() {
   const [exportOpen, setExportOpen] = useState(false);
   const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null);
   const [proposals, setProposals] = useState<RegionSpan[] | null>(null);
+  const [dropChoice, setDropChoice] = useState<string[] | null>(null);
+  const [minTrackSecs, setMinTrackSecs] = useState(60);
+  const [waveMode, setWaveMode] = useState<"mix" | "layers">("mix");
   const [selection, setSelection] = useState<RegionSpan | null>(null);
   const [pendingStart, setPendingStart] = useState<number | null>(null);
   const [selectedTrack, setSelectedTrack] = useState<number | null>(null);
@@ -87,7 +90,10 @@ export default function App() {
   viewRef.current = view;
 
   const loadPaths = useCallback(
-    async (paths: string[], mode: "open" | "append" | "project") => {
+    async (
+      paths: string[],
+      mode: "open" | "append" | "project" | "multitrack" | "layers"
+    ) => {
       const first = paths[0].split(/[/\\]/).pop() ?? paths[0];
       const fileName = paths.length > 1 ? `${first} +${paths.length - 1}` : first;
       setLoading({ active: true, progress: 0, fileName });
@@ -98,7 +104,11 @@ export default function App() {
             ? await api.loadProject(paths[0])
             : mode === "append"
               ? await api.addClips(paths)
-              : await api.loadAudio(paths);
+              : mode === "layers"
+                ? await api.addLayers(paths)
+                : mode === "multitrack"
+                  ? await api.loadMultitrack(paths)
+                  : await api.loadAudio(paths);
         setView(v);
       } catch (e) {
         // A user-triggered cancel is not an error worth a toast.
@@ -109,7 +119,7 @@ export default function App() {
         // Always re-fit so the freshly appended clip is visible; only a new
         // session clears the working state.
         fitFile(v, waveWidth);
-        if (mode !== "append") {
+        if (mode !== "append" && mode !== "layers") {
           setProposals(null);
           setSelection(null);
           setPendingStart(null);
@@ -119,6 +129,15 @@ export default function App() {
     },
     [showError, fitFile, waveWidth]
   );
+
+  // Re-clamp the viewport whenever the canvas width actually changes (first
+  // measure after load, side panel collapse/expand, window resize): a
+  // viewport computed for a stale width otherwise leaves a blank strip on
+  // the right until the next zoom re-clamps it.
+  useEffect(() => {
+    if (!view) return;
+    setViewport((vp) => clampViewport(vp, waveWidth, view.audio.duration_samples, 1));
+  }, [waveWidth, view]);
 
   // Esc cancels a running analysis.
   useEffect(() => {
@@ -155,7 +174,14 @@ export default function App() {
         if (still) {
           void loadPaths([still], "project");
         } else if (audio.length > 0) {
-          void loadPaths(audio, viewRef.current ? "append" : "open");
+          // A single file on an empty app is unambiguous; anything else
+          // (several files, or a session already open) asks: sequential
+          // clips or synced multitrack layers?
+          if (!viewRef.current && audio.length === 1) {
+            void loadPaths(audio, "open");
+          } else {
+            setDropChoice(audio);
+          }
         } else {
           showError("Unsupported file type. Drop WAV, FLAC, MP3, AIFF files or a .still project.");
         }
@@ -194,6 +220,11 @@ export default function App() {
   const addClips = useCallback(async () => {
     const paths = await pickAudioPaths(false);
     if (paths.length > 0) void loadPaths(paths, "append");
+  }, [pickAudioPaths, loadPaths]);
+
+  const addLayers = useCallback(async () => {
+    const paths = await pickAudioPaths(false);
+    if (paths.length > 0) void loadPaths(paths, "layers");
   }, [pickAudioPaths, loadPaths]);
 
   const saveProject = useCallback(
@@ -341,6 +372,15 @@ export default function App() {
 
   const playheadSample = playback.positionSeconds * (view?.audio.sample_rate ?? 44100);
 
+  // Auto-split proposals filtered by the live minimum-length criterion.
+  const sr = view?.audio.sample_rate ?? 44100;
+  const keptProposals = (proposals ?? []).filter(
+    (r) => (r.end - r.start) / sr >= minTrackSecs
+  );
+  const ignoredProposals = (proposals ?? []).filter(
+    (r) => (r.end - r.start) / sr < minTrackSecs
+  );
+
   return (
     <div className="app">
       <Toolbar
@@ -350,6 +390,8 @@ export default function App() {
         panelOpen={panelOpen}
         theme={theme}
         onThemeChange={setTheme}
+        waveMode={waveMode}
+        onWaveModeChange={setWaveMode}
         onOpen={openFile}
         onAddClips={() => void addClips()}
         onTogglePlay={() =>
@@ -373,7 +415,9 @@ export default function App() {
                 view={view}
                 viewport={viewport}
                 playheadSample={playheadSample}
-                proposals={proposals}
+                waveMode={view.layers.length > 1 ? waveMode : "mix"}
+                proposals={proposals ? keptProposals : null}
+                ignoredProposals={proposals ? ignoredProposals : null}
                 selection={selection}
                 pendingStart={pendingStart}
                 selectedTrack={selectedTrack}
@@ -386,6 +430,9 @@ export default function App() {
                   void apply(() => api.moveRegionEdge(id, edge, pos))
                 }
                 onSelectTrack={setSelectedTrack}
+                onToggleLayerCollapsed={(id, c) =>
+                  void apply(() => api.setLayerCollapsed(id, c))
+                }
                 onRemoveRegion={(id) => {
                   setSelectedTrack(null);
                   void apply(() => api.removeRegion(id));
@@ -446,17 +493,37 @@ export default function App() {
               )}
               {proposals && (
                 <div className="proposal-bar">
-                  <span>
-                    {proposals.length} track{proposals.length > 1 ? "s" : ""} detected
+                  <span className="proposal-count">
+                    <strong>{keptProposals.length}</strong> track
+                    {keptProposals.length !== 1 ? "s" : ""} kept
+                    {ignoredProposals.length > 0 && (
+                      <span className="proposal-ignored">
+                        {" "}· {ignoredProposals.length} ignored (&lt; {minTrackSecs}s)
+                      </span>
+                    )}
                   </span>
+                  <label className="proposal-min">
+                    min
+                    <input
+                      type="number"
+                      min={0}
+                      step={5}
+                      value={minTrackSecs}
+                      onChange={(e) =>
+                        setMinTrackSecs(Math.max(0, Number(e.target.value) || 0))
+                      }
+                    />
+                    s
+                  </label>
                   <button
                     className="btn btn-primary"
+                    disabled={keptProposals.length === 0}
                     onClick={() => {
-                      void apply(() => api.addRegions(proposals));
+                      void apply(() => api.addRegions(keptProposals));
                       setProposals(null);
                     }}
                   >
-                    Add tracks
+                    Add {keptProposals.length} track{keptProposals.length !== 1 ? "s" : ""}
                   </button>
                   <button className="btn" onClick={() => setProposals(null)}>
                     Dismiss
@@ -502,6 +569,14 @@ export default function App() {
             onRename={(id, title) => void apply(() => api.renameTrack(id, title))}
             onRemoveRegion={(id) => void apply(() => api.removeRegion(id))}
             onSeek={seekTo}
+            onLayerGain={(id, db) => void apply(() => api.setLayerGain(id, db))}
+            onLayerMute={(id, m) => void apply(() => api.setLayerMuted(id, m))}
+            onLayerCollapse={(id, c) => void apply(() => api.setLayerCollapsed(id, c))}
+            onLayerRemove={(id) => void apply(() => api.removeLayer(id))}
+            onAddLayers={() => void addLayers()}
+            onTrackLayerGain={(trackId, layerId, db) =>
+              void apply(() => api.setTrackLayerGain(trackId, layerId, db))
+            }
           />
         )}
       </div>
@@ -511,6 +586,46 @@ export default function App() {
       {error && (
         <div className="toast toast-error" onClick={() => setError(null)}>
           {error}
+        </div>
+      )}
+
+      {dropChoice && (
+        <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && setDropChoice(null)}>
+          <div className="modal drop-choice">
+            <h2>
+              {dropChoice.length} audio file{dropChoice.length > 1 ? "s" : ""}
+            </h2>
+            <div className="subtitle">
+              {view
+                ? "Add them to the current session as…"
+                : "How should they be laid out?"}
+            </div>
+            <button
+              className="btn choice"
+              onClick={() => {
+                void loadPaths(dropChoice, view ? "append" : "open");
+                setDropChoice(null);
+              }}
+            >
+              <strong>{view ? "Append to timeline" : "One after another"}</strong>
+              <span>Clips laid back-to-back on one timeline (vinyl sides, concert parts)</span>
+            </button>
+            <button
+              className="btn choice"
+              onClick={() => {
+                void loadPaths(dropChoice, view ? "layers" : "multitrack");
+                setDropChoice(null);
+              }}
+            >
+              <strong>{view ? "Add as synced layers" : "Synced multitrack"}</strong>
+              <span>Time-aligned recordings of the same session (Zoom inputs), mixed together</span>
+            </button>
+            <div className="modal-foot">
+              <button className="btn" onClick={() => setDropChoice(null)}>
+                Cancel
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

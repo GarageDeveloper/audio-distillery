@@ -620,3 +620,158 @@ kbd {
 }
 
 .add-track-title { width: 220px; }
+
+/* ---------- Layers (multitrack mix) ---------- */
+.layers-section {
+  flex: none;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 6px;
+  max-height: 45%;
+  overflow-y: auto;
+}
+.layers-head {
+  height: 40px;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.layers-head .label {
+  font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .13em;
+  color: var(--text-2);
+}
+.layer-row { padding: 8px 12px 2px; }
+.layer-row.muted { opacity: .5; }
+.layer-top { display: flex; align-items: center; gap: 6px; }
+.layer-name { flex: 1; min-width: 0; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.layer-ch { font-family: var(--font-mono); font-size: 10px; color: var(--text-3); }
+.layer-mute {
+  width: 20px; height: 20px;
+  border-radius: var(--r-s);
+  border: 1px solid var(--line);
+  font-size: 10px; font-weight: 700;
+  color: var(--text-3);
+}
+.layer-mute.on { background: var(--warn); color: var(--text-on-accent); border-color: var(--warn); }
+.layer-del {
+  width: 20px; height: 20px;
+  border-radius: var(--r-s);
+  color: var(--text-3);
+}
+.layer-del:hover:not(:disabled) { color: var(--err); background: var(--err-dim); }
+.layer-del:disabled { opacity: .3; cursor: default; }
+.layer-fader { display: flex; align-items: center; gap: 8px; }
+.layer-fader input[type="range"] { flex: 1; accent-color: var(--copper); }
+.layer-db {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+  width: 58px;
+  text-align: right;
+}
+
+/* Drop choice modal */
+.drop-choice .choice {
+  height: auto;
+  padding: 12px 14px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-align: left;
+  white-space: normal;
+}
+.drop-choice .choice span { font-size: 11px; color: var(--text-3); }
+
+/* Per-track mix overrides & manual dB entry */
+.track-row { grid-template-columns: 26px 1fr auto auto auto; }
+.gain-input {
+  width: 52px;
+  height: 22px;
+  padding: 0 5px;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  background: var(--bg-deep);
+  border: 1px solid var(--line);
+  border-radius: var(--r-s);
+  color: var(--text);
+  user-select: text;
+  -webkit-user-select: text;
+}
+.gain-input:focus { border-color: var(--copper-lo); outline: none; }
+.gain-input::placeholder { color: var(--text-3); }
+.layer-db-unit { font-family: var(--font-mono); font-size: 10px; color: var(--text-3); }
+.mix-toggle {
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--r-s);
+  border: 1px solid var(--line);
+  font-size: 10px;
+  color: var(--text-3);
+}
+.mix-toggle:hover, .mix-toggle.open { color: var(--copper-hi); border-color: var(--copper-lo); background: var(--copper-dim); }
+.mix-toggle.has-override { color: var(--copper); border-color: var(--copper-lo); font-weight: 700; }
+.track-mix {
+  margin: 2px 8px 6px 34px;
+  padding: 8px 10px;
+  background: var(--bg-deep);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-m);
+  display: flex; flex-direction: column; gap: 6px;
+}
+.track-mix-row { display: flex; align-items: center; gap: 8px; }
+.track-mix-row .layer-name { flex: 1; min-width: 0; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.track-mix .hint { font-size: 10px; }
+.hidden-btn { visibility: hidden; }
+.track-mix .del { opacity: 1; width: 20px; height: 20px; border-radius: var(--r-s); color: var(--text-3); }
+.track-mix .del:hover { color: var(--err); background: var(--err-dim); }
+
+/* Auto-split minimum-length filter */
+.proposal-count strong { color: var(--copper-hi); }
+.proposal-ignored { color: var(--text-3); }
+.proposal-min {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; color: var(--text-2);
+  font-family: var(--font-mono);
+}
+.proposal-min input {
+  width: 56px; height: 24px;
+  padding: 0 5px;
+  text-align: right;
+  background: var(--bg-deep);
+  border: 1px solid var(--line);
+  border-radius: var(--r-s);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.proposal-min input:focus { border-color: var(--copper-lo); outline: none; }
+
+/* Per-track mix faders */
+.track-mix-row { flex-direction: column; align-items: stretch; gap: 2px; }
+.track-mix-top { display: flex; align-items: center; gap: 8px; }
+.mix-state {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  padding: 1px 5px;
+  border-radius: var(--r-round);
+  border: 1px solid var(--line);
+  color: var(--text-3);
+}
+.track-mix-row.overridden .mix-state {
+  color: var(--copper-hi);
+  border-color: var(--copper-lo);
+  background: var(--copper-dim);
+}
+.mix-fader { width: 100%; accent-color: var(--copper); }
+.track-mix-row.inheriting .mix-fader { accent-color: var(--text-3); opacity: .55; }
+.track-mix-row.inheriting .mix-fader:hover { opacity: .85; }
+
+.wave-mode { padding: 2px; }
+.wave-mode button { padding: 0 10px; height: 24px; flex: none; }
+
+.layer-chevron { width: 16px; color: var(--text-3); font-size: 10px; }
+.layer-chevron:hover { color: var(--copper-hi); }

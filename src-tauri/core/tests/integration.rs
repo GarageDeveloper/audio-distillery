@@ -7,7 +7,24 @@ use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
 use still_core::project::{ExportConfig, ExportFormat, Project};
-use still_core::{plan_export, resolve_ffmpeg, run_export, scan_file, ProjectState, SilenceParams};
+use still_core::{
+    plan_export, resolve_ffmpeg, run_export, scan_file, LayerMix, ProjectState, SilenceParams,
+};
+
+/// Unity-gain mix of the session's layers, as the export path expects.
+fn mix_of(state: &ProjectState) -> Vec<LayerMix> {
+    state
+        .info
+        .layers
+        .iter()
+        .map(|l| LayerMix {
+            id: 1,
+            clips: l.clips.clone(),
+            gain_db: 0.0,
+            muted: false,
+        })
+        .collect()
+}
 
 const SR: u32 = 44_100;
 
@@ -92,7 +109,7 @@ fn full_scenario_is_non_destructive_and_sample_accurate() {
     let mut state = ProjectState::new(
         Project::new(vec![wav.display().to_string()]),
         info.clone(),
-        peaks,
+        vec![peaks],
     );
 
     // Mark three regions of exactly 1 s each; the middle second [1s, 2s) is
@@ -123,7 +140,7 @@ fn full_scenario_is_non_destructive_and_sample_accurate() {
     let jobs = plan_export(&tracks, &cfg, &wav).unwrap();
     assert_eq!(jobs.len(), 2);
     let cancel = AtomicBool::new(false);
-    let report = run_export(&ffmpeg, &state.info.clips, SR, &jobs, &cfg, &cancel, |_| {});
+    let report = run_export(&ffmpeg, &mix_of(&state), 2, SR, &jobs, &cfg, &cancel, |_| {});
     assert!(report.errors.is_empty(), "export errors: {:?}", report.errors);
     assert_eq!(report.files.len(), 2);
     assert!(!report.cancelled);
@@ -198,7 +215,7 @@ fn exported_tracks_start_at_time_zero() {
     let wav = dir.path().join("source.wav");
     write_wav(&wav, &[(4.0, 0.6)]);
     let (info, peaks) = scan_file(&wav, |_| {}).unwrap();
-    let mut state = ProjectState::new(Project::new(vec![wav.display().to_string()]), info, peaks);
+    let mut state = ProjectState::new(Project::new(vec![wav.display().to_string()]), info, vec![peaks]);
     // Region starting at 2 s — far from the file start.
     state.add_region(2 * SR as u64, 3 * SR as u64, None).unwrap();
     let cfg = ExportConfig {
@@ -208,7 +225,7 @@ fn exported_tracks_start_at_time_zero() {
     };
     let jobs = plan_export(&state.tracks(), &cfg, &wav).unwrap();
     let cancel = AtomicBool::new(false);
-    let report = run_export(&ffmpeg, &state.info.clips, SR, &jobs, &cfg, &cancel, |_| {});
+    let report = run_export(&ffmpeg, &mix_of(&state), 2, SR, &jobs, &cfg, &cancel, |_| {});
     assert!(report.errors.is_empty(), "export errors: {:?}", report.errors);
 
     let out = std::process::Command::new(&ffprobe)
@@ -256,7 +273,7 @@ fn multi_clip_timeline_and_cross_boundary_export() {
             wav_b.display().to_string(),
         ]),
         info,
-        peaks,
+        vec![peaks],
     );
     // Track 1 inside clip A; track 2 crosses the A→B boundary (1.5s → 3.5s).
     state.add_region(0, SR as u64, None).unwrap();
@@ -275,7 +292,7 @@ fn multi_clip_timeline_and_cross_boundary_export() {
     };
     let jobs = plan_export(&state.tracks(), &cfg, &wav_a).unwrap();
     let cancel = AtomicBool::new(false);
-    let report = run_export(&ffmpeg, &state.info.clips, SR, &jobs, &cfg, &cancel, |_| {});
+    let report = run_export(&ffmpeg, &mix_of(&state), 2, SR, &jobs, &cfg, &cancel, |_| {});
     assert!(report.errors.is_empty(), "export errors: {:?}", report.errors);
     assert_eq!(report.files.len(), 2);
 
@@ -288,6 +305,129 @@ fn multi_clip_timeline_and_cross_boundary_export() {
     // Both sources untouched.
     assert_eq!(checksum(&wav_a), sum_a);
     assert_eq!(checksum(&wav_b), sum_b);
+}
+
+/// Multitrack session: a stereo layer + a synced mono layer, mixed at export.
+/// The exported track must be the SUM of the layers (so louder than either
+/// alone), muting a layer must remove its contribution, durations stay
+/// sample-accurate and every source stays byte-for-byte untouched.
+#[test]
+fn multitrack_layers_mix_at_export() {
+    let dir = tempfile::tempdir().unwrap();
+    let stereo = dir.path().join("mic-stereo.wav");
+    let mono = dir.path().join("input-3.wav");
+    // Same frequency and phase → amplitudes add up predictably.
+    write_wav(&stereo, &[(2.0, 0.4)]);
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: SR,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut w = hound::WavWriter::create(&mono, spec).unwrap();
+    for i in 0..(2 * SR as usize) {
+        let v = (0.3 * (i as f32 * 440.0 * 2.0 * std::f32::consts::PI / SR as f32).sin()
+            * i16::MAX as f32) as i16;
+        w.write_sample(v).unwrap();
+    }
+    w.finalize().unwrap();
+    let (sum_a, sum_b) = (checksum(&stereo), checksum(&mono));
+
+    let (info, pyramids) = still_core::scan_layers(
+        &[vec![stereo.clone()], vec![mono.clone()]],
+        &AtomicBool::new(false),
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!(info.layers.len(), 2);
+    assert_eq!(info.channels, 2, "session is stereo (max over layers)");
+    assert_eq!(info.layers[1].channels, 1);
+
+    let mut state = ProjectState::new(
+        Project::new_layers(vec![
+            vec![stereo.display().to_string()],
+            vec![mono.display().to_string()],
+        ]),
+        info,
+        pyramids,
+    );
+    state.add_region(0, SR as u64, None).unwrap();
+
+    let Ok(ffmpeg) = resolve_ffmpeg(&[]) else {
+        eprintln!("ffmpeg not found — multitrack export test skipped");
+        return;
+    };
+    let cfg = ExportConfig {
+        format: ExportFormat::Wav,
+        dest_dir: dir.path().join("out").display().to_string(),
+        ..Default::default()
+    };
+    let peak_of = |path: &Path| -> f32 {
+        let mut r = hound::WavReader::open(path).unwrap();
+        r.samples::<i16>()
+            .map(|s| (s.unwrap() as f32 / i16::MAX as f32).abs())
+            .fold(0.0, f32::max)
+    };
+    let mix = |state: &ProjectState| -> Vec<LayerMix> {
+        state
+            .project
+            .layers
+            .iter()
+            .zip(state.info.layers.iter())
+            .map(|(l, scanned)| LayerMix {
+                id: l.id,
+                clips: scanned.clips.clone(),
+                gain_db: l.gain_db,
+                muted: l.muted,
+            })
+            .collect()
+    };
+
+    // Unity mix: 0.4 (stereo mic) + 0.3 (mono input) ≈ 0.6–0.7 depending on
+    // the mono upmix gain — well above either layer alone.
+    let jobs = plan_export(&state.tracks(), &cfg, &stereo).unwrap();
+    let cancel = AtomicBool::new(false);
+    let report = run_export(&ffmpeg, &mix(&state), 2, SR, &jobs, &cfg, &cancel, |_| {});
+    assert!(report.errors.is_empty(), "export errors: {:?}", report.errors);
+    let reader = hound::WavReader::open(&jobs[0].out_path).unwrap();
+    assert_eq!(reader.duration() as u64, SR as u64);
+    let full_peak = peak_of(&jobs[0].out_path);
+    assert!(full_peak > 0.55, "expected summed mix, peak = {full_peak}");
+
+    // Mute the mono layer: only the stereo mic remains (≈ 0.4).
+    let mono_id = state.project.layers[1].id;
+    state.set_layer_muted(mono_id, true).unwrap();
+    let jobs2 = plan_export(&state.tracks(), &cfg, &stereo).unwrap();
+    let report2 = run_export(&ffmpeg, &mix(&state), 2, SR, &jobs2, &cfg, &cancel, |_| {});
+    assert!(report2.errors.is_empty(), "{:?}", report2.errors);
+    let muted_peak = peak_of(&jobs2[0].out_path);
+    assert!(
+        (muted_peak - 0.4).abs() < 0.05,
+        "expected the stereo layer alone, peak = {muted_peak}"
+    );
+
+    // Per-track override: unmute the mono layer globally but override it to
+    // -60 dB (-∞) FOR THIS TRACK only → same audible result as muting it.
+    state.set_layer_muted(mono_id, false).unwrap();
+    let track_id = state.tracks()[0].id;
+    state
+        .set_track_layer_gain(track_id, mono_id, Some(-60.0))
+        .unwrap();
+    let jobs3 = plan_export(&state.tracks(), &cfg, &stereo).unwrap();
+    let report3 = run_export(&ffmpeg, &mix(&state), 2, SR, &jobs3, &cfg, &cancel, |_| {});
+    assert!(report3.errors.is_empty(), "{:?}", report3.errors);
+    let override_peak = peak_of(&jobs3[0].out_path);
+    assert!(
+        (override_peak - 0.4).abs() < 0.05,
+        "override should silence the mono layer for this track, peak = {override_peak}"
+    );
+    // Clearing the override restores the summed mix.
+    state.set_track_layer_gain(track_id, mono_id, None).unwrap();
+    assert!(state.tracks()[0].gain_overrides.is_empty());
+
+    // Sources untouched, whatever the mixing.
+    assert_eq!(checksum(&stereo), sum_a);
+    assert_eq!(checksum(&mono), sum_b);
 }
 
 /// Clips with mismatched formats are refused with an actionable error.
@@ -319,7 +459,7 @@ fn export_report_carries_errors_not_panics() {
     let wav = dir.path().join("source.wav");
     write_wav(&wav, &[(1.0, 0.5)]);
     let (info, peaks) = scan_file(&wav, |_| {}).unwrap();
-    let mut state = ProjectState::new(Project::new(vec![wav.display().to_string()]), info, peaks);
+    let mut state = ProjectState::new(Project::new(vec![wav.display().to_string()]), info, vec![peaks]);
     state.add_region(0, SR as u64, None).unwrap();
     let Ok(ffmpeg) = resolve_ffmpeg(&[]) else {
         return;
@@ -331,14 +471,19 @@ fn export_report_carries_errors_not_panics() {
     };
     let jobs = plan_export(&state.tracks(), &cfg, &wav).unwrap();
     // Point ffmpeg at a nonexistent source clip: errors must be reported.
-    let bad_clips = vec![still_core::ClipInfo {
-        path: "/nonexistent/audio.wav".into(),
-        name: "audio.wav".into(),
-        start_sample: 0,
-        duration_samples: SR as u64,
+    let bad_layers = vec![LayerMix {
+        id: 1,
+        clips: vec![still_core::ClipInfo {
+            path: "/nonexistent/audio.wav".into(),
+            name: "audio.wav".into(),
+            start_sample: 0,
+            duration_samples: SR as u64,
+        }],
+        gain_db: 0.0,
+        muted: false,
     }];
     let cancel = AtomicBool::new(false);
-    let report = run_export(&ffmpeg, &bad_clips, SR, &jobs, &cfg, &cancel, |_| {});
+    let report = run_export(&ffmpeg, &bad_layers, 2, SR, &jobs, &cfg, &cancel, |_| {});
     assert_eq!(report.files.len(), 0);
     assert!(!report.errors.is_empty());
 }

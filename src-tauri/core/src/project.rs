@@ -8,7 +8,9 @@ use crate::audio::AudioInfo;
 use crate::error::{Result, StillError};
 use crate::peaks::PeakPyramid;
 
-pub const PROJECT_VERSION: u32 = 3;
+pub const PROJECT_VERSION: u32 = 4;
+pub const MIN_GAIN_DB: f32 = -60.0;
+pub const MAX_GAIN_DB: f32 = 12.0;
 /// A track region may never be shorter than this.
 pub const MIN_TRACK_MS: u64 = 200;
 
@@ -31,6 +33,10 @@ pub struct Region {
     pub end: u64,
     /// None → default title derived from the track number.
     pub title: Option<String>,
+    /// Per-track layer gain overrides (dB), keyed by layer id as a string.
+    /// A layer absent from the map uses its session-wide gain at export.
+    #[serde(default)]
+    pub gain_overrides: HashMap<String, f32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -84,27 +90,73 @@ impl Default for ExportConfig {
 
 /// The declarative "recipe": everything persisted in a `.still` file.
 /// The source audio is only ever referenced, never touched (SPEC §3 bis).
+/// One time-synchronized layer of the session (e.g. one input of a Zoom
+/// recorder). All layers start at t = 0; each holds its own sequential
+/// source files, a mix gain and a mute flag.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Layer {
+    pub id: u32,
+    pub sources: Vec<String>,
+    pub gain_db: f32,
+    pub muted: bool,
+    /// Collapsed to a thin strip in the "Layers" waveform view.
+    #[serde(default)]
+    pub collapsed: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
     pub version: u32,
-    /// Ordered source files ("clips") laid back-to-back on the timeline.
-    pub sources: Vec<String>,
+    /// Time-synchronized layers; layer 0 is the base timeline.
+    pub layers: Vec<Layer>,
     pub regions: Vec<Region>,
     pub snap_to_zero: bool,
     pub export_config: ExportConfig,
     pub next_region_id: u32,
+    pub next_layer_id: u32,
 }
 
 impl Project {
-    pub fn new(sources: Vec<String>) -> Self {
+    /// One layer per source group; group 0 is the base timeline.
+    pub fn new_layers(layer_sources: Vec<Vec<String>>) -> Self {
+        let layers: Vec<Layer> = layer_sources
+            .into_iter()
+            .enumerate()
+            .map(|(i, sources)| Layer {
+                id: (i + 1) as u32,
+                sources,
+                gain_db: 0.0,
+                muted: false,
+                collapsed: false,
+            })
+            .collect();
+        let next_layer_id = layers.len() as u32 + 1;
         Self {
             version: PROJECT_VERSION,
-            sources,
+            layers,
             regions: Vec::new(),
             snap_to_zero: false,
             export_config: ExportConfig::default(),
             next_region_id: 1,
+            next_layer_id,
         }
+    }
+
+    /// Single-layer convenience (sequential clips only).
+    pub fn new(sources: Vec<String>) -> Self {
+        Self::new_layers(vec![sources])
+    }
+
+    pub fn source_groups(&self) -> Vec<Vec<String>> {
+        self.layers.iter().map(|l| l.sources.clone()).collect()
+    }
+}
+
+pub fn db_to_linear(db: f32) -> f32 {
+    if db <= MIN_GAIN_DB {
+        0.0
+    } else {
+        10f32.powf(db / 20.0)
     }
 }
 
@@ -121,6 +173,23 @@ pub struct TrackInfo {
     #[ts(type = "number")]
     pub end_sample: u64,
     pub duration_seconds: f64,
+    /// Per-track layer gain overrides (dB), keyed by layer id (string).
+    #[ts(type = "Record<string, number>")]
+    pub gain_overrides: HashMap<String, f32>,
+}
+
+/// Display state of one mix layer.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../src/types/")]
+pub struct LayerView {
+    pub id: u32,
+    /// First source's file name.
+    pub name: String,
+    pub channels: u16,
+    pub duration_seconds: f64,
+    pub gain_db: f32,
+    pub muted: bool,
+    pub collapsed: bool,
 }
 
 /// Display snapshot sent to the frontend after every mutation.
@@ -128,6 +197,7 @@ pub struct TrackInfo {
 #[ts(export, export_to = "../../../src/types/")]
 pub struct ProjectView {
     pub audio: AudioInfo,
+    pub layers: Vec<LayerView>,
     pub tracks: Vec<TrackInfo>,
     pub snap_to_zero: bool,
     pub export_config: ExportConfig,
@@ -166,7 +236,8 @@ fn split_indexed(title: &str) -> (&str, Option<u32>) {
 pub struct ProjectState {
     pub project: Project,
     pub info: AudioInfo,
-    pub peaks: PeakPyramid,
+    /// One peak pyramid per layer (index-aligned with `project.layers`).
+    pub peaks: Vec<PeakPyramid>,
     /// Path of the `.still` file, once saved/loaded.
     pub project_path: Option<PathBuf>,
     undo: Vec<Snapshot>,
@@ -174,7 +245,7 @@ pub struct ProjectState {
 }
 
 impl ProjectState {
-    pub fn new(project: Project, info: AudioInfo, peaks: PeakPyramid) -> Self {
+    pub fn new(project: Project, info: AudioInfo, peaks: Vec<PeakPyramid>) -> Self {
         Self {
             project,
             info,
@@ -189,12 +260,171 @@ impl ProjectState {
         (self.info.sample_rate as u64 * MIN_TRACK_MS / 1000).max(1)
     }
 
-    /// Replace the scanned audio (after appending clips) while keeping the
-    /// project recipe and the undo/redo history — regions only ever reference
-    /// timeline positions, and appending clips never moves existing audio.
-    pub fn set_audio(&mut self, info: AudioInfo, peaks: PeakPyramid) {
+    /// Replace the scanned audio (after appending clips or layers) while
+    /// keeping the project recipe and the undo/redo history — regions only
+    /// ever reference timeline positions, and appending never moves audio.
+    pub fn set_audio(&mut self, info: AudioInfo, peaks: Vec<PeakPyramid>) {
         self.info = info;
         self.peaks = peaks;
+    }
+
+    /// Position-dependent linear gain per layer: session fader (or 0 when
+    /// muted) everywhere, replaced inside a track region by that track's
+    /// overrides — so the waveform shows overrides exactly where they apply.
+    fn gain_resolver(&self) -> impl Fn(u64, usize) -> f32 + '_ {
+        let defaults: Vec<f32> = self
+            .project
+            .layers
+            .iter()
+            .map(|l| if l.muted { 0.0 } else { db_to_linear(l.gain_db) })
+            .collect();
+        let mut overridden: Vec<(u64, u64, Vec<f32>)> = Vec::new();
+        for r in &self.project.regions {
+            if r.gain_overrides.is_empty() {
+                continue;
+            }
+            let gains = self
+                .project
+                .layers
+                .iter()
+                .enumerate()
+                .map(|(i, l)| {
+                    if l.muted {
+                        0.0
+                    } else {
+                        r.gain_overrides
+                            .get(&l.id.to_string())
+                            .map(|db| db_to_linear(*db))
+                            .unwrap_or(defaults[i])
+                    }
+                })
+                .collect();
+            overridden.push((r.start, r.end, gains));
+        }
+        move |sample, li| {
+            for (s, e, gains) in &overridden {
+                if sample >= *s && sample < *e {
+                    return gains.get(li).copied().unwrap_or(0.0);
+                }
+            }
+            defaults.get(li).copied().unwrap_or(0.0)
+        }
+    }
+
+    /// Display peaks of the current mix over a window (mutes, faders and
+    /// per-track overrides applied).
+    pub fn peaks_slice(
+        &self,
+        start_sample: u64,
+        end_sample: u64,
+        max_buckets: u32,
+    ) -> crate::peaks::PeakSlice {
+        let pyramids: Vec<&PeakPyramid> = self.peaks.iter().collect();
+        crate::peaks::merged_query_with(
+            &pyramids,
+            self.info.channels.max(1) as usize,
+            start_sample,
+            end_sample,
+            max_buckets,
+            self.gain_resolver(),
+        )
+    }
+
+    /// One display slice PER LAYER over a window, each scaled by that layer's
+    /// effective gain at every position (session fader, mute, and the track
+    /// overrides where they apply) — the "layers" waveform view.
+    pub fn layer_slices(
+        &self,
+        start_sample: u64,
+        end_sample: u64,
+        max_buckets: u32,
+    ) -> Vec<crate::peaks::PeakSlice> {
+        let resolver = self.gain_resolver();
+        self.peaks
+            .iter()
+            .enumerate()
+            .map(|(li, p)| {
+                crate::peaks::scaled_query_with(p, start_sample, end_sample, max_buckets, |s| {
+                    resolver(s, li)
+                })
+            })
+            .collect()
+    }
+
+    /// Base-resolution pyramid of the current mix (silence detection input).
+    pub fn merged_pyramid(&self) -> PeakPyramid {
+        let buckets = self
+            .info
+            .duration_samples
+            .div_ceil(crate::peaks::BASE_SAMPLES_PER_BUCKET as u64)
+            .max(1);
+        let slice = self.peaks_slice(0, self.info.duration_samples, buckets as u32);
+        PeakPyramid {
+            levels: vec![crate::peaks::PeakLevel {
+                samples_per_bucket: slice.samples_per_bucket,
+                channels: slice.channels,
+            }],
+        }
+    }
+
+    fn layer_index(&self, id: u32) -> Result<usize> {
+        self.project
+            .layers
+            .iter()
+            .position(|l| l.id == id)
+            .ok_or_else(|| StillError::InvalidMarker(format!("unknown layer id {id}")))
+    }
+
+    /// Set a layer's mix gain; returns the clamped value actually applied.
+    pub fn set_layer_gain(&mut self, id: u32, gain_db: f32) -> Result<f32> {
+        let idx = self.layer_index(id)?;
+        let clamped = gain_db.clamp(MIN_GAIN_DB, MAX_GAIN_DB);
+        self.project.layers[idx].gain_db = clamped;
+        Ok(clamped)
+    }
+
+    pub fn set_layer_muted(&mut self, id: u32, muted: bool) -> Result<()> {
+        let idx = self.layer_index(id)?;
+        self.project.layers[idx].muted = muted;
+        Ok(())
+    }
+
+    /// Display preference persisted in the project: collapsed lanes in the
+    /// "Layers" waveform view.
+    pub fn set_layer_collapsed(&mut self, id: u32, collapsed: bool) -> Result<()> {
+        let idx = self.layer_index(id)?;
+        self.project.layers[idx].collapsed = collapsed;
+        Ok(())
+    }
+
+    /// Remove a layer (never the base layer 0, which carries the timeline).
+    pub fn remove_layer(&mut self, id: u32) -> Result<()> {
+        let idx = self.layer_index(id)?;
+        if idx == 0 {
+            return Err(StillError::InvalidMarker(
+                "the base layer cannot be removed".into(),
+            ));
+        }
+        self.project.layers.remove(idx);
+        if idx < self.info.layers.len() {
+            self.info.layers.remove(idx);
+        }
+        if idx < self.peaks.len() {
+            self.peaks.remove(idx);
+        }
+        // The timeline may shrink if the removed layer was the longest.
+        let duration = self
+            .info
+            .layers
+            .iter()
+            .map(|l| l.duration_samples)
+            .max()
+            .unwrap_or(0);
+        self.info.duration_samples = duration;
+        self.info.duration_seconds = duration as f64 / self.info.sample_rate as f64;
+        self.info.channels = self.info.layers.iter().map(|l| l.channels).max().unwrap_or(0);
+        sanitize_regions(&mut self.project, duration, self.info.sample_rate);
+        Ok(())
     }
 
     fn push_undo(&mut self) {
@@ -268,6 +498,7 @@ impl ProjectState {
             start: s,
             end: e,
             title,
+            gain_overrides: HashMap::new(),
         });
         Ok(id)
     }
@@ -286,6 +517,7 @@ impl ProjectState {
                     start: s,
                     end: e,
                     title: None,
+                    gain_overrides: HashMap::new(),
                 });
                 added += 1;
             }
@@ -385,6 +617,41 @@ impl ProjectState {
         Ok(())
     }
 
+    /// Set (or clear, with `None`) a per-track gain override for one layer.
+    /// Undoable like any region edit; returns the clamped value applied.
+    pub fn set_track_layer_gain(
+        &mut self,
+        track_id: u32,
+        layer_id: u32,
+        gain_db: Option<f32>,
+    ) -> Result<Option<f32>> {
+        if !self.project.layers.iter().any(|l| l.id == layer_id) {
+            return Err(StillError::InvalidMarker(format!(
+                "unknown layer id {layer_id}"
+            )));
+        }
+        let idx = self
+            .project
+            .regions
+            .iter()
+            .position(|r| r.id == track_id)
+            .ok_or_else(|| StillError::InvalidMarker(format!("unknown track id {track_id}")))?;
+        self.push_undo();
+        let region = &mut self.project.regions[idx];
+        let key = layer_id.to_string();
+        match gain_db {
+            Some(db) => {
+                let clamped = db.clamp(MIN_GAIN_DB, MAX_GAIN_DB);
+                region.gain_overrides.insert(key, clamped);
+                Ok(Some(clamped))
+            }
+            None => {
+                region.gain_overrides.remove(&key);
+                Ok(None)
+            }
+        }
+    }
+
     /// Suggest a title for the next track: take the most recently titled
     /// region, strip any trailing `-<n>` index, and propose the base with the
     /// next free index. A bare title counts as the first occurrence, so the
@@ -433,13 +700,41 @@ impl ProjectState {
                 start_sample: r.start,
                 end_sample: r.end,
                 duration_seconds: (r.end.saturating_sub(r.start)) as f64 / sr,
+                gain_overrides: r.gain_overrides.clone(),
             })
             .collect()
     }
 
     pub fn view(&self) -> ProjectView {
+        let sr = self.info.sample_rate.max(1) as f64;
+        let layers = self
+            .project
+            .layers
+            .iter()
+            .enumerate()
+            .map(|(i, l)| {
+                let scanned = self.info.layers.get(i);
+                LayerView {
+                    id: l.id,
+                    name: l
+                        .sources
+                        .first()
+                        .and_then(|s| Path::new(s).file_name())
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| format!("Layer {}", i + 1)),
+                    channels: scanned.map(|s| s.channels).unwrap_or(0),
+                    duration_seconds: scanned
+                        .map(|s| s.duration_samples as f64 / sr)
+                        .unwrap_or(0.0),
+                    gain_db: l.gain_db,
+                    muted: l.muted,
+                    collapsed: l.collapsed,
+                }
+            })
+            .collect();
         ProjectView {
             audio: self.info.clone(),
+            layers,
             tracks: self.tracks(),
             snap_to_zero: self.project.snap_to_zero,
             export_config: self.project.export_config.clone(),
@@ -482,7 +777,23 @@ struct LegacyMarker {
     position: u64,
 }
 
-/// v2 `.still` files had a single `source_path`; v3 has `sources`.
+/// Wrap pre-v4 single-layer data into the layered model.
+fn from_single_layer(
+    sources: Vec<String>,
+    regions: Vec<Region>,
+    snap_to_zero: bool,
+    export_config: ExportConfig,
+    next_region_id: u32,
+) -> Project {
+    let mut p = Project::new_layers(vec![sources]);
+    p.regions = regions;
+    p.snap_to_zero = snap_to_zero;
+    p.export_config = export_config;
+    p.next_region_id = next_region_id;
+    p
+}
+
+/// v2 `.still` files had a single `source_path`; v3 had `sources`.
 #[derive(Deserialize)]
 struct LegacyProjectV2 {
     source_path: String,
@@ -495,14 +806,35 @@ struct LegacyProjectV2 {
 }
 
 fn migrate_v2(legacy: LegacyProjectV2) -> Project {
-    Project {
-        version: PROJECT_VERSION,
-        sources: vec![legacy.source_path],
-        regions: legacy.regions,
-        snap_to_zero: legacy.snap_to_zero,
-        export_config: legacy.export_config.unwrap_or_default(),
-        next_region_id: legacy.next_region_id,
-    }
+    from_single_layer(
+        vec![legacy.source_path],
+        legacy.regions,
+        legacy.snap_to_zero,
+        legacy.export_config.unwrap_or_default(),
+        legacy.next_region_id,
+    )
+}
+
+/// v3 `.still` files had `sources: Vec<String>`; v4 has layers.
+#[derive(Deserialize)]
+struct LegacyProjectV3 {
+    sources: Vec<String>,
+    regions: Vec<Region>,
+    #[serde(default)]
+    snap_to_zero: bool,
+    #[serde(default)]
+    export_config: Option<ExportConfig>,
+    next_region_id: u32,
+}
+
+fn migrate_v3(legacy: LegacyProjectV3) -> Project {
+    from_single_layer(
+        legacy.sources,
+        legacy.regions,
+        legacy.snap_to_zero,
+        legacy.export_config.unwrap_or_default(),
+        legacy.next_region_id,
+    )
 }
 
 fn migrate_v1(legacy: LegacyProjectV1) -> Project {
@@ -523,17 +855,17 @@ fn migrate_v1(legacy: LegacyProjectV1) -> Project {
             start: *start,
             end,
             title: legacy.track_names.get(key).cloned(),
+            gain_overrides: HashMap::new(),
         });
     }
     let next_region_id = regions.len() as u32 + 1;
-    Project {
-        version: PROJECT_VERSION,
-        sources: vec![legacy.source_path],
+    from_single_layer(
+        vec![legacy.source_path],
         regions,
-        snap_to_zero: legacy.snap_to_zero,
-        export_config: legacy.export_config.unwrap_or_default(),
+        legacy.snap_to_zero,
+        legacy.export_config.unwrap_or_default(),
         next_region_id,
-    }
+    )
 }
 
 pub fn read_project(path: &Path) -> Result<Project> {
@@ -558,6 +890,11 @@ pub fn read_project(path: &Path) -> Result<Project> {
             .map_err(|e| StillError::InvalidProject(e.to_string()))?;
         return Ok(migrate_v2(legacy));
     }
+    if version == 3 {
+        let legacy: LegacyProjectV3 = serde_json::from_str(&data)
+            .map_err(|e| StillError::InvalidProject(e.to_string()))?;
+        return Ok(migrate_v3(legacy));
+    }
     serde_json::from_str(&data).map_err(|e| StillError::InvalidProject(e.to_string()))
 }
 
@@ -580,12 +917,18 @@ mod tests {
     const SEC: u64 = SR as u64;
 
     fn state(duration_secs: u64) -> ProjectState {
+        let clips = vec![crate::audio::ClipInfo {
+            path: "/tmp/test.wav".into(),
+            name: "test.wav".into(),
+            start_sample: 0,
+            duration_samples: duration_secs * SEC,
+        }];
         let info = AudioInfo {
             path: "/tmp/test.wav".into(),
-            clips: vec![crate::audio::ClipInfo {
-                path: "/tmp/test.wav".into(),
-                name: "test.wav".into(),
-                start_sample: 0,
+            clips: clips.clone(),
+            layers: vec![crate::audio::ScannedLayer {
+                clips,
+                channels: 2,
                 duration_samples: duration_secs * SEC,
             }],
             duration_samples: duration_secs * SEC,
@@ -597,7 +940,7 @@ mod tests {
         ProjectState::new(
             Project::new(vec![info.path.clone()]),
             info,
-            PeakPyramid::default(),
+            vec![PeakPyramid::default()],
         )
     }
 
@@ -718,6 +1061,49 @@ mod tests {
     }
 
     #[test]
+    fn peaks_reflect_track_overrides_in_place() {
+        use crate::peaks::PeakBuilder;
+        // Two mono layers of constant 0.5 amplitude over 60 s.
+        let n = 60 * SEC as usize;
+        let make_pyr = || {
+            let mut b = PeakBuilder::new(1);
+            b.push_interleaved(&vec![0.5f32; n]);
+            b.finish().0
+        };
+        let mut s = state(60);
+        s.project = Project::new_layers(vec![
+            vec!["/tmp/a.wav".into()],
+            vec!["/tmp/b.wav".into()],
+        ]);
+        s.peaks = vec![make_pyr(), make_pyr()];
+        // A track covering [10 s, 20 s) that silences layer 2.
+        let track = s.add_region(10 * SEC, 20 * SEC, None).unwrap();
+        let layer2 = s.project.layers[1].id;
+        s.set_track_layer_gain(track, layer2, Some(-60.0)).unwrap();
+
+        let slice = s.peaks_slice(0, 60 * SEC, 600);
+        let spb = slice.samples_per_bucket as u64;
+        let value_at = |sec: u64| slice.channels[0][((sec * SEC / spb) as usize) * 2 + 1];
+        // Outside the track: 0.5 + 0.5 = 1.0 → 127. Inside: 0.5 alone → ~63.
+        assert!(value_at(5) > 120, "outside = {}", value_at(5));
+        assert!(
+            (55..=72).contains(&value_at(15)),
+            "inside override = {}",
+            value_at(15)
+        );
+        assert!(value_at(30) > 120, "after = {}", value_at(30));
+
+        // Per-layer view: layer 2's lane is silent inside the track only.
+        let lanes = s.layer_slices(0, 60 * SEC, 600);
+        let lane_at = |li: usize, sec: u64| {
+            lanes[li].channels[0][((sec * SEC / spb) as usize) * 2 + 1]
+        };
+        assert!((55..=72).contains(&lane_at(1, 5)), "{}", lane_at(1, 5));
+        assert_eq!(lane_at(1, 15), 0);
+        assert!((55..=72).contains(&lane_at(0, 15)), "{}", lane_at(0, 15));
+    }
+
+    #[test]
     fn suggests_indexed_titles() {
         let mut s = state(600);
         // Nothing titled yet → no suggestion.
@@ -811,7 +1197,8 @@ mod tests {
         std::fs::write(&path, v2.to_string()).unwrap();
         let p = read_project(&path).unwrap();
         assert_eq!(p.version, PROJECT_VERSION);
-        assert_eq!(p.sources, vec!["/tmp/test.wav".to_string()]);
+        assert_eq!(p.layers.len(), 1);
+        assert_eq!(p.layers[0].sources, vec!["/tmp/test.wav".to_string()]);
         assert_eq!(p.regions.len(), 1);
         assert_eq!(p.regions[0].title.as_deref(), Some("Intro"));
         assert_eq!(p.next_region_id, 2);
@@ -820,8 +1207,8 @@ mod tests {
     #[test]
     fn sanitize_drops_degenerate_regions() {
         let mut p = Project::new(vec!["/tmp/x.wav".into()]);
-        p.regions.push(Region { id: 1, start: 0, end: 10 * SEC, title: None });
-        p.regions.push(Region { id: 2, start: 200 * SEC, end: 300 * SEC, title: None });
+        p.regions.push(Region { id: 1, start: 0, end: 10 * SEC, title: None, gain_overrides: HashMap::new() });
+        p.regions.push(Region { id: 2, start: 200 * SEC, end: 300 * SEC, title: None, gain_overrides: HashMap::new() });
         sanitize_regions(&mut p, 120 * SEC, SR);
         assert_eq!(p.regions.len(), 1);
     }

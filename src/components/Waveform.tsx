@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ProjectView } from "../types/ProjectView";
 import type { PeakSlice } from "../types/PeakSlice";
 import type { RegionSpan } from "../types/RegionSpan";
@@ -9,6 +9,9 @@ import type { Viewport } from "../lib/viewport";
 import { sampleToX, xToSample, zoomAt, clampViewport } from "../lib/viewport";
 
 const RULER_H = 26;
+const MIN_LANE_H = 90; // comfortable minimum per expanded layer lane
+const COLLAPSED_H = 22; // collapsed layer strip
+const SCROLLBAR_W = 6;
 const EDGE_HIT_PX = 14; // half of the 28 px grab target
 const FLAG_W = 26;
 const FLAG_H = 20;
@@ -17,7 +20,11 @@ interface Props {
   view: ProjectView;
   viewport: Viewport;
   playheadSample: number;
+  /** "mix" = summed waveform; "layers" = one lane per layer. */
+  waveMode: "mix" | "layers";
   proposals: RegionSpan[] | null;
+  /// Auto-split candidates rejected by the minimum-length filter (faint).
+  ignoredProposals?: RegionSpan[] | null;
   selection: RegionSpan | null;
   pendingStart: number | null;
   selectedTrack: number | null;
@@ -29,6 +36,7 @@ interface Props {
   onMoveEdge: (id: number, edge: RegionEdge, sample: number) => void;
   onSelectTrack: (id: number | null) => void;
   onRemoveRegion: (id: number) => void;
+  onToggleLayerCollapsed: (id: number, collapsed: boolean) => void;
 }
 
 interface EdgeRef {
@@ -58,9 +66,16 @@ export function Waveform(p: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sizeRef = useRef({ w: 0, h: 0 });
   const sliceRef = useRef<PeakSlice | null>(null);
+  const lanesRef = useRef<PeakSlice[] | null>(null);
   const fetchSeq = useRef(0);
   const hoverEdge = useRef<EdgeRef | null>(null);
   const drag = useRef<DragState | null>(null);
+  // Vertical navigation of the Layers view.
+  const scrollY = useRef(0);
+  const maxScroll = useRef(0);
+  const contentH = useRef(0);
+  const labelRects = useRef<{ x: number; y: number; w: number; h: number; id: number; collapsed: boolean }[]>([]);
+  const scrollbarDrag = useRef<{ startY: number; startScroll: number } | null>(null);
 
   const propsRef = useRef(p);
   propsRef.current = p;
@@ -144,54 +159,195 @@ export function Waveform(p: Props) {
     ctx.lineTo(w, RULER_H + 0.5);
     ctx.stroke();
 
-    // Waveform channels.
-    const slice = sliceRef.current;
+    // Waveform: summed mix (per audio channel) or one lane per layer.
     const area = h - RULER_H;
-    const chCount = slice?.channels.length ?? view.audio.channels;
-    const laneH = area / chCount;
-    const amp = laneH * 0.42;
     const peakColors = [css("--wave-l-peak"), css("--wave-r-peak")];
     const rmsColors = [css("--wave-l-rms"), css("--wave-r-rms")];
     const centerColor = css("--wave-center");
+    const waveMode = propsRef.current.waveMode;
 
-    for (let c = 0; c < chCount; c++) {
-      const cy = RULER_H + laneH * (c + 0.5);
-      ctx.strokeStyle = centerColor;
-      ctx.beginPath();
-      ctx.moveTo(0, Math.round(cy) + 0.5);
-      ctx.lineTo(w, Math.round(cy) + 0.5);
-      ctx.stroke();
-
-      const ch = slice?.channels[c];
-      if (!ch || !slice) continue;
-      const spb = slice.samples_per_bucket;
+    const drawLane = (
+      data: PeakSlice,
+      chIdx: number | "mono",
+      cy: number,
+      amp: number,
+      colorIdx: number,
+      dim: boolean
+    ) => {
+      const spb = data.samples_per_bucket;
       const grad = ctx.createLinearGradient(0, cy - amp, 0, cy + amp);
       const lo = css("--copper-lo");
       grad.addColorStop(0, lo);
-      grad.addColorStop(0.5, rmsColors[Math.min(c, 1)]);
+      grad.addColorStop(0.5, rmsColors[Math.min(colorIdx, 1)]);
       grad.addColorStop(1, lo);
-
-      // Peak layer.
-      ctx.fillStyle = peakColors[Math.min(c, 1)];
-      for (let b = 0; b < ch.length / 2; b++) {
-        const s0 = slice.start_sample + b * spb;
+      const buckets = data.channels[0]?.length ?? 0;
+      const sampleAt = (b: number, off: 0 | 1) => {
+        if (chIdx === "mono") {
+          // Merge all channels of this slice into one lane.
+          let v = off === 0 ? 127 : -127;
+          for (const ch of data.channels) {
+            const x = ch[b * 2 + off];
+            v = off === 0 ? Math.min(v, x) : Math.max(v, x);
+          }
+          return v;
+        }
+        return data.channels[chIdx][b * 2 + off];
+      };
+      if (dim) ctx.globalAlpha = 0.35;
+      ctx.fillStyle = peakColors[Math.min(colorIdx, 1)];
+      for (let b = 0; b < buckets / 2; b++) {
+        const s0 = data.start_sample + b * spb;
         const x = sampleToX(s0, vp);
         const bw = Math.max(spb / vp.spp, 1);
         if (x + bw < 0 || x > w) continue;
-        const mn = (ch[b * 2] / 127) * amp;
-        const mx = (ch[b * 2 + 1] / 127) * amp;
+        const mn = (sampleAt(b, 0) / 127) * amp;
+        const mx = (sampleAt(b, 1) / 127) * amp;
         ctx.fillRect(x, cy - Math.max(mx, 0), bw, Math.max(mx - mn, 1));
       }
-      // Inner "hot" layer (45 % of peak height, accent gradient).
       ctx.fillStyle = grad;
-      for (let b = 0; b < ch.length / 2; b++) {
-        const s0 = slice.start_sample + b * spb;
+      for (let b = 0; b < buckets / 2; b++) {
+        const s0 = data.start_sample + b * spb;
         const x = sampleToX(s0, vp);
         const bw = Math.max(spb / vp.spp, 1);
         if (x + bw < 0 || x > w) continue;
-        const mn = (ch[b * 2] / 127) * amp * 0.45;
-        const mx = (ch[b * 2 + 1] / 127) * amp * 0.45;
+        const mn = (sampleAt(b, 0) / 127) * amp * 0.45;
+        const mx = (sampleAt(b, 1) / 127) * amp * 0.45;
         ctx.fillRect(x, cy - Math.max(mx, 0), bw, Math.max(mx - mn, 1));
+      }
+      ctx.globalAlpha = 1;
+    };
+
+    if (waveMode === "layers" && lanesRef.current) {
+      const lanes = lanesRef.current;
+      const layerViews = view.layers;
+      // Layout: collapsed layers take a thin strip; expanded ones share the
+      // remaining space with a comfortable minimum, scrolling vertically
+      // (⌥+wheel / scrollbar) when it no longer fits.
+      const flags = lanes.map((_, li) => layerViews[li]?.collapsed ?? false);
+      const nCollapsed = flags.filter(Boolean).length;
+      const nExpanded = flags.length - nCollapsed;
+      const expandedH =
+        nExpanded > 0
+          ? Math.max(MIN_LANE_H, (area - nCollapsed * COLLAPSED_H) / nExpanded)
+          : 0;
+      contentH.current = nCollapsed * COLLAPSED_H + nExpanded * expandedH;
+      maxScroll.current = Math.max(0, contentH.current - area);
+      scrollY.current = Math.min(Math.max(scrollY.current, 0), maxScroll.current);
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, RULER_H, w, area);
+      ctx.clip();
+      ctx.font = "600 10px ui-monospace, Menlo, Consolas, monospace";
+      labelRects.current = [];
+      let laneTop = RULER_H - scrollY.current;
+      for (let li = 0; li < lanes.length; li++) {
+        const collapsed = flags[li];
+        const laneH = collapsed ? COLLAPSED_H : expandedH;
+        const top = laneTop;
+        laneTop += laneH;
+        if (top + laneH < RULER_H || top > h) continue;
+        if (li > 0) {
+          ctx.strokeStyle = css("--line-soft");
+          ctx.beginPath();
+          ctx.moveTo(0, Math.round(top) + 0.5);
+          ctx.lineTo(w, Math.round(top) + 0.5);
+          ctx.stroke();
+        }
+        const muted = layerViews[li]?.muted ?? false;
+        const chCount = Math.max(lanes[li].channels.length, 1);
+        if (collapsed) {
+          ctx.fillStyle = css("--bg-deep");
+          ctx.globalAlpha = 0.5;
+          ctx.fillRect(0, top, w, laneH);
+          ctx.globalAlpha = 1;
+          drawLane(lanes[li], "mono", top + laneH / 2, laneH * 0.34, 0, true);
+        } else {
+          // Each layer shows its REAL channels: stereo files get two
+          // sub-lanes (L/R, usual channel colors), mono files a single one.
+          const subH = laneH / chCount;
+          for (let c = 0; c < chCount; c++) {
+            const scy = top + subH * (c + 0.5);
+            ctx.strokeStyle = centerColor;
+            ctx.beginPath();
+            ctx.moveTo(0, Math.round(scy) + 0.5);
+            ctx.lineTo(w, Math.round(scy) + 0.5);
+            ctx.stroke();
+            drawLane(lanes[li], c, scy, subH * 0.42, c, muted);
+          }
+        }
+        // Clickable lane label: accent chevron + high-contrast file name
+        // + dimmer meta (layout, muted), on a solid bordered chip.
+        const name = layerViews[li]?.name ?? `Layer ${li + 1}`;
+        const layout = chCount === 1 ? "mono" : chCount === 2 ? "stereo" : `${chCount} ch`;
+        const chevron = collapsed ? "▸" : "▾";
+        const meta = ` · ${layout}${muted ? " · muted" : ""}`;
+        ctx.font = "700 11px ui-monospace, Menlo, Consolas, monospace";
+        const chevronW = ctx.measureText(chevron).width;
+        const nameW = ctx.measureText(name).width;
+        ctx.font = "600 10px ui-monospace, Menlo, Consolas, monospace";
+        const metaW = ctx.measureText(meta).width;
+        const chipH = 20;
+        const chipW = chevronW + nameW + metaW + 22;
+        const ly = collapsed ? top + laneH / 2 - chipH / 2 : top + 6;
+        ctx.fillStyle = css("--panel");
+        ctx.strokeStyle = css("--copper-lo");
+        ctx.beginPath();
+        ctx.roundRect(6.5, ly + 0.5, chipW, chipH, 5);
+        ctx.fill();
+        ctx.stroke();
+        ctx.textBaseline = "middle";
+        ctx.font = "700 11px ui-monospace, Menlo, Consolas, monospace";
+        ctx.fillStyle = css("--copper-hi");
+        ctx.fillText(chevron, 13, ly + chipH / 2 + 1);
+        ctx.fillStyle = css("--text");
+        ctx.fillText(name, 13 + chevronW + 5, ly + chipH / 2 + 1);
+        ctx.font = "600 10px ui-monospace, Menlo, Consolas, monospace";
+        ctx.fillStyle = css("--text-2");
+        ctx.fillText(meta, 13 + chevronW + 5 + nameW, ly + chipH / 2 + 1);
+        if (layerViews[li]) {
+          labelRects.current.push({
+            x: 6,
+            y: ly,
+            w: chipW + 1,
+            h: chipH,
+            id: layerViews[li].id,
+            collapsed,
+          });
+        }
+      }
+      ctx.restore();
+
+      // Thin scrollbar when the lanes overflow.
+      if (maxScroll.current > 0) {
+        const trackH = area - 4;
+        const thumbH = Math.max(24, (area / contentH.current) * trackH);
+        const thumbY =
+          RULER_H + 2 + (scrollY.current / maxScroll.current) * (trackH - thumbH);
+        ctx.fillStyle = css("--line");
+        ctx.globalAlpha = 0.5;
+        ctx.fillRect(w - SCROLLBAR_W - 2, RULER_H + 2, SCROLLBAR_W, trackH);
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = css("--copper-lo");
+        ctx.beginPath();
+        ctx.roundRect(w - SCROLLBAR_W - 2, thumbY, SCROLLBAR_W, thumbH, 3);
+        ctx.fill();
+      }
+    } else {
+      const slice = sliceRef.current;
+      const chCount = slice?.channels.length ?? view.audio.channels;
+      const laneH = area / chCount;
+      const amp = laneH * 0.42;
+      for (let c = 0; c < chCount; c++) {
+        const cy = RULER_H + laneH * (c + 0.5);
+        ctx.strokeStyle = centerColor;
+        ctx.beginPath();
+        ctx.moveTo(0, Math.round(cy) + 0.5);
+        ctx.lineTo(w, Math.round(cy) + 0.5);
+        ctx.stroke();
+        if (slice?.channels[c]) {
+          drawLane(slice, c, cy, amp, c, false);
+        }
       }
     }
 
@@ -296,7 +452,10 @@ export function Waveform(p: Props) {
       ctx.restore();
     }
 
-    // Silence-detection proposals (ghost regions).
+    // Silence-detection proposals (ghost regions). Candidates rejected by
+    // the minimum-length filter stay barely visible so raising/lowering the
+    // threshold gives immediate feedback.
+    const { ignoredProposals } = propsRef.current;
     if (proposals) {
       ctx.save();
       ctx.strokeStyle = css("--copper");
@@ -309,6 +468,19 @@ export function Waveform(p: Props) {
         ctx.fillStyle = css("--copper");
         ctx.fillRect(Math.max(x0, 0), RULER_H, Math.min(x1, w) - Math.max(x0, 0), area);
         ctx.globalAlpha = 0.6;
+        ctx.strokeRect(Math.max(x0, 0) + 0.5, RULER_H + 1.5, Math.min(x1, w) - Math.max(x0, 0) - 1, area - 3);
+      }
+      ctx.restore();
+    }
+    if (ignoredProposals && ignoredProposals.length > 0) {
+      ctx.save();
+      ctx.strokeStyle = css("--text-3");
+      ctx.setLineDash([2, 4]);
+      ctx.globalAlpha = 0.35;
+      for (const r of ignoredProposals) {
+        const x0 = sampleToX(r.start, vp);
+        const x1 = sampleToX(r.end, vp);
+        if (x1 < 0 || x0 > w) continue;
         ctx.strokeRect(Math.max(x0, 0) + 0.5, RULER_H + 1.5, Math.min(x1, w) - Math.max(x0, 0) - 1, area - 3);
       }
       ctx.restore();
@@ -440,41 +612,65 @@ export function Waveform(p: Props) {
     }
   }, []);
 
-  // Resize observer.
+  // Resize observer. Bump sizeTick so the peaks fetch runs again for the
+  // new width (e.g. when the side panel collapses and the canvas widens).
+  const [sizeTick, setSizeTick] = useState(0);
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
     const ro = new ResizeObserver(() => {
       const r = el.getBoundingClientRect();
+      const changed = Math.abs(sizeRef.current.w - r.width) >= 1;
       sizeRef.current = { w: r.width, h: r.height };
       propsRef.current.onWidthChange(r.width);
       draw();
+      if (changed) setSizeTick((t) => t + 1);
     });
     ro.observe(el);
     return () => ro.disconnect();
   }, [draw]);
 
-  // Fetch peaks whenever the visible window changes.
+  // Fetch peaks whenever the visible window, the layer mix, the per-track
+  // overrides or the view mode change (the backend applies all gains).
+  const mixKey =
+    p.view.layers.map((l) => `${l.id}:${l.gain_db}:${l.muted}`).join(",") +
+    "|" +
+    p.view.tracks
+      .map((t) => `${t.id}@${t.start_sample}-${t.end_sample}:${JSON.stringify(t.gain_overrides)}`)
+      .join(",");
   useEffect(() => {
     const w = sizeRef.current.w || 1000;
     const start = Math.floor(p.viewport.start);
     const end = Math.ceil(p.viewport.start + w * p.viewport.spp);
     const seq = ++fetchSeq.current;
-    api
-      .getPeaks(start, end, Math.max(Math.round(w), 100))
-      .then((slice) => {
-        if (seq === fetchSeq.current) {
-          sliceRef.current = slice;
-          draw();
-        }
-      })
-      .catch(() => {});
-  }, [p.viewport.start, p.viewport.spp, p.view.audio.path, p.view.audio.duration_samples, draw]);
+    const buckets = Math.max(Math.round(w), 100);
+    if (p.waveMode === "layers") {
+      api
+        .getPeaksSplit(start, end, buckets)
+        .then((lanes) => {
+          if (seq === fetchSeq.current) {
+            lanesRef.current = lanes;
+            draw();
+          }
+        })
+        .catch(() => {});
+    } else {
+      api
+        .getPeaks(start, end, buckets)
+        .then((slice) => {
+          if (seq === fetchSeq.current) {
+            sliceRef.current = slice;
+            draw();
+          }
+        })
+        .catch(() => {});
+    }
+  }, [p.viewport.start, p.viewport.spp, p.view.audio.path, p.view.audio.duration_samples, mixKey, p.waveMode, sizeTick, draw]);
 
   // Redraw on any relevant prop change.
   useEffect(() => {
     draw();
-  }, [p.view, p.viewport, p.playheadSample, p.proposals, p.selection, p.pendingStart, p.selectedTrack, draw]);
+  }, [p.view, p.viewport, p.playheadSample, p.waveMode, p.proposals, p.ignoredProposals, p.selection, p.pendingStart, p.selectedTrack, draw]);
 
   // Auto-follow the playhead past the right edge.
   useEffect(() => {
@@ -517,6 +713,20 @@ export function Waveform(p: Props) {
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      // ⌥ + wheel = vertical navigation of the Layers view; plain wheel and
+      // pinch keep their usual time-zoom behavior.
+      if (
+        e.altKey &&
+        propsRef.current.waveMode === "layers" &&
+        maxScroll.current > 0
+      ) {
+        scrollY.current = Math.min(
+          Math.max(scrollY.current + e.deltaY, 0),
+          maxScroll.current
+        );
+        draw();
+        return;
+      }
       const { view, viewport, onViewportChange } = propsRef.current;
       const rect = el.getBoundingClientRect();
       const x = e.clientX - rect.left;
@@ -554,7 +764,23 @@ export function Waveform(p: Props) {
       className="waveform-wrap"
       onPointerDown={(e) => {
         if (e.button !== 0) return;
-        const { x } = toLocal(e);
+        const { x, y } = toLocal(e);
+        if (propsRef.current.waveMode === "layers") {
+          // Lane label chevron: collapse/expand this layer.
+          const hit = labelRects.current.find(
+            (r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h
+          );
+          if (hit) {
+            propsRef.current.onToggleLayerCollapsed(hit.id, !hit.collapsed);
+            return;
+          }
+          // Thin scrollbar drag.
+          if (maxScroll.current > 0 && x >= sizeRef.current.w - SCROLLBAR_W - 6) {
+            scrollbarDrag.current = { startY: y, startScroll: scrollY.current };
+            (e.target as HTMLElement).setPointerCapture(e.pointerId);
+            return;
+          }
+        }
         const edge = edgeAt(x);
         if (edge) {
           drag.current = { type: "edge", id: edge.id, edge: edge.edge, pos: edge.sample, moved: false };
@@ -567,7 +793,21 @@ export function Waveform(p: Props) {
         draw();
       }}
       onPointerMove={(e) => {
-        const { x } = toLocal(e);
+        const { x, y } = toLocal(e);
+        if (scrollbarDrag.current) {
+          const area = sizeRef.current.h - RULER_H;
+          const ratio = contentH.current / Math.max(area, 1);
+          scrollY.current = Math.min(
+            Math.max(
+              scrollbarDrag.current.startScroll +
+                (y - scrollbarDrag.current.startY) * ratio,
+              0
+            ),
+            maxScroll.current
+          );
+          draw();
+          return;
+        }
         const d = drag.current;
         if (d?.type === "edge") {
           d.pos = clampSample(xToSample(x, propsRef.current.viewport));
@@ -595,6 +835,10 @@ export function Waveform(p: Props) {
         wrapRef.current!.style.cursor = edge ? "ew-resize" : "default";
       }}
       onPointerUp={(e) => {
+        if (scrollbarDrag.current) {
+          scrollbarDrag.current = null;
+          return;
+        }
         const { x } = toLocal(e);
         const d = drag.current;
         drag.current = null;

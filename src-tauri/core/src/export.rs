@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -10,7 +11,17 @@ use ts_rs::TS;
 use crate::audio::{clip_segments, ClipInfo};
 use crate::error::{Result, StillError};
 use crate::naming::render_track_filename;
-use crate::project::{ExportConfig, ExportFormat, TrackInfo};
+use crate::project::{db_to_linear, ExportConfig, ExportFormat, TrackInfo};
+
+/// What the mixer needs to know about one layer at export time.
+#[derive(Debug, Clone)]
+pub struct LayerMix {
+    /// Layer id (matched against per-track gain overrides).
+    pub id: u32,
+    pub clips: Vec<ClipInfo>,
+    pub gain_db: f32,
+    pub muted: bool,
+}
 
 /// One file to produce. `out_path` is already unique (collisions resolved by
 /// suffixing — existing files are never overwritten, SPEC §3 bis).
@@ -21,6 +32,8 @@ pub struct ExportJob {
     pub start_sample: u64,
     pub end_sample: u64,
     pub out_path: PathBuf,
+    /// Per-track layer gain overrides (dB), keyed by layer id (string).
+    pub gain_overrides: HashMap<String, f32>,
 }
 
 /// Progress event for ONE track. Exports run in parallel, so several tracks
@@ -98,6 +111,7 @@ pub fn plan_export(
             start_sample: t.start_sample,
             end_sample: t.end_sample,
             out_path: candidate,
+            gain_overrides: t.gain_overrides.clone(),
         });
     }
     Ok(jobs)
@@ -149,7 +163,8 @@ pub fn export_concurrency(job_count: usize, available_cores: usize) -> usize {
 /// ever read; each job writes a brand-new file.
 pub fn run_export(
     ffmpeg: &Path,
-    clips: &[ClipInfo],
+    layers: &[LayerMix],
+    session_channels: u16,
     sample_rate: u32,
     jobs: &[ExportJob],
     cfg: &ExportConfig,
@@ -201,9 +216,16 @@ pub fn run_export(
                 }
                 let job = &jobs[i];
                 emit(i, 0.0);
-                match export_one(ffmpeg, clips, sample_rate, job, cfg, cancel, |p| {
-                    emit(i, p)
-                }) {
+                match export_one(
+                    ffmpeg,
+                    layers,
+                    session_channels,
+                    sample_rate,
+                    job,
+                    cfg,
+                    cancel,
+                    |p| emit(i, p),
+                ) {
                     Ok(()) => {
                         files.lock().unwrap().push((
                             i,
@@ -243,27 +265,44 @@ pub fn run_export(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn export_one(
     ffmpeg: &Path,
-    clips: &[ClipInfo],
+    layers: &[LayerMix],
+    session_channels: u16,
     sample_rate: u32,
     job: &ExportJob,
     cfg: &ExportConfig,
     cancel: &AtomicBool,
     mut on_progress: impl FnMut(f32),
 ) -> Result<()> {
-    // Map the timeline region onto the clip files it covers. A track fully
-    // inside one clip is a single trim; a track crossing clip boundaries is
-    // trimmed per clip and joined with the concat filter — still
-    // sample-accurate. atrim keeps the original timestamps of the kept
-    // samples; without asetpts the container records a huge start offset and
-    // players render it as leading silence, so PTS are always reset to 0.
-    let segments = clip_segments(clips, job.start_sample, job.end_sample);
-    if segments.is_empty() {
+    // For every audible layer, map the timeline region onto the clip files it
+    // covers; each layer is trimmed sample-accurately (concat across clip
+    // boundaries), gain-adjusted, then all layers are summed with amix
+    // (normalize=0 → plain weighted sum, exactly the mix the user dialed in).
+    // atrim keeps original timestamps; asetpts resets them so tracks start
+    // at t = 0 (otherwise players show leading silence).
+    // A track may override individual layer gains; otherwise the layer's
+    // session-wide gain applies.
+    let effective_gain = |l: &LayerMix| -> f32 {
+        job.gain_overrides
+            .get(&l.id.to_string())
+            .copied()
+            .unwrap_or(l.gain_db)
+    };
+    let active: Vec<(&LayerMix, f32, Vec<(usize, u64, u64)>)> = layers
+        .iter()
+        .map(|l| (l, effective_gain(l)))
+        .filter(|(l, g)| !l.muted && db_to_linear(*g) > 0.0)
+        .map(|(l, g)| (l, g, clip_segments(&l.clips, job.start_sample, job.end_sample)))
+        .filter(|(_, _, segs)| !segs.is_empty())
+        .collect();
+    if active.is_empty() {
         return Err(StillError::Ffmpeg(
-            "the track region covers no audio".into(),
+            "the track region covers no audible audio (are all layers muted?)".into(),
         ));
     }
+
     let mut cmd = Command::new(ffmpeg);
     cmd.arg("-hide_banner")
         .arg("-nostdin")
@@ -271,26 +310,70 @@ fn export_one(
         .arg("error")
         .arg("-progress")
         .arg("pipe:1");
-    for (clip_idx, _, _) in &segments {
-        cmd.arg("-i").arg(&clips[*clip_idx].path);
+    for (layer, _, segs) in &active {
+        for (clip_idx, _, _) in segs {
+            cmd.arg("-i").arg(&layer.clips[*clip_idx].path);
+        }
     }
-    if segments.len() == 1 {
-        let (_, s, e) = segments[0];
+
+    let single_plain = active.len() == 1 && active[0].2.len() == 1 && active[0].1 == 0.0;
+    if single_plain {
+        let (_, s, e) = active[0].2[0];
         cmd.arg("-map").arg("0:a:0").arg("-af").arg(format!(
             "atrim=start_sample={s}:end_sample={e},asetpts=PTS-STARTPTS"
         ));
     } else {
+        let layout = if session_channels >= 2 { "stereo" } else { "mono" };
         let mut filter = String::new();
-        for (i, (_, s, e)) in segments.iter().enumerate() {
+        let mut input_idx = 0usize;
+        let mut layer_labels: Vec<String> = Vec::new();
+        for (li, (_, gain_db, segs)) in active.iter().enumerate() {
+            let mut seg_labels: Vec<String> = Vec::new();
+            for (k, (_, s, e)) in segs.iter().enumerate() {
+                let label = format!("t{li}x{k}");
+                filter.push_str(&format!(
+                    "[{input_idx}:a:0]atrim=start_sample={s}:end_sample={e},asetpts=PTS-STARTPTS[{label}];"
+                ));
+                seg_labels.push(label);
+                input_idx += 1;
+            }
+            let joined = if seg_labels.len() > 1 {
+                let label = format!("c{li}");
+                for l in &seg_labels {
+                    filter.push_str(&format!("[{l}]"));
+                }
+                filter.push_str(&format!(
+                    "concat=n={}:v=0:a=1[{label}];",
+                    seg_labels.len()
+                ));
+                label
+            } else {
+                seg_labels.remove(0)
+            };
+            let out = format!("l{li}");
             filter.push_str(&format!(
-                "[{i}:a:0]atrim=start_sample={s}:end_sample={e},asetpts=PTS-STARTPTS[s{i}];"
+                "[{joined}]aformat=sample_fmts=fltp:channel_layouts={layout},volume={gain_db}dB[{out}];"
             ));
+            layer_labels.push(out);
         }
-        for i in 0..segments.len() {
-            filter.push_str(&format!("[s{i}]"));
-        }
-        filter.push_str(&format!("concat=n={}:v=0:a=1[out]", segments.len()));
-        cmd.arg("-filter_complex").arg(&filter).arg("-map").arg("[out]");
+        let final_label = if layer_labels.len() > 1 {
+            for l in &layer_labels {
+                filter.push_str(&format!("[{l}]"));
+            }
+            filter.push_str(&format!(
+                "amix=inputs={}:normalize=0[mix];",
+                layer_labels.len()
+            ));
+            "mix".to_string()
+        } else {
+            layer_labels.remove(0)
+        };
+        // Drop the trailing semicolon.
+        filter.pop();
+        cmd.arg("-filter_complex")
+            .arg(&filter)
+            .arg("-map")
+            .arg(format!("[{final_label}]"));
     }
     cmd.args(codec_args(cfg))
         .arg(&job.out_path)
@@ -367,6 +450,7 @@ mod tests {
             start_sample: start,
             end_sample: end,
             duration_seconds: (end - start) as f64 / 44_100.0,
+            gain_overrides: HashMap::new(),
         }
     }
 

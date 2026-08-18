@@ -22,7 +22,7 @@ export function EmptyState({ onOpen }: Props) {
           );
         })}
       </svg>
-      <h1>Drop an audio file here</h1>
+      <h1>Drop your audio files here</h1>
       <div className="sub">or press Open — WAV, FLAC, MP3, AIFF · or a .still project</div>
       <button className="btn btn-primary" onClick={onOpen}>
         Open a file…

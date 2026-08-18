@@ -21,8 +21,17 @@ pub struct PlaybackState {
 /// One playable clip: file path + duration in seconds.
 type Playlist = Vec<(PathBuf, f64)>;
 
+/// One layer to play: its sequential clips and its current linear volume
+/// (already includes gain and mute).
+#[derive(Debug, Clone)]
+pub struct LayerPlay {
+    pub playlist: Playlist,
+    pub volume: f32,
+}
+
 enum Cmd {
-    Load(Playlist, f64),
+    Load(Vec<LayerPlay>, f64),
+    SetVolume(usize, f32),
     Pause,
     Resume,
     Seek(f64),
@@ -42,6 +51,8 @@ struct Shared {
 /// Handle to the audio playback thread. The rodio output stream is not `Send`,
 /// so a dedicated thread owns it and receives commands over a channel; the
 /// playhead position is derived from a shared clock without round-trips.
+/// Layers play through one sink each (all sharing the output stream), started
+/// together and re-synced on every seek.
 pub struct PlayerHandle {
     tx: Mutex<Sender<Cmd>>,
     shared: Arc<Mutex<Shared>>,
@@ -70,10 +81,14 @@ impl PlayerHandle {
             .map_err(|_| StillError::Playback("playback thread is not running".into()))
     }
 
-    /// Attach a new ordered list of source clips (read-only) forming one
-    /// continuous timeline, and reset the position.
-    pub fn load(&self, clips: Vec<(PathBuf, f64)>, total_seconds: f64) -> Result<()> {
-        self.send(Cmd::Load(clips, total_seconds))
+    /// Attach the session's layers (read-only files) and reset the position.
+    pub fn load(&self, layers: Vec<LayerPlay>, total_seconds: f64) -> Result<()> {
+        self.send(Cmd::Load(layers, total_seconds))
+    }
+
+    /// Live volume change for one layer (no rebuild, applies immediately).
+    pub fn set_volume(&self, layer_index: usize, volume: f32) -> Result<()> {
+        self.send(Cmd::SetVolume(layer_index, volume.max(0.0)))
     }
 
     pub fn play(&self) -> Result<()> {
@@ -132,47 +147,57 @@ fn audio_thread(rx: Receiver<Cmd>, shared: Arc<Mutex<Shared>>) {
         }
     };
 
-    let mut sink: Option<rodio::Sink> = None;
-    let mut playlist: Playlist = Vec::new();
+    let mut sinks: Vec<rodio::Sink> = Vec::new();
+    let mut layers: Vec<LayerPlay> = Vec::new();
 
-    // Build a sink queueing the clip containing `from` (seeked locally) and
-    // every following clip — rodio plays queued sources back-to-back, which
-    // gives us continuous playback across clip boundaries.
-    let make_sink = |playlist: &Playlist, from: f64| -> std::result::Result<rodio::Sink, String> {
-        let sink = rodio::Sink::try_new(&handle).map_err(|e| e.to_string())?;
-        // A fresh sink starts in the playing state: pause it BEFORE queueing
-        // any decoder, otherwise a few ms leak out audibly when seeking while
-        // paused. Callers explicitly play() when playback should continue.
-        sink.pause();
-        let mut cursor = 0.0f64;
-        let mut started = false;
-        for (path, dur) in playlist {
-            if !started && from >= cursor + dur {
-                cursor += dur;
-                continue;
-            }
-            let file = File::open(path).map_err(|e| e.to_string())?;
-            let decoder =
-                rodio::Decoder::new(BufReader::new(file)).map_err(|e| e.to_string())?;
-            sink.append(decoder);
-            if !started {
-                let local = (from - cursor).max(0.0);
-                if local > 0.0 {
-                    let _ = sink.try_seek(Duration::from_secs_f64(local));
+    // Build one PAUSED sink per layer, each queueing the clip containing
+    // `from` (seeked locally) plus every following clip. Pausing before
+    // queueing avoids audible leaks when seeking while stopped; all sinks
+    // are then started together for layer sync.
+    let make_sinks =
+        |layers: &[LayerPlay], from: f64| -> std::result::Result<Vec<rodio::Sink>, String> {
+            let mut out = Vec::with_capacity(layers.len());
+            for layer in layers {
+                let sink = rodio::Sink::try_new(&handle).map_err(|e| e.to_string())?;
+                sink.pause();
+                sink.set_volume(layer.volume);
+                let mut cursor = 0.0f64;
+                let mut started = false;
+                for (path, dur) in &layer.playlist {
+                    if !started && from >= cursor + dur {
+                        cursor += dur;
+                        continue;
+                    }
+                    let file = File::open(path).map_err(|e| e.to_string())?;
+                    let decoder =
+                        rodio::Decoder::new(BufReader::new(file)).map_err(|e| e.to_string())?;
+                    sink.append(decoder);
+                    if !started {
+                        let local = (from - cursor).max(0.0);
+                        if local > 0.0 {
+                            let _ = sink.try_seek(Duration::from_secs_f64(local));
+                        }
+                        started = true;
+                    }
                 }
-                started = true;
+                // A layer shorter than `from` yields an empty sink: fine, it
+                // just keeps indices aligned for live volume changes.
+                out.push(sink);
             }
+            Ok(out)
+        };
+
+    let stop_all = |sinks: &mut Vec<rodio::Sink>| {
+        for s in sinks.drain(..) {
+            s.stop();
         }
-        Ok(sink)
     };
 
     loop {
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Cmd::Load(list, duration)) => {
-                if let Some(s) = sink.take() {
-                    s.stop();
-                }
-                playlist = list;
+                stop_all(&mut sinks);
+                layers = list;
                 let mut sh = shared.lock().unwrap();
                 sh.loaded = true;
                 sh.playing = false;
@@ -180,6 +205,14 @@ fn audio_thread(rx: Receiver<Cmd>, shared: Arc<Mutex<Shared>>) {
                 sh.started = None;
                 sh.duration = duration;
                 sh.error = None;
+            }
+            Ok(Cmd::SetVolume(idx, vol)) => {
+                if let Some(l) = layers.get_mut(idx) {
+                    l.volume = vol;
+                }
+                if let Some(s) = sinks.get(idx) {
+                    s.set_volume(vol);
+                }
             }
             Ok(Cmd::Seek(pos)) => {
                 let was_playing = shared.lock().unwrap().playing;
@@ -191,34 +224,33 @@ fn audio_thread(rx: Receiver<Cmd>, shared: Arc<Mutex<Shared>>) {
                         pos
                     }
                 };
-                // Always rebuild the queue: a seek may land in another clip.
-                let mut seek_ok = false;
-                if !playlist.is_empty() {
-                    match make_sink(&playlist, target) {
-                        Ok(s) => {
+                // Always rebuild the queues: a seek may land in another clip,
+                // and rebuilding re-syncs the layers.
+                if !layers.is_empty() {
+                    match make_sinks(&layers, target) {
+                        Ok(new_sinks) => {
+                            stop_all(&mut sinks);
+                            sinks = new_sinks;
                             if was_playing {
-                                s.play();
+                                for s in &sinks {
+                                    s.play();
+                                }
                             }
-                            if let Some(old) = sink.replace(s) {
-                                old.stop();
-                            }
-                            seek_ok = true;
+                            let mut sh = shared.lock().unwrap();
+                            sh.base_secs = target;
+                            sh.started =
+                                if sh.playing { Some(Instant::now()) } else { None };
                         }
                         Err(e) => {
                             shared.lock().unwrap().error = Some(e);
                         }
                     }
                 }
-                if seek_ok {
-                    let mut sh = shared.lock().unwrap();
-                    sh.base_secs = target;
-                    sh.started = if sh.playing { Some(Instant::now()) } else { None };
-                }
             }
             Ok(Cmd::Pause) => {
                 let mut sh = shared.lock().unwrap();
                 let pos = current_pos(&sh);
-                if let Some(s) = &sink {
+                for s in &sinks {
                     s.pause();
                 }
                 sh.base_secs = pos;
@@ -235,18 +267,19 @@ fn audio_thread(rx: Receiver<Cmd>, shared: Arc<Mutex<Shared>>) {
                 }
                 let base = if dur > 0.0 && base >= dur { 0.0 } else { base };
                 let mut ok = false;
-                if let Some(s) = &sink {
-                    if !s.empty() {
+                if sinks.iter().any(|s| !s.empty()) {
+                    for s in &sinks {
                         s.play();
-                        ok = true;
                     }
+                    ok = true;
                 }
-                if !ok && !playlist.is_empty() {
-                    match make_sink(&playlist, base) {
-                        Ok(s) => {
-                            s.play();
-                            if let Some(old) = sink.replace(s) {
-                                old.stop();
+                if !ok && !layers.is_empty() {
+                    match make_sinks(&layers, base) {
+                        Ok(new_sinks) => {
+                            stop_all(&mut sinks);
+                            sinks = new_sinks;
+                            for s in &sinks {
+                                s.play();
                             }
                             ok = true;
                         }
@@ -263,17 +296,15 @@ fn audio_thread(rx: Receiver<Cmd>, shared: Arc<Mutex<Shared>>) {
                 }
             }
             Ok(Cmd::Stop) => {
-                if let Some(s) = sink.take() {
-                    s.stop();
-                }
+                stop_all(&mut sinks);
                 let mut sh = shared.lock().unwrap();
                 sh.playing = false;
                 sh.base_secs = 0.0;
                 sh.started = None;
             }
             Err(RecvTimeoutError::Timeout) => {
-                // Detect natural end of playback.
-                let ended = sink.as_ref().is_some_and(|s| s.empty());
+                // Detect natural end of playback: every layer drained.
+                let ended = !sinks.is_empty() && sinks.iter().all(|s| s.empty());
                 if ended {
                     let mut sh = shared.lock().unwrap();
                     if sh.playing {
