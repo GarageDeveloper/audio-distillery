@@ -633,10 +633,15 @@ export function Waveform(p: Props) {
   // Fetch peaks whenever the visible window, the layer mix, the per-track
   // overrides or the view mode change (the backend applies all gains).
   const mixKey =
-    p.view.layers.map((l) => `${l.id}:${l.gain_db}:${l.muted}`).join(",") +
+    p.view.layers
+      .map((l) => `${l.id}:${l.gain_db}:${l.muted}:${l.solo}`)
+      .join(",") +
     "|" +
     p.view.tracks
-      .map((t) => `${t.id}@${t.start_sample}-${t.end_sample}:${JSON.stringify(t.gain_overrides)}`)
+      .map(
+        (t) =>
+          `${t.id}@${t.start_sample}-${t.end_sample}:${JSON.stringify(t.gain_overrides)}${JSON.stringify(t.mute_overrides)}${JSON.stringify(t.solo_overrides)}`
+      )
       .join(",");
   useEffect(() => {
     const w = sizeRef.current.w || 1000;

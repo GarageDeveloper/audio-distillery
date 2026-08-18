@@ -18,10 +18,7 @@ fn mix_of(state: &ProjectState) -> Vec<LayerMix> {
         .layers
         .iter()
         .map(|l| LayerMix {
-            id: 1,
             clips: l.clips.clone(),
-            gain_db: 0.0,
-            muted: false,
         })
         .collect()
 }
@@ -374,11 +371,8 @@ fn multitrack_layers_mix_at_export() {
             .layers
             .iter()
             .zip(state.info.layers.iter())
-            .map(|(l, scanned)| LayerMix {
-                id: l.id,
+            .map(|(_, scanned)| LayerMix {
                 clips: scanned.clips.clone(),
-                gain_db: l.gain_db,
-                muted: l.muted,
             })
             .collect()
     };
@@ -472,15 +466,12 @@ fn export_report_carries_errors_not_panics() {
     let jobs = plan_export(&state.tracks(), &cfg, &wav).unwrap();
     // Point ffmpeg at a nonexistent source clip: errors must be reported.
     let bad_layers = vec![LayerMix {
-        id: 1,
         clips: vec![still_core::ClipInfo {
             path: "/nonexistent/audio.wav".into(),
             name: "audio.wav".into(),
             start_sample: 0,
             duration_samples: SR as u64,
         }],
-        gain_db: 0.0,
-        muted: false,
     }];
     let cancel = AtomicBool::new(false);
     let report = run_export(&ffmpeg, &bad_layers, 2, SR, &jobs, &cfg, &cancel, |_| {});

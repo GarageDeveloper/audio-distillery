@@ -775,3 +775,14 @@ kbd {
 
 .layer-chevron { width: 16px; color: var(--text-3); font-size: 10px; }
 .layer-chevron:hover { color: var(--copper-hi); }
+
+/* Solo buttons + per-track M/S override markers */
+.layer-solo {
+  width: 20px; height: 20px;
+  border-radius: var(--r-s);
+  border: 1px solid var(--line);
+  font-size: 10px; font-weight: 700;
+  color: var(--text-3);
+}
+.layer-solo.on { background: var(--copper); color: var(--text-on-accent); border-color: var(--copper-lo); }
+.track-mix-top .layer-mute.ov, .track-mix-top .layer-solo.ov { box-shadow: 0 0 0 2px var(--copper-dim); border-color: var(--copper-lo); }

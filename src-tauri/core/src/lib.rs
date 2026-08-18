@@ -26,7 +26,7 @@ pub use export::{
 };
 pub use ffmpeg::resolve_ffmpeg;
 pub use peaks::{merged_base_pyramid, merged_query, PeakPyramid, PeakSlice};
-pub use playback::{LayerPlay, PlaybackState, PlayerHandle};
+pub use playback::{LayerPlay, PlaybackState, PlayerHandle, VolumeAutomation};
 pub use project::{
     db_to_linear, read_project, sanitize_regions, save_project, ExportConfig, ExportFormat,
     Layer, LayerView, Project, ProjectState, ProjectView, RegionEdge, RegionSpan, TrackInfo,

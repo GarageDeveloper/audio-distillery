@@ -20,11 +20,17 @@ export const api = {
     invoke<ProjectView>("set_layer_gain", { id, gainDb }),
   setLayerMuted: (id: number, muted: boolean) =>
     invoke<ProjectView>("set_layer_muted", { id, muted }),
+  setLayerSolo: (id: number, solo: boolean) =>
+    invoke<ProjectView>("set_layer_solo", { id, solo }),
   removeLayer: (id: number) => invoke<ProjectView>("remove_layer", { id }),
   setLayerCollapsed: (id: number, collapsed: boolean) =>
     invoke<ProjectView>("set_layer_collapsed", { id, collapsed }),
   setTrackLayerGain: (trackId: number, layerId: number, gainDb: number | null) =>
     invoke<ProjectView>("set_track_layer_gain", { trackId, layerId, gainDb }),
+  setTrackLayerMute: (trackId: number, layerId: number, muted: boolean | null) =>
+    invoke<ProjectView>("set_track_layer_mute", { trackId, layerId, muted }),
+  setTrackLayerSolo: (trackId: number, layerId: number, solo: boolean | null) =>
+    invoke<ProjectView>("set_track_layer_solo", { trackId, layerId, solo }),
   loadProject: (path: string) => invoke<ProjectView>("load_project", { path }),
   cancelLoad: () => invoke<void>("cancel_load"),
   saveProject: (path?: string) =>

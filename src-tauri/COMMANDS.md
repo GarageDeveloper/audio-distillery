@@ -18,8 +18,11 @@ Shared types are generated from Rust with `ts-rs` into `src/types/` (run
 | `add_layers` | `paths: string[]` | `ProjectView` (each file = one new synced layer) | same as `load_audio`, no audio loaded |
 | `set_layer_gain` | `id: number`, `gainDb: number` | `ProjectView` (clamped to [-60, +12] dB; -60 = -∞; applies live to playback) | unknown layer |
 | `set_layer_muted` | `id: number`, `muted: boolean` | `ProjectView` (applies live to playback) | unknown layer |
+| `set_layer_solo` | `id: number`, `solo: boolean` | `ProjectView` (when any layer is soloed, only soloed layers are audible; solo wins over mute) | unknown layer |
 | `set_layer_collapsed` | `id: number`, `collapsed: boolean` | `ProjectView` (display preference for the Layers waveform view, persisted in the project) | unknown layer |
-| `set_track_layer_gain` | `trackId: number`, `layerId: number`, `gainDb: number \| null` | `ProjectView` (per-track override of one layer's gain, applied at export; null clears it; undoable) | unknown track/layer |
+| `set_track_layer_gain` | `trackId: number`, `layerId: number`, `gainDb: number \| null` | `ProjectView` (per-track override of one layer's gain; null clears it; undoable) | unknown track/layer |
+| `set_track_layer_mute` | `trackId`, `layerId`, `muted: boolean \| null` | `ProjectView` (per-track mute override; null = follow the session) | unknown track/layer |
+| `set_track_layer_solo` | `trackId`, `layerId`, `solo: boolean \| null` | `ProjectView` (per-track solo override; null = follow the session) | unknown track/layer |
 | `remove_layer` | `id: number` | `ProjectView` | unknown layer, base layer |
 | `cancel_load` | — | `void` (the pending scan then fails with "Import cancelled"; any previous session stays untouched) | — |
 | `load_project` | `path: string` (.still file) | `ProjectView` | invalid project JSON, newer project version, missing source file |
@@ -117,7 +120,11 @@ always track order, regardless of finish order.
 | `player_state` | — | `PlaybackState` |
 
 The backend owns the playback clock; the frontend polls `player_state` and
-only interpolates between polls for smooth drawing.
+only interpolates between polls for smooth drawing. Playback follows a
+volume AUTOMATION derived from the project: session faders/mutes/solos by
+default, replaced inside each track region by that track's overrides — what
+you hear is always `TrackInfo.layer_volumes`, the same values the export
+uses.
 
 ## Events
 

@@ -21,17 +21,34 @@ pub struct PlaybackState {
 /// One playable clip: file path + duration in seconds.
 type Playlist = Vec<(PathBuf, f64)>;
 
-/// One layer to play: its sequential clips and its current linear volume
-/// (already includes gain and mute).
+/// One layer to play: its sequential clips.
 #[derive(Debug, Clone)]
 pub struct LayerPlay {
     pub playlist: Playlist,
-    pub volume: f32,
+}
+
+/// Timeline volume automation: default linear volume per layer, replaced by
+/// per-span values inside track regions carrying overrides (seconds).
+#[derive(Debug, Clone, Default)]
+pub struct VolumeAutomation {
+    pub default: Vec<f32>,
+    pub spans: Vec<(f64, f64, Vec<f32>)>,
+}
+
+impl VolumeAutomation {
+    fn volumes_at(&self, pos: f64) -> &Vec<f32> {
+        for (s, e, v) in &self.spans {
+            if pos >= *s && pos < *e {
+                return v;
+            }
+        }
+        &self.default
+    }
 }
 
 enum Cmd {
-    Load(Vec<LayerPlay>, f64),
-    SetVolume(usize, f32),
+    Load(Vec<LayerPlay>, f64, VolumeAutomation),
+    SetAutomation(VolumeAutomation),
     Pause,
     Resume,
     Seek(f64),
@@ -82,13 +99,19 @@ impl PlayerHandle {
     }
 
     /// Attach the session's layers (read-only files) and reset the position.
-    pub fn load(&self, layers: Vec<LayerPlay>, total_seconds: f64) -> Result<()> {
-        self.send(Cmd::Load(layers, total_seconds))
+    pub fn load(
+        &self,
+        layers: Vec<LayerPlay>,
+        total_seconds: f64,
+        automation: VolumeAutomation,
+    ) -> Result<()> {
+        self.send(Cmd::Load(layers, total_seconds, automation))
     }
 
-    /// Live volume change for one layer (no rebuild, applies immediately).
-    pub fn set_volume(&self, layer_index: usize, volume: f32) -> Result<()> {
-        self.send(Cmd::SetVolume(layer_index, volume.max(0.0)))
+    /// Replace the volume automation (faders, mutes, solos, per-track
+    /// overrides). Applies immediately and follows the playhead afterwards.
+    pub fn set_automation(&self, automation: VolumeAutomation) -> Result<()> {
+        self.send(Cmd::SetAutomation(automation))
     }
 
     pub fn play(&self) -> Result<()> {
@@ -149,6 +172,8 @@ fn audio_thread(rx: Receiver<Cmd>, shared: Arc<Mutex<Shared>>) {
 
     let mut sinks: Vec<rodio::Sink> = Vec::new();
     let mut layers: Vec<LayerPlay> = Vec::new();
+    let mut automation = VolumeAutomation::default();
+    let mut applied: Vec<f32> = Vec::new();
 
     // Build one PAUSED sink per layer, each queueing the clip containing
     // `from` (seeked locally) plus every following clip. Pausing before
@@ -160,7 +185,6 @@ fn audio_thread(rx: Receiver<Cmd>, shared: Arc<Mutex<Shared>>) {
             for layer in layers {
                 let sink = rodio::Sink::try_new(&handle).map_err(|e| e.to_string())?;
                 sink.pause();
-                sink.set_volume(layer.volume);
                 let mut cursor = 0.0f64;
                 let mut started = false;
                 for (path, dur) in &layer.playlist {
@@ -193,11 +217,26 @@ fn audio_thread(rx: Receiver<Cmd>, shared: Arc<Mutex<Shared>>) {
         }
     };
 
+    // Apply the automation volumes for the given position (skips no-ops).
+    let apply_volumes =
+        |sinks: &[rodio::Sink], automation: &VolumeAutomation, applied: &mut Vec<f32>, pos: f64| {
+            let vols = automation.volumes_at(pos);
+            if applied.as_slice() == vols.as_slice() {
+                return;
+            }
+            for (i, s) in sinks.iter().enumerate() {
+                s.set_volume(vols.get(i).copied().unwrap_or(1.0));
+            }
+            *applied = vols.clone();
+        };
+
     loop {
         match rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Cmd::Load(list, duration)) => {
+            Ok(Cmd::Load(list, duration, auto)) => {
                 stop_all(&mut sinks);
                 layers = list;
+                automation = auto;
+                applied.clear();
                 let mut sh = shared.lock().unwrap();
                 sh.loaded = true;
                 sh.playing = false;
@@ -206,13 +245,11 @@ fn audio_thread(rx: Receiver<Cmd>, shared: Arc<Mutex<Shared>>) {
                 sh.duration = duration;
                 sh.error = None;
             }
-            Ok(Cmd::SetVolume(idx, vol)) => {
-                if let Some(l) = layers.get_mut(idx) {
-                    l.volume = vol;
-                }
-                if let Some(s) = sinks.get(idx) {
-                    s.set_volume(vol);
-                }
+            Ok(Cmd::SetAutomation(auto)) => {
+                automation = auto;
+                applied.clear();
+                let pos = current_pos(&shared.lock().unwrap());
+                apply_volumes(&sinks, &automation, &mut applied, pos);
             }
             Ok(Cmd::Seek(pos)) => {
                 let was_playing = shared.lock().unwrap().playing;
@@ -231,6 +268,8 @@ fn audio_thread(rx: Receiver<Cmd>, shared: Arc<Mutex<Shared>>) {
                         Ok(new_sinks) => {
                             stop_all(&mut sinks);
                             sinks = new_sinks;
+                            applied.clear();
+                            apply_volumes(&sinks, &automation, &mut applied, target);
                             if was_playing {
                                 for s in &sinks {
                                     s.play();
@@ -278,6 +317,8 @@ fn audio_thread(rx: Receiver<Cmd>, shared: Arc<Mutex<Shared>>) {
                         Ok(new_sinks) => {
                             stop_all(&mut sinks);
                             sinks = new_sinks;
+                            applied.clear();
+                            apply_volumes(&sinks, &automation, &mut applied, base);
                             for s in &sinks {
                                 s.play();
                             }
@@ -303,6 +344,15 @@ fn audio_thread(rx: Receiver<Cmd>, shared: Arc<Mutex<Shared>>) {
                 sh.started = None;
             }
             Err(RecvTimeoutError::Timeout) => {
+                // Follow the playhead through override regions (~10 Hz).
+                {
+                    let sh = shared.lock().unwrap();
+                    if sh.playing {
+                        let pos = current_pos(&sh);
+                        drop(sh);
+                        apply_volumes(&sinks, &automation, &mut applied, pos);
+                    }
+                }
                 // Detect natural end of playback: every layer drained.
                 let ended = !sinks.is_empty() && sinks.iter().all(|s| s.empty());
                 if ended {

@@ -12,4 +12,10 @@ number: number, title: string, start_sample: number, end_sample: number, duratio
 /**
  * Per-track layer gain overrides (dB), keyed by layer id (string).
  */
-gain_overrides: Record<string, number>, };
+gain_overrides: Record<string, number>, mute_overrides: Record<string, boolean>, solo_overrides: Record<string, boolean>, 
+/**
+ * Resolved linear volume of every layer for THIS track (session gains,
+ * mutes and solos with the track's overrides applied). Index-aligned
+ * with the layer list; this is exactly what export and playback use.
+ */
+layer_volumes: Array<number>, };

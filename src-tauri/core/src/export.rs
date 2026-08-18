@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -11,16 +10,13 @@ use ts_rs::TS;
 use crate::audio::{clip_segments, ClipInfo};
 use crate::error::{Result, StillError};
 use crate::naming::render_track_filename;
-use crate::project::{db_to_linear, ExportConfig, ExportFormat, TrackInfo};
+use crate::project::{ExportConfig, ExportFormat, TrackInfo};
 
-/// What the mixer needs to know about one layer at export time.
+/// What the mixer needs to know about one layer at export time. Volumes are
+/// resolved PER JOB (`ExportJob::layer_volumes`), not here.
 #[derive(Debug, Clone)]
 pub struct LayerMix {
-    /// Layer id (matched against per-track gain overrides).
-    pub id: u32,
     pub clips: Vec<ClipInfo>,
-    pub gain_db: f32,
-    pub muted: bool,
 }
 
 /// One file to produce. `out_path` is already unique (collisions resolved by
@@ -32,8 +28,9 @@ pub struct ExportJob {
     pub start_sample: u64,
     pub end_sample: u64,
     pub out_path: PathBuf,
-    /// Per-track layer gain overrides (dB), keyed by layer id (string).
-    pub gain_overrides: HashMap<String, f32>,
+    /// Resolved linear volume per layer for THIS track (gains, mutes and
+    /// solos, session-wide or overridden — straight from TrackInfo).
+    pub layer_volumes: Vec<f32>,
 }
 
 /// Progress event for ONE track. Exports run in parallel, so several tracks
@@ -111,7 +108,7 @@ pub fn plan_export(
             start_sample: t.start_sample,
             end_sample: t.end_sample,
             out_path: candidate,
-            gain_overrides: t.gain_overrides.clone(),
+            layer_volumes: t.layer_volumes.clone(),
         });
     }
     Ok(jobs)
@@ -282,19 +279,14 @@ fn export_one(
     // (normalize=0 → plain weighted sum, exactly the mix the user dialed in).
     // atrim keeps original timestamps; asetpts resets them so tracks start
     // at t = 0 (otherwise players show leading silence).
-    // A track may override individual layer gains; otherwise the layer's
-    // session-wide gain applies.
-    let effective_gain = |l: &LayerMix| -> f32 {
-        job.gain_overrides
-            .get(&l.id.to_string())
-            .copied()
-            .unwrap_or(l.gain_db)
-    };
+    // Volumes were resolved per track by the core (gains, mutes, solos and
+    // this track's overrides): silent layers are simply skipped.
     let active: Vec<(&LayerMix, f32, Vec<(usize, u64, u64)>)> = layers
         .iter()
-        .map(|l| (l, effective_gain(l)))
-        .filter(|(l, g)| !l.muted && db_to_linear(*g) > 0.0)
-        .map(|(l, g)| (l, g, clip_segments(&l.clips, job.start_sample, job.end_sample)))
+        .enumerate()
+        .map(|(i, l)| (l, job.layer_volumes.get(i).copied().unwrap_or(1.0)))
+        .filter(|(_, vol)| *vol > 0.0)
+        .map(|(l, vol)| (l, vol, clip_segments(&l.clips, job.start_sample, job.end_sample)))
         .filter(|(_, _, segs)| !segs.is_empty())
         .collect();
     if active.is_empty() {
@@ -316,7 +308,8 @@ fn export_one(
         }
     }
 
-    let single_plain = active.len() == 1 && active[0].2.len() == 1 && active[0].1 == 0.0;
+    let single_plain =
+        active.len() == 1 && active[0].2.len() == 1 && (active[0].1 - 1.0).abs() < 1e-6;
     if single_plain {
         let (_, s, e) = active[0].2[0];
         cmd.arg("-map").arg("0:a:0").arg("-af").arg(format!(
@@ -327,7 +320,7 @@ fn export_one(
         let mut filter = String::new();
         let mut input_idx = 0usize;
         let mut layer_labels: Vec<String> = Vec::new();
-        for (li, (_, gain_db, segs)) in active.iter().enumerate() {
+        for (li, (_, volume, segs)) in active.iter().enumerate() {
             let mut seg_labels: Vec<String> = Vec::new();
             for (k, (_, s, e)) in segs.iter().enumerate() {
                 let label = format!("t{li}x{k}");
@@ -352,7 +345,7 @@ fn export_one(
             };
             let out = format!("l{li}");
             filter.push_str(&format!(
-                "[{joined}]aformat=sample_fmts=fltp:channel_layouts={layout},volume={gain_db}dB[{out}];"
+                "[{joined}]aformat=sample_fmts=fltp:channel_layouts={layout},volume={volume:.6}[{out}];"
             ));
             layer_labels.push(out);
         }
@@ -441,6 +434,7 @@ fn export_one(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     fn track(number: u32, title: &str, start: u64, end: u64) -> TrackInfo {
         TrackInfo {
@@ -451,6 +445,9 @@ mod tests {
             end_sample: end,
             duration_seconds: (end - start) as f64 / 44_100.0,
             gain_overrides: HashMap::new(),
+            mute_overrides: HashMap::new(),
+            solo_overrides: HashMap::new(),
+            layer_volumes: vec![1.0],
         }
     }
 

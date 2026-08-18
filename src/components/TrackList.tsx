@@ -15,10 +15,13 @@ interface Props {
   onSeek: (sample: number) => void;
   onLayerGain: (id: number, gainDb: number) => void;
   onLayerMute: (id: number, muted: boolean) => void;
+  onLayerSolo: (id: number, solo: boolean) => void;
   onLayerCollapse: (id: number, collapsed: boolean) => void;
   onLayerRemove: (id: number) => void;
   onAddLayers: () => void;
   onTrackLayerGain: (trackId: number, layerId: number, gainDb: number | null) => void;
+  onTrackLayerMute: (trackId: number, layerId: number, muted: boolean | null) => void;
+  onTrackLayerSolo: (trackId: number, layerId: number, solo: boolean | null) => void;
 }
 
 export function TrackList({
@@ -31,10 +34,13 @@ export function TrackList({
   onSeek,
   onLayerGain,
   onLayerMute,
+  onLayerSolo,
   onLayerCollapse,
   onLayerRemove,
   onAddLayers,
   onTrackLayerGain,
+  onTrackLayerMute,
+  onTrackLayerSolo,
 }: Props) {
   const [editing, setEditing] = useState<number | null>(null);
   const [mixOpen, setMixOpen] = useState<number | null>(null);
@@ -80,6 +86,7 @@ export function TrackList({
           view={view}
           onGain={onLayerGain}
           onMute={onLayerMute}
+          onSolo={onLayerSolo}
           onCollapse={onLayerCollapse}
           onRemove={onLayerRemove}
           onAdd={onAddLayers}
@@ -172,16 +179,46 @@ export function TrackList({
                   const key = String(l.id);
                   const override = t.gain_overrides[key];
                   const hasOverride = override !== undefined;
+                  const muteOv = t.mute_overrides[key];
+                  const soloOv = t.solo_overrides[key];
+                  const anyOverride =
+                    hasOverride || muteOv !== undefined || soloOv !== undefined;
                   const shown = hasOverride ? override : l.gain_db;
                   return (
-                    <div key={l.id} className={`track-mix-row ${hasOverride ? "overridden" : "inheriting"}`}>
+                    <div key={l.id} className={`track-mix-row ${anyOverride ? "overridden" : "inheriting"}`}>
                       <div className="track-mix-top">
                         <span className="layer-name" title={l.name}>
                           {l.name}
                         </span>
                         <span className="mix-state">
-                          {hasOverride ? "override" : "session"}
+                          {anyOverride ? "override" : "session"}
                         </span>
+                        <button
+                          className={`layer-mute ${(muteOv ?? l.muted) ? "on" : ""} ${muteOv !== undefined ? "ov" : ""}`}
+                          title={
+                            muteOv === undefined
+                              ? "Mute this layer for this track only (currently following the session)"
+                              : "Following this track's own mute — click to go back to the session"
+                          }
+                          onClick={() =>
+                            onTrackLayerMute(t.id, l.id, muteOv === undefined ? !l.muted : null)
+                          }
+                        >
+                          M
+                        </button>
+                        <button
+                          className={`layer-solo ${(soloOv ?? l.solo) ? "on" : ""} ${soloOv !== undefined ? "ov" : ""}`}
+                          title={
+                            soloOv === undefined
+                              ? "Solo this layer for this track only (currently following the session)"
+                              : "Following this track's own solo — click to go back to the session"
+                          }
+                          onClick={() =>
+                            onTrackLayerSolo(t.id, l.id, soloOv === undefined ? !l.solo : null)
+                          }
+                        >
+                          S
+                        </button>
                         <GainInput
                           value={hasOverride ? override : null}
                           placeholder={`${l.gain_db > 0 ? "+" : ""}${Number(l.gain_db.toFixed(1))}`}
@@ -220,8 +257,9 @@ export function TrackList({
                   );
                 })}
                 <div className="hint">
-                  Grey fader = follows the session mix · drag it (or type a value) to set this
-                  track's own level · double-click / ✕ = back to session · applies at export
+                  Grey fader = follows the session mix · drag/type to set this track's own
+                  level · M/S set a per-track mute/solo (dot = own value, click again to
+                  follow the session) · heard live and applied at export
                 </div>
               </div>
             )}

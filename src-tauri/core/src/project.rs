@@ -34,9 +34,15 @@ pub struct Region {
     /// None → default title derived from the track number.
     pub title: Option<String>,
     /// Per-track layer gain overrides (dB), keyed by layer id as a string.
-    /// A layer absent from the map uses its session-wide gain at export.
+    /// A layer absent from the map uses its session-wide gain.
     #[serde(default)]
     pub gain_overrides: HashMap<String, f32>,
+    /// Per-track layer mute overrides (true = muted for this track).
+    #[serde(default)]
+    pub mute_overrides: HashMap<String, bool>,
+    /// Per-track layer solo overrides (true = soloed for this track).
+    #[serde(default)]
+    pub solo_overrides: HashMap<String, bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -99,6 +105,9 @@ pub struct Layer {
     pub sources: Vec<String>,
     pub gain_db: f32,
     pub muted: bool,
+    /// Solo: when any layer is soloed, only soloed layers are audible.
+    #[serde(default)]
+    pub solo: bool,
     /// Collapsed to a thin strip in the "Layers" waveform view.
     #[serde(default)]
     pub collapsed: bool,
@@ -127,6 +136,7 @@ impl Project {
                 sources,
                 gain_db: 0.0,
                 muted: false,
+                solo: false,
                 collapsed: false,
             })
             .collect();
@@ -176,6 +186,14 @@ pub struct TrackInfo {
     /// Per-track layer gain overrides (dB), keyed by layer id (string).
     #[ts(type = "Record<string, number>")]
     pub gain_overrides: HashMap<String, f32>,
+    #[ts(type = "Record<string, boolean>")]
+    pub mute_overrides: HashMap<String, bool>,
+    #[ts(type = "Record<string, boolean>")]
+    pub solo_overrides: HashMap<String, bool>,
+    /// Resolved linear volume of every layer for THIS track (session gains,
+    /// mutes and solos with the track's overrides applied). Index-aligned
+    /// with the layer list; this is exactly what export and playback use.
+    pub layer_volumes: Vec<f32>,
 }
 
 /// Display state of one mix layer.
@@ -189,6 +207,7 @@ pub struct LayerView {
     pub duration_seconds: f64,
     pub gain_db: f32,
     pub muted: bool,
+    pub solo: bool,
     pub collapsed: bool,
 }
 
@@ -268,39 +287,111 @@ impl ProjectState {
         self.peaks = peaks;
     }
 
-    /// Position-dependent linear gain per layer: session fader (or 0 when
-    /// muted) everywhere, replaced inside a track region by that track's
-    /// overrides — so the waveform shows overrides exactly where they apply.
-    fn gain_resolver(&self) -> impl Fn(u64, usize) -> f32 + '_ {
-        let defaults: Vec<f32> = self
-            .project
-            .layers
+    /// THE volume resolver: the linear volume of every layer, either for the
+    /// session defaults (`region: None`) or inside a given track region
+    /// (gain/mute/solo overrides applied). Solo semantics: if any layer is
+    /// soloed in the resolved context, only soloed layers are audible (solo
+    /// wins over mute). Display, playback and export all use this.
+    pub fn effective_volumes(&self, region: Option<&Region>) -> Vec<f32> {
+        let layers = &self.project.layers;
+        let resolved: Vec<(bool, bool, f32)> = layers
             .iter()
-            .map(|l| if l.muted { 0.0 } else { db_to_linear(l.gain_db) })
+            .map(|l| {
+                let key = l.id.to_string();
+                let muted = region
+                    .and_then(|r| r.mute_overrides.get(&key))
+                    .copied()
+                    .unwrap_or(l.muted);
+                let solo = region
+                    .and_then(|r| r.solo_overrides.get(&key))
+                    .copied()
+                    .unwrap_or(l.solo);
+                let gain = region
+                    .and_then(|r| r.gain_overrides.get(&key))
+                    .copied()
+                    .unwrap_or(l.gain_db);
+                (muted, solo, gain)
+            })
             .collect();
-        let mut overridden: Vec<(u64, u64, Vec<f32>)> = Vec::new();
-        for r in &self.project.regions {
-            if r.gain_overrides.is_empty() {
-                continue;
-            }
-            let gains = self
-                .project
-                .layers
-                .iter()
-                .enumerate()
-                .map(|(i, l)| {
-                    if l.muted {
-                        0.0
-                    } else {
-                        r.gain_overrides
-                            .get(&l.id.to_string())
-                            .map(|db| db_to_linear(*db))
-                            .unwrap_or(defaults[i])
-                    }
-                })
-                .collect();
-            overridden.push((r.start, r.end, gains));
+        let any_solo = resolved.iter().any(|(_, s, _)| *s);
+        resolved
+            .iter()
+            .map(|(muted, solo, gain)| {
+                let audible = if any_solo { *solo } else { !*muted };
+                if audible {
+                    db_to_linear(*gain)
+                } else {
+                    0.0
+                }
+            })
+            .collect()
+    }
+
+    /// Regions whose overrides change the audible volumes, with the resolved
+    /// values — the volume "automation" of the timeline.
+    pub fn volume_spans(&self) -> Vec<(u64, u64, Vec<f32>)> {
+        self.project
+            .regions
+            .iter()
+            .filter(|r| {
+                !r.gain_overrides.is_empty()
+                    || !r.mute_overrides.is_empty()
+                    || !r.solo_overrides.is_empty()
+            })
+            .map(|r| (r.start, r.end, self.effective_volumes(Some(r))))
+            .collect()
+    }
+
+    pub fn set_layer_solo(&mut self, id: u32, solo: bool) -> Result<()> {
+        let idx = self.layer_index(id)?;
+        self.project.layers[idx].solo = solo;
+        Ok(())
+    }
+
+    /// Set or clear (None) a per-track mute/solo override for one layer.
+    pub fn set_track_layer_flag(
+        &mut self,
+        track_id: u32,
+        layer_id: u32,
+        solo_flag: bool,
+        value: Option<bool>,
+    ) -> Result<()> {
+        if !self.project.layers.iter().any(|l| l.id == layer_id) {
+            return Err(StillError::InvalidMarker(format!(
+                "unknown layer id {layer_id}"
+            )));
         }
+        let idx = self
+            .project
+            .regions
+            .iter()
+            .position(|r| r.id == track_id)
+            .ok_or_else(|| StillError::InvalidMarker(format!("unknown track id {track_id}")))?;
+        self.push_undo();
+        let region = &mut self.project.regions[idx];
+        let key = layer_id.to_string();
+        let map = if solo_flag {
+            &mut region.solo_overrides
+        } else {
+            &mut region.mute_overrides
+        };
+        match value {
+            Some(v) => {
+                map.insert(key, v);
+            }
+            None => {
+                map.remove(&key);
+            }
+        }
+        Ok(())
+    }
+
+    /// Position-dependent linear volume per layer: session defaults
+    /// everywhere, replaced inside track regions by their overrides — so the
+    /// waveform shows exactly what is heard.
+    fn gain_resolver(&self) -> impl Fn(u64, usize) -> f32 + '_ {
+        let defaults = self.effective_volumes(None);
+        let overridden = self.volume_spans();
         move |sample, li| {
             for (s, e, gains) in &overridden {
                 if sample >= *s && sample < *e {
@@ -499,6 +590,8 @@ impl ProjectState {
             end: e,
             title,
             gain_overrides: HashMap::new(),
+            mute_overrides: HashMap::new(),
+            solo_overrides: HashMap::new(),
         });
         Ok(id)
     }
@@ -518,6 +611,8 @@ impl ProjectState {
                     end: e,
                     title: None,
                     gain_overrides: HashMap::new(),
+                    mute_overrides: HashMap::new(),
+                    solo_overrides: HashMap::new(),
                 });
                 added += 1;
             }
@@ -701,6 +796,9 @@ impl ProjectState {
                 end_sample: r.end,
                 duration_seconds: (r.end.saturating_sub(r.start)) as f64 / sr,
                 gain_overrides: r.gain_overrides.clone(),
+                mute_overrides: r.mute_overrides.clone(),
+                solo_overrides: r.solo_overrides.clone(),
+                layer_volumes: self.effective_volumes(Some(r)),
             })
             .collect()
     }
@@ -728,6 +826,7 @@ impl ProjectState {
                         .unwrap_or(0.0),
                     gain_db: l.gain_db,
                     muted: l.muted,
+                    solo: l.solo,
                     collapsed: l.collapsed,
                 }
             })
@@ -856,6 +955,8 @@ fn migrate_v1(legacy: LegacyProjectV1) -> Project {
             end,
             title: legacy.track_names.get(key).cloned(),
             gain_overrides: HashMap::new(),
+            mute_overrides: HashMap::new(),
+            solo_overrides: HashMap::new(),
         });
     }
     let next_region_id = regions.len() as u32 + 1;
@@ -1061,6 +1162,45 @@ mod tests {
     }
 
     #[test]
+    fn solo_and_overrides_resolve_volumes() {
+        let mut s = state(600);
+        s.project = Project::new_layers(vec![
+            vec!["/tmp/a.wav".into()],
+            vec!["/tmp/b.wav".into()],
+            vec!["/tmp/c.wav".into()],
+        ]);
+        let ids: Vec<u32> = s.project.layers.iter().map(|l| l.id).collect();
+
+        // No solo, no mute: everyone at unity.
+        assert_eq!(s.effective_volumes(None), vec![1.0, 1.0, 1.0]);
+        // Session solo on layer 2: only layer 2 audible.
+        s.set_layer_solo(ids[1], true).unwrap();
+        assert_eq!(s.effective_volumes(None), vec![0.0, 1.0, 0.0]);
+        // Solo wins over mute on the soloed layer itself.
+        s.set_layer_muted(ids[1], true).unwrap();
+        assert_eq!(s.effective_volumes(None), vec![0.0, 1.0, 0.0]);
+        s.set_layer_muted(ids[1], false).unwrap();
+
+        // A track that overrides the solo away and mutes layer 3 instead.
+        let track = s.add_region(10 * SEC, 20 * SEC, None).unwrap();
+        s.set_track_layer_flag(track, ids[1], true, Some(false)).unwrap();
+        s.set_track_layer_flag(track, ids[2], false, Some(true)).unwrap();
+        let region = s.project.regions.iter().find(|r| r.id == track).cloned().unwrap();
+        assert_eq!(s.effective_volumes(Some(&region)), vec![1.0, 1.0, 0.0]);
+        // The session mix is untouched outside the track.
+        assert_eq!(s.effective_volumes(None), vec![0.0, 1.0, 0.0]);
+        // volume_spans exposes the override region for playback automation.
+        let spans = s.volume_spans();
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].0, 10 * SEC);
+        assert_eq!(spans[0].2, vec![1.0, 1.0, 0.0]);
+        // Clearing both flags empties the span list.
+        s.set_track_layer_flag(track, ids[1], true, None).unwrap();
+        s.set_track_layer_flag(track, ids[2], false, None).unwrap();
+        assert!(s.volume_spans().is_empty());
+    }
+
+    #[test]
     fn peaks_reflect_track_overrides_in_place() {
         use crate::peaks::PeakBuilder;
         // Two mono layers of constant 0.5 amplitude over 60 s.
@@ -1207,8 +1347,8 @@ mod tests {
     #[test]
     fn sanitize_drops_degenerate_regions() {
         let mut p = Project::new(vec!["/tmp/x.wav".into()]);
-        p.regions.push(Region { id: 1, start: 0, end: 10 * SEC, title: None, gain_overrides: HashMap::new() });
-        p.regions.push(Region { id: 2, start: 200 * SEC, end: 300 * SEC, title: None, gain_overrides: HashMap::new() });
+        p.regions.push(Region { id: 1, start: 0, end: 10 * SEC, title: None, gain_overrides: HashMap::new(), mute_overrides: HashMap::new(), solo_overrides: HashMap::new() });
+        p.regions.push(Region { id: 2, start: 200 * SEC, end: 300 * SEC, title: None, gain_overrides: HashMap::new(), mute_overrides: HashMap::new(), solo_overrides: HashMap::new() });
         sanitize_regions(&mut p, 120 * SEC, SR);
         assert_eq!(p.regions.len(), 1);
     }

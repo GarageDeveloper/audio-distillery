@@ -7,4 +7,4 @@ export type LayerView = { id: number,
 /**
  * First source's file name.
  */
-name: string, channels: number, duration_seconds: number, gain_db: number, muted: boolean, collapsed: boolean, };
+name: string, channels: number, duration_seconds: number, gain_db: number, muted: boolean, solo: boolean, collapsed: boolean, };

@@ -78,34 +78,39 @@ pub fn cancel_load(state: State<'_, AppState>) -> CmdResult<()> {
     Ok(())
 }
 
-/// Per-layer playlists + current linear volumes for the playback thread.
-fn playlists_of(info: &still_core::AudioInfo, project: &Project) -> Vec<still_core::LayerPlay> {
+/// Per-layer playlists for the playback thread.
+fn playlists_of(info: &still_core::AudioInfo) -> Vec<still_core::LayerPlay> {
     let sr = info.sample_rate.max(1) as f64;
     info.layers
         .iter()
-        .enumerate()
-        .map(|(i, scanned)| {
-            let volume = project
-                .layers
-                .get(i)
-                .map(|l| {
-                    if l.muted {
-                        0.0
-                    } else {
-                        still_core::db_to_linear(l.gain_db)
-                    }
-                })
-                .unwrap_or(1.0);
-            still_core::LayerPlay {
-                playlist: scanned
-                    .clips
-                    .iter()
-                    .map(|c| (PathBuf::from(&c.path), c.duration_samples as f64 / sr))
-                    .collect(),
-                volume,
-            }
+        .map(|scanned| still_core::LayerPlay {
+            playlist: scanned
+                .clips
+                .iter()
+                .map(|c| (PathBuf::from(&c.path), c.duration_samples as f64 / sr))
+                .collect(),
         })
         .collect()
+}
+
+/// The timeline volume automation matching the current project state:
+/// session defaults + per-track override spans, all resolved by the core.
+fn automation_of(s: &ProjectState) -> still_core::VolumeAutomation {
+    let sr = s.info.sample_rate.max(1) as f64;
+    still_core::VolumeAutomation {
+        default: s.effective_volumes(None),
+        spans: s
+            .volume_spans()
+            .into_iter()
+            .map(|(start, end, vols)| (start as f64 / sr, end as f64 / sr, vols))
+            .collect(),
+    }
+}
+
+/// Push the current mix (faders, mutes, solos, per-track overrides) to the
+/// playback thread — it applies immediately and follows the playhead.
+fn sync_playback(state: &State<'_, AppState>, s: &ProjectState) {
+    let _ = state.player.set_automation(automation_of(s));
 }
 
 /// Scan layer groups and install them as the current session.
@@ -127,7 +132,11 @@ async fn load_session(
     };
     state
         .player
-        .load(playlists_of(&ps.info, &ps.project), ps.info.duration_seconds)
+        .load(
+            playlists_of(&ps.info),
+            ps.info.duration_seconds,
+            automation_of(&ps),
+        )
         .map_err(err)?;
     // Clamp regions against the real scanned duration (source may have
     // changed since the project was saved) and drop degenerate ones.
@@ -182,7 +191,11 @@ async fn rescan_with_groups(
         still_core::sanitize_regions(&mut s.project, s.info.duration_samples, s.info.sample_rate);
         state
             .player
-            .load(playlists_of(&s.info, &s.project), s.info.duration_seconds)
+            .load(
+                playlists_of(&s.info),
+                s.info.duration_seconds,
+                automation_of(s),
+            )
             .map_err(err)?;
         Ok(s.view())
     })
@@ -234,6 +247,7 @@ pub async fn add_layers(
                 sources: vec![p.clone()],
                 gain_db: 0.0,
                 muted: false,
+                solo: false,
                 collapsed: false,
             });
         }
@@ -253,7 +267,7 @@ pub fn set_layer_gain(
 ) -> CmdResult<ProjectView> {
     with_session(&state, |s| {
         s.set_layer_gain(id, gain_db).map_err(err)?;
-        sync_player_volumes(&state, s);
+        sync_playback(&state, s);
         Ok(s.view())
     })
 }
@@ -266,7 +280,52 @@ pub fn set_layer_muted(
 ) -> CmdResult<ProjectView> {
     with_session(&state, |s| {
         s.set_layer_muted(id, muted).map_err(err)?;
-        sync_player_volumes(&state, s);
+        sync_playback(&state, s);
+        Ok(s.view())
+    })
+}
+
+#[tauri::command]
+pub fn set_layer_solo(
+    state: State<'_, AppState>,
+    id: u32,
+    solo: bool,
+) -> CmdResult<ProjectView> {
+    with_session(&state, |s| {
+        s.set_layer_solo(id, solo).map_err(err)?;
+        sync_playback(&state, s);
+        Ok(s.view())
+    })
+}
+
+/// Set or clear (null) a per-track mute override for one layer.
+#[tauri::command]
+pub fn set_track_layer_mute(
+    state: State<'_, AppState>,
+    track_id: u32,
+    layer_id: u32,
+    muted: Option<bool>,
+) -> CmdResult<ProjectView> {
+    with_session(&state, |s| {
+        s.set_track_layer_flag(track_id, layer_id, false, muted)
+            .map_err(err)?;
+        sync_playback(&state, s);
+        Ok(s.view())
+    })
+}
+
+/// Set or clear (null) a per-track solo override for one layer.
+#[tauri::command]
+pub fn set_track_layer_solo(
+    state: State<'_, AppState>,
+    track_id: u32,
+    layer_id: u32,
+    solo: Option<bool>,
+) -> CmdResult<ProjectView> {
+    with_session(&state, |s| {
+        s.set_track_layer_flag(track_id, layer_id, true, solo)
+            .map_err(err)?;
+        sync_playback(&state, s);
         Ok(s.view())
     })
 }
@@ -295,6 +354,7 @@ pub fn set_track_layer_gain(
     with_session(&state, |s| {
         s.set_track_layer_gain(track_id, layer_id, gain_db)
             .map_err(err)?;
+        sync_playback(&state, s);
         Ok(s.view())
     })
 }
@@ -303,23 +363,13 @@ pub fn set_track_layer_gain(
 pub fn remove_layer(state: State<'_, AppState>, id: u32) -> CmdResult<ProjectView> {
     with_session(&state, |s| {
         s.remove_layer(id).map_err(err)?;
-        let _ = state
-            .player
-            .load(playlists_of(&s.info, &s.project), s.info.duration_seconds);
+        let _ = state.player.load(
+            playlists_of(&s.info),
+            s.info.duration_seconds,
+            automation_of(s),
+        );
         Ok(s.view())
     })
-}
-
-/// Push the current gains/mutes to the running playback sinks (live).
-fn sync_player_volumes(state: &State<'_, AppState>, s: &ProjectState) {
-    for (i, l) in s.project.layers.iter().enumerate() {
-        let vol = if l.muted {
-            0.0
-        } else {
-            still_core::db_to_linear(l.gain_db)
-        };
-        let _ = state.player.set_volume(i, vol);
-    }
 }
 
 #[tauri::command]
@@ -387,6 +437,7 @@ pub fn add_region(
         let a = snapped(s, start);
         let b = snapped(s, end);
         s.add_region(a, b, title).map_err(err)?;
+        sync_playback(&state, s);
         Ok(s.view())
     })
 }
@@ -398,6 +449,7 @@ pub fn add_regions(
 ) -> CmdResult<ProjectView> {
     with_session(&state, |s| {
         s.add_regions(&regions);
+        sync_playback(&state, s);
         Ok(s.view())
     })
 }
@@ -412,6 +464,7 @@ pub fn move_region_edge(
     with_session(&state, |s| {
         let pos = snapped(s, position);
         s.move_edge(id, edge, pos).map_err(err)?;
+        sync_playback(&state, s);
         Ok(s.view())
     })
 }
@@ -420,6 +473,7 @@ pub fn move_region_edge(
 pub fn remove_region(state: State<'_, AppState>, id: u32) -> CmdResult<ProjectView> {
     with_session(&state, |s| {
         s.remove_region(id).map_err(err)?;
+        sync_playback(&state, s);
         Ok(s.view())
     })
 }
@@ -455,6 +509,7 @@ pub fn set_export_config(
 pub fn undo(state: State<'_, AppState>) -> CmdResult<ProjectView> {
     with_session(&state, |s| {
         s.undo();
+        sync_playback(&state, s);
         Ok(s.view())
     })
 }
@@ -463,6 +518,7 @@ pub fn undo(state: State<'_, AppState>) -> CmdResult<ProjectView> {
 pub fn redo(state: State<'_, AppState>) -> CmdResult<ProjectView> {
     with_session(&state, |s| {
         s.redo();
+        sync_playback(&state, s);
         Ok(s.view())
     })
 }
@@ -511,15 +567,11 @@ pub async fn export_tracks(
         let source = PathBuf::from(&s.info.path);
         let jobs = still_core::plan_export(&tracks, &config, &source).map_err(err)?;
         let layers: Vec<still_core::LayerMix> = s
-            .project
+            .info
             .layers
             .iter()
-            .zip(s.info.layers.iter())
-            .map(|(l, scanned)| still_core::LayerMix {
-                id: l.id,
+            .map(|scanned| still_core::LayerMix {
                 clips: scanned.clips.clone(),
-                gain_db: l.gain_db,
-                muted: l.muted,
             })
             .collect();
         Ok((layers, s.info.channels, s.info.sample_rate, jobs))

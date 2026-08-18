@@ -571,11 +571,18 @@ export default function App() {
             onSeek={seekTo}
             onLayerGain={(id, db) => void apply(() => api.setLayerGain(id, db))}
             onLayerMute={(id, m) => void apply(() => api.setLayerMuted(id, m))}
+            onLayerSolo={(id, so) => void apply(() => api.setLayerSolo(id, so))}
             onLayerCollapse={(id, c) => void apply(() => api.setLayerCollapsed(id, c))}
             onLayerRemove={(id) => void apply(() => api.removeLayer(id))}
             onAddLayers={() => void addLayers()}
             onTrackLayerGain={(trackId, layerId, db) =>
               void apply(() => api.setTrackLayerGain(trackId, layerId, db))
+            }
+            onTrackLayerMute={(trackId, layerId, m) =>
+              void apply(() => api.setTrackLayerMute(trackId, layerId, m))
+            }
+            onTrackLayerSolo={(trackId, layerId, so) =>
+              void apply(() => api.setTrackLayerSolo(trackId, layerId, so))
             }
           />
         )}
