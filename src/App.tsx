@@ -421,6 +421,9 @@ export default function App() {
                   void apply(() => api.moveRegionEdge(id, edge, pos))
                 }
                 onSelectTrack={setSelectedTrack}
+                onToggleLayerCollapsed={(id, c) =>
+                  void apply(() => api.setLayerCollapsed(id, c))
+                }
                 onRemoveRegion={(id) => {
                   setSelectedTrack(null);
                   void apply(() => api.removeRegion(id));
@@ -559,6 +562,7 @@ export default function App() {
             onSeek={seekTo}
             onLayerGain={(id, db) => void apply(() => api.setLayerGain(id, db))}
             onLayerMute={(id, m) => void apply(() => api.setLayerMuted(id, m))}
+            onLayerCollapse={(id, c) => void apply(() => api.setLayerCollapsed(id, c))}
             onLayerRemove={(id) => void apply(() => api.removeLayer(id))}
             onAddLayers={() => void addLayers()}
             onTrackLayerGain={(trackId, layerId, db) =>

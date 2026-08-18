@@ -18,6 +18,7 @@ Shared types are generated from Rust with `ts-rs` into `src/types/` (run
 | `add_layers` | `paths: string[]` | `ProjectView` (each file = one new synced layer) | same as `load_audio`, no audio loaded |
 | `set_layer_gain` | `id: number`, `gainDb: number` | `ProjectView` (clamped to [-60, +12] dB; -60 = -∞; applies live to playback) | unknown layer |
 | `set_layer_muted` | `id: number`, `muted: boolean` | `ProjectView` (applies live to playback) | unknown layer |
+| `set_layer_collapsed` | `id: number`, `collapsed: boolean` | `ProjectView` (display preference for the Layers waveform view, persisted in the project) | unknown layer |
 | `set_track_layer_gain` | `trackId: number`, `layerId: number`, `gainDb: number \| null` | `ProjectView` (per-track override of one layer's gain, applied at export; null clears it; undoable) | unknown track/layer |
 | `remove_layer` | `id: number` | `ProjectView` | unknown layer, base layer |
 | `cancel_load` | — | `void` (the pending scan then fails with "Import cancelled"; any previous session stays untouched) | — |

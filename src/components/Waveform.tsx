@@ -9,6 +9,9 @@ import type { Viewport } from "../lib/viewport";
 import { sampleToX, xToSample, zoomAt, clampViewport } from "../lib/viewport";
 
 const RULER_H = 26;
+const MIN_LANE_H = 90; // comfortable minimum per expanded layer lane
+const COLLAPSED_H = 22; // collapsed layer strip
+const SCROLLBAR_W = 6;
 const EDGE_HIT_PX = 14; // half of the 28 px grab target
 const FLAG_W = 26;
 const FLAG_H = 20;
@@ -33,6 +36,7 @@ interface Props {
   onMoveEdge: (id: number, edge: RegionEdge, sample: number) => void;
   onSelectTrack: (id: number | null) => void;
   onRemoveRegion: (id: number) => void;
+  onToggleLayerCollapsed: (id: number, collapsed: boolean) => void;
 }
 
 interface EdgeRef {
@@ -66,6 +70,12 @@ export function Waveform(p: Props) {
   const fetchSeq = useRef(0);
   const hoverEdge = useRef<EdgeRef | null>(null);
   const drag = useRef<DragState | null>(null);
+  // Vertical navigation of the Layers view.
+  const scrollY = useRef(0);
+  const maxScroll = useRef(0);
+  const contentH = useRef(0);
+  const labelRects = useRef<{ x: number; y: number; w: number; h: number; id: number; collapsed: boolean }[]>([]);
+  const scrollbarDrag = useRef<{ startY: number; startScroll: number } | null>(null);
 
   const propsRef = useRef(p);
   propsRef.current = p;
@@ -210,45 +220,102 @@ export function Waveform(p: Props) {
     if (waveMode === "layers" && lanesRef.current) {
       const lanes = lanesRef.current;
       const layerViews = view.layers;
-      const n = Math.max(lanes.length, 1);
-      const laneH = area / n;
-      const amp = laneH * 0.42;
+      // Layout: collapsed layers take a thin strip; expanded ones share the
+      // remaining space with a comfortable minimum, scrolling vertically
+      // (⌥+wheel / scrollbar) when it no longer fits.
+      const flags = lanes.map((_, li) => layerViews[li]?.collapsed ?? false);
+      const nCollapsed = flags.filter(Boolean).length;
+      const nExpanded = flags.length - nCollapsed;
+      const expandedH =
+        nExpanded > 0
+          ? Math.max(MIN_LANE_H, (area - nCollapsed * COLLAPSED_H) / nExpanded)
+          : 0;
+      contentH.current = nCollapsed * COLLAPSED_H + nExpanded * expandedH;
+      maxScroll.current = Math.max(0, contentH.current - area);
+      scrollY.current = Math.min(Math.max(scrollY.current, 0), maxScroll.current);
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, RULER_H, w, area);
+      ctx.clip();
       ctx.font = "600 10px ui-monospace, Menlo, Consolas, monospace";
-      void amp;
+      labelRects.current = [];
+      let laneTop = RULER_H - scrollY.current;
       for (let li = 0; li < lanes.length; li++) {
+        const collapsed = flags[li];
+        const laneH = collapsed ? COLLAPSED_H : expandedH;
+        const top = laneTop;
+        laneTop += laneH;
+        if (top + laneH < RULER_H || top > h) continue;
         if (li > 0) {
           ctx.strokeStyle = css("--line-soft");
           ctx.beginPath();
-          ctx.moveTo(0, Math.round(RULER_H + laneH * li) + 0.5);
-          ctx.lineTo(w, Math.round(RULER_H + laneH * li) + 0.5);
+          ctx.moveTo(0, Math.round(top) + 0.5);
+          ctx.lineTo(w, Math.round(top) + 0.5);
           ctx.stroke();
         }
         const muted = layerViews[li]?.muted ?? false;
-        // Each layer shows its REAL channels: stereo files get two sub-lanes
-        // (L/R, usual channel colors), mono files a single one.
         const chCount = Math.max(lanes[li].channels.length, 1);
-        const subH = laneH / chCount;
-        for (let c = 0; c < chCount; c++) {
-          const scy = RULER_H + laneH * li + subH * (c + 0.5);
-          ctx.strokeStyle = centerColor;
-          ctx.beginPath();
-          ctx.moveTo(0, Math.round(scy) + 0.5);
-          ctx.lineTo(w, Math.round(scy) + 0.5);
-          ctx.stroke();
-          drawLane(lanes[li], c, scy, subH * 0.42, c, muted);
+        if (collapsed) {
+          ctx.fillStyle = css("--bg-deep");
+          ctx.globalAlpha = 0.5;
+          ctx.fillRect(0, top, w, laneH);
+          ctx.globalAlpha = 1;
+          drawLane(lanes[li], "mono", top + laneH / 2, laneH * 0.34, 0, true);
+        } else {
+          // Each layer shows its REAL channels: stereo files get two
+          // sub-lanes (L/R, usual channel colors), mono files a single one.
+          const subH = laneH / chCount;
+          for (let c = 0; c < chCount; c++) {
+            const scy = top + subH * (c + 0.5);
+            ctx.strokeStyle = centerColor;
+            ctx.beginPath();
+            ctx.moveTo(0, Math.round(scy) + 0.5);
+            ctx.lineTo(w, Math.round(scy) + 0.5);
+            ctx.stroke();
+            drawLane(lanes[li], c, scy, subH * 0.42, c, muted);
+          }
         }
-        // Lane label: layer name + channel layout (+ muted flag).
+        // Clickable lane label: chevron + name + layout (+ muted).
         const name = layerViews[li]?.name ?? `Layer ${li + 1}`;
         const layout = chCount === 1 ? "mono" : chCount === 2 ? "stereo" : `${chCount} ch`;
-        const label = `${name} · ${layout}${muted ? " · muted" : ""}`;
-        ctx.fillStyle = css("--panel-2");
+        const label = `${collapsed ? "▸" : "▾"} ${name} · ${layout}${muted ? " · muted" : ""}`;
         const tw = ctx.measureText(label).width;
+        const ly = collapsed ? top + laneH / 2 - 8 : top + 6;
+        ctx.fillStyle = css("--panel-2");
         ctx.beginPath();
-        ctx.roundRect(6, RULER_H + laneH * li + 6, tw + 12, 16, 4);
+        ctx.roundRect(6, ly, tw + 12, 16, 4);
         ctx.fill();
         ctx.fillStyle = css("--text-2");
         ctx.textBaseline = "middle";
-        ctx.fillText(label, 12, RULER_H + laneH * li + 14);
+        ctx.fillText(label, 12, ly + 8);
+        if (layerViews[li]) {
+          labelRects.current.push({
+            x: 6,
+            y: ly,
+            w: tw + 12,
+            h: 16,
+            id: layerViews[li].id,
+            collapsed,
+          });
+        }
+      }
+      ctx.restore();
+
+      // Thin scrollbar when the lanes overflow.
+      if (maxScroll.current > 0) {
+        const trackH = area - 4;
+        const thumbH = Math.max(24, (area / contentH.current) * trackH);
+        const thumbY =
+          RULER_H + 2 + (scrollY.current / maxScroll.current) * (trackH - thumbH);
+        ctx.fillStyle = css("--line");
+        ctx.globalAlpha = 0.5;
+        ctx.fillRect(w - SCROLLBAR_W - 2, RULER_H + 2, SCROLLBAR_W, trackH);
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = css("--copper-lo");
+        ctx.beginPath();
+        ctx.roundRect(w - SCROLLBAR_W - 2, thumbY, SCROLLBAR_W, thumbH, 3);
+        ctx.fill();
       }
     } else {
       const slice = sliceRef.current;
@@ -626,6 +693,20 @@ export function Waveform(p: Props) {
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      // ⌥ + wheel = vertical navigation of the Layers view; plain wheel and
+      // pinch keep their usual time-zoom behavior.
+      if (
+        e.altKey &&
+        propsRef.current.waveMode === "layers" &&
+        maxScroll.current > 0
+      ) {
+        scrollY.current = Math.min(
+          Math.max(scrollY.current + e.deltaY, 0),
+          maxScroll.current
+        );
+        draw();
+        return;
+      }
       const { view, viewport, onViewportChange } = propsRef.current;
       const rect = el.getBoundingClientRect();
       const x = e.clientX - rect.left;
@@ -663,7 +744,23 @@ export function Waveform(p: Props) {
       className="waveform-wrap"
       onPointerDown={(e) => {
         if (e.button !== 0) return;
-        const { x } = toLocal(e);
+        const { x, y } = toLocal(e);
+        if (propsRef.current.waveMode === "layers") {
+          // Lane label chevron: collapse/expand this layer.
+          const hit = labelRects.current.find(
+            (r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h
+          );
+          if (hit) {
+            propsRef.current.onToggleLayerCollapsed(hit.id, !hit.collapsed);
+            return;
+          }
+          // Thin scrollbar drag.
+          if (maxScroll.current > 0 && x >= sizeRef.current.w - SCROLLBAR_W - 6) {
+            scrollbarDrag.current = { startY: y, startScroll: scrollY.current };
+            (e.target as HTMLElement).setPointerCapture(e.pointerId);
+            return;
+          }
+        }
         const edge = edgeAt(x);
         if (edge) {
           drag.current = { type: "edge", id: edge.id, edge: edge.edge, pos: edge.sample, moved: false };
@@ -676,7 +773,21 @@ export function Waveform(p: Props) {
         draw();
       }}
       onPointerMove={(e) => {
-        const { x } = toLocal(e);
+        const { x, y } = toLocal(e);
+        if (scrollbarDrag.current) {
+          const area = sizeRef.current.h - RULER_H;
+          const ratio = contentH.current / Math.max(area, 1);
+          scrollY.current = Math.min(
+            Math.max(
+              scrollbarDrag.current.startScroll +
+                (y - scrollbarDrag.current.startY) * ratio,
+              0
+            ),
+            maxScroll.current
+          );
+          draw();
+          return;
+        }
         const d = drag.current;
         if (d?.type === "edge") {
           d.pos = clampSample(xToSample(x, propsRef.current.viewport));
@@ -704,6 +815,10 @@ export function Waveform(p: Props) {
         wrapRef.current!.style.cursor = edge ? "ew-resize" : "default";
       }}
       onPointerUp={(e) => {
+        if (scrollbarDrag.current) {
+          scrollbarDrag.current = null;
+          return;
+        }
         const { x } = toLocal(e);
         const d = drag.current;
         drag.current = null;

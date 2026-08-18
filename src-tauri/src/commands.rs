@@ -234,6 +234,7 @@ pub async fn add_layers(
                 sources: vec![p.clone()],
                 gain_db: 0.0,
                 muted: false,
+                collapsed: false,
             });
         }
         Ok((groups, new_layers))
@@ -266,6 +267,18 @@ pub fn set_layer_muted(
     with_session(&state, |s| {
         s.set_layer_muted(id, muted).map_err(err)?;
         sync_player_volumes(&state, s);
+        Ok(s.view())
+    })
+}
+
+#[tauri::command]
+pub fn set_layer_collapsed(
+    state: State<'_, AppState>,
+    id: u32,
+    collapsed: bool,
+) -> CmdResult<ProjectView> {
+    with_session(&state, |s| {
+        s.set_layer_collapsed(id, collapsed).map_err(err)?;
         Ok(s.view())
     })
 }

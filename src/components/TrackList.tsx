@@ -15,6 +15,7 @@ interface Props {
   onSeek: (sample: number) => void;
   onLayerGain: (id: number, gainDb: number) => void;
   onLayerMute: (id: number, muted: boolean) => void;
+  onLayerCollapse: (id: number, collapsed: boolean) => void;
   onLayerRemove: (id: number) => void;
   onAddLayers: () => void;
   onTrackLayerGain: (trackId: number, layerId: number, gainDb: number | null) => void;
@@ -30,6 +31,7 @@ export function TrackList({
   onSeek,
   onLayerGain,
   onLayerMute,
+  onLayerCollapse,
   onLayerRemove,
   onAddLayers,
   onTrackLayerGain,
@@ -78,6 +80,7 @@ export function TrackList({
           view={view}
           onGain={onLayerGain}
           onMute={onLayerMute}
+          onCollapse={onLayerCollapse}
           onRemove={onLayerRemove}
           onAdd={onAddLayers}
         />

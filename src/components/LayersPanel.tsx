@@ -6,6 +6,7 @@ interface Props {
   view: ProjectView;
   onGain: (id: number, gainDb: number) => void;
   onMute: (id: number, muted: boolean) => void;
+  onCollapse: (id: number, collapsed: boolean) => void;
   onRemove: (id: number) => void;
   onAdd: () => void;
 }
@@ -15,7 +16,7 @@ interface Props {
  * gain fader, mute and remove. Values are the backend's; slider moves are
  * throttled intentions.
  */
-export function LayersPanel({ view, onGain, onMute, onRemove, onAdd }: Props) {
+export function LayersPanel({ view, onGain, onMute, onCollapse, onRemove, onAdd }: Props) {
   const throttle = useRef<Record<number, number>>({});
 
   const sendGain = (id: number, value: number) => {
@@ -38,6 +39,13 @@ export function LayersPanel({ view, onGain, onMute, onRemove, onAdd }: Props) {
       {view.layers.map((l, i) => (
         <div key={l.id} className={`layer-row ${l.muted ? "muted" : ""}`}>
           <div className="layer-top">
+            <button
+              className="layer-chevron"
+              title={l.collapsed ? "Expand this lane in the Layers view" : "Collapse this lane to a thin strip in the Layers view"}
+              onClick={() => onCollapse(l.id, !l.collapsed)}
+            >
+              {l.collapsed ? "▸" : "▾"}
+            </button>
             <span className="layer-name" title={l.name}>
               {l.name}
             </span>

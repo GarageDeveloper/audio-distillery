@@ -99,6 +99,9 @@ pub struct Layer {
     pub sources: Vec<String>,
     pub gain_db: f32,
     pub muted: bool,
+    /// Collapsed to a thin strip in the "Layers" waveform view.
+    #[serde(default)]
+    pub collapsed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,6 +127,7 @@ impl Project {
                 sources,
                 gain_db: 0.0,
                 muted: false,
+                collapsed: false,
             })
             .collect();
         let next_layer_id = layers.len() as u32 + 1;
@@ -185,6 +189,7 @@ pub struct LayerView {
     pub duration_seconds: f64,
     pub gain_db: f32,
     pub muted: bool,
+    pub collapsed: bool,
 }
 
 /// Display snapshot sent to the frontend after every mutation.
@@ -381,6 +386,14 @@ impl ProjectState {
     pub fn set_layer_muted(&mut self, id: u32, muted: bool) -> Result<()> {
         let idx = self.layer_index(id)?;
         self.project.layers[idx].muted = muted;
+        Ok(())
+    }
+
+    /// Display preference persisted in the project: collapsed lanes in the
+    /// "Layers" waveform view.
+    pub fn set_layer_collapsed(&mut self, id: u32, collapsed: bool) -> Result<()> {
+        let idx = self.layer_index(id)?;
+        self.project.layers[idx].collapsed = collapsed;
         Ok(())
     }
 
@@ -715,6 +728,7 @@ impl ProjectState {
                         .unwrap_or(0.0),
                     gain_db: l.gain_db,
                     muted: l.muted,
+                    collapsed: l.collapsed,
                 }
             })
             .collect();
