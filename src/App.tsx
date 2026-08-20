@@ -13,6 +13,7 @@ import { Minimap } from "./components/Minimap";
 import { TrackList } from "./components/TrackList";
 import { ExportDialog } from "./components/ExportDialog";
 import { AlbumMetaForm } from "./components/AlbumMetaForm";
+import { Backdrop } from "./components/Backdrop";
 import { EmptyState } from "./components/EmptyState";
 import { StatusBar } from "./components/StatusBar";
 import { usePlayback } from "./hooks/usePlayback";
@@ -633,10 +634,7 @@ export default function App() {
       )}
 
       {albumOpen && view && (
-        <div
-          className="modal-backdrop"
-          onClick={(e) => e.target === e.currentTarget && setAlbumOpen(false)}
-        >
+        <Backdrop onClose={() => setAlbumOpen(false)}>
           <div className="modal">
             <div>
               <h2>Album metadata</h2>
@@ -655,11 +653,11 @@ export default function App() {
               </button>
             </div>
           </div>
-        </div>
+        </Backdrop>
       )}
 
       {dropChoice && (
-        <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && setDropChoice(null)}>
+        <Backdrop onClose={() => setDropChoice(null)}>
           <div className="modal drop-choice">
             <h2>
               {dropChoice.length} audio file{dropChoice.length > 1 ? "s" : ""}
@@ -710,7 +708,7 @@ export default function App() {
               </button>
             </div>
           </div>
-        </div>
+        </Backdrop>
       )}
 
       {exportOpen && view && (

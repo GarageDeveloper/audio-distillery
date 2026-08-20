@@ -10,6 +10,7 @@ import type { ExportReport } from "../types/ExportReport";
 import type { AlbumMeta } from "../types/AlbumMeta";
 import { api } from "../api";
 import { AlbumMetaForm } from "./AlbumMetaForm";
+import { Backdrop } from "./Backdrop";
 
 interface Props {
   view: ProjectView;
@@ -120,10 +121,9 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
   const trackCount = view.tracks.length;
 
   return (
-    <div
-      className="modal-backdrop"
-      onClick={(e) => {
-        if (e.target === e.currentTarget && phase !== "running") onClose();
+    <Backdrop
+      onClose={() => {
+        if (phase !== "running") onClose();
       }}
     >
       <div className="modal export-modal">
@@ -342,6 +342,6 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
           </>
         )}
       </div>
-    </div>
+    </Backdrop>
   );
 }
