@@ -634,7 +634,7 @@ export default function App() {
       )}
 
       {albumOpen && view && (
-        <Backdrop onClose={() => setAlbumOpen(false)}>
+        <Backdrop onClose={() => {}}>
           <div className="modal">
             <div>
               <h2>Album metadata</h2>
