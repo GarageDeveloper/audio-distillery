@@ -9,6 +9,7 @@ import type { ExportProgress } from "../types/ExportProgress";
 import type { ExportReport } from "../types/ExportReport";
 import type { AlbumMeta } from "../types/AlbumMeta";
 import { api } from "../api";
+import { AlbumMetaForm } from "./AlbumMetaForm";
 
 interface Props {
   view: ProjectView;
@@ -34,10 +35,13 @@ type Phase = "settings" | "running" | "report";
 
 export function ExportDialog({ view, progress, onClose, onError, onViewChange }: Props) {
   const [cfg, setCfg] = useState<ExportConfig>({ ...view.export_config });
-  const [meta, setMeta] = useState<AlbumMeta>({ ...view.album_meta });
   const [metaOpen, setMetaOpen] = useState(
     Object.values(view.album_meta).some((v) => (Array.isArray(v) ? v.length > 0 : v !== ""))
   );
+  const meta: AlbumMeta = view.album_meta;
+  const saveMeta = (m: AlbumMeta) => {
+    api.setAlbumMeta(m).then(onViewChange).catch((e) => onError(String(e)));
+  };
   const [phase, setPhase] = useState<Phase>("settings");
   const [report, setReport] = useState<ExportReport | null>(null);
   // Tracks export in parallel: accumulate the per-track progress events.
@@ -80,12 +84,6 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
     setPhase("running");
     setPerTrack({});
     try {
-      // Persist the album metadata first: the backend resolves per-track
-      // tags (macros, disc numbering) and writes them into the new files.
-      await api.setAlbumMeta({
-        ...meta,
-        disc_breaks: meta.disc_breaks.filter((n) => n >= 2),
-      });
       const r = await api.exportTracks(cfg);
       setReport(r);
       setPhase("report");
@@ -200,84 +198,7 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
                 </span>
               </button>
               {metaOpen && (
-                <div className="meta-grid">
-                  <div className="field">
-                    <label>Album</label>
-                    <input
-                      className="text-input"
-                      value={meta.album}
-                      placeholder="Live at the Barn"
-                      onChange={(e) => setMeta({ ...meta, album: e.target.value })}
-                    />
-                  </div>
-                  <div className="field">
-                    <label>Album artist</label>
-                    <input
-                      className="text-input"
-                      value={meta.album_artist}
-                      placeholder="The Copper Stills"
-                      onChange={(e) => setMeta({ ...meta, album_artist: e.target.value })}
-                    />
-                  </div>
-                  <div className="field">
-                    <label>Track artist</label>
-                    <input
-                      className="text-input"
-                      value={meta.artist}
-                      placeholder="empty = album artist"
-                      onChange={(e) => setMeta({ ...meta, artist: e.target.value })}
-                    />
-                  </div>
-                  <div className="field">
-                    <label>Date</label>
-                    <input
-                      className="text-input"
-                      value={meta.date}
-                      placeholder="2026-08-01"
-                      onChange={(e) => setMeta({ ...meta, date: e.target.value })}
-                    />
-                  </div>
-                  <div className="field">
-                    <label>Genre</label>
-                    <input
-                      className="text-input"
-                      value={meta.genre}
-                      placeholder="Rock"
-                      onChange={(e) => setMeta({ ...meta, genre: e.target.value })}
-                    />
-                  </div>
-                  <div className="field">
-                    <label>Disc breaks</label>
-                    <input
-                      className="text-input mono"
-                      value={meta.disc_breaks.join(", ")}
-                      placeholder="e.g. 7, 13"
-                      title="Track numbers starting a new disc — track/disc numbers are computed from this"
-                      onChange={(e) =>
-                        setMeta({
-                          ...meta,
-                          disc_breaks: e.target.value
-                            .split(/[\s,;]+/)
-                            .map((v) => parseInt(v, 10))
-                            .filter((n) => Number.isFinite(n) && n > 0),
-                        })
-                      }
-                    />
-                  </div>
-                  <div className="field meta-comment">
-                    <label>Comment</label>
-                    <input
-                      className="text-input"
-                      value={meta.comment}
-                      onChange={(e) => setMeta({ ...meta, comment: e.target.value })}
-                    />
-                  </div>
-                  <div className="hint meta-hint">
-                    Track n°/total and disc n°/total are computed automatically. Every field
-                    accepts macros: {"{title} {n} {ntotal} {disc} {dtotal} {album} {artist} {date} {year} {source}"}
-                    — e.g. Album = "Anthology (Disc {"{disc}"})"
-                  </div>
-                </div>
+                <AlbumMetaForm meta={meta} onChange={saveMeta} showDiscBreaks />
               )}
             </div>
 

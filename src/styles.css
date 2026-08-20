@@ -807,3 +807,44 @@ kbd {
   margin-top: 8px;
 }
 .meta-grid .meta-comment, .meta-grid .meta-hint { grid-column: 1 / -1; }
+
+/* Disc separators in the track list */
+.disc-sep {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 8px 2px;
+}
+.disc-sep-label {
+  font-size: 10px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .12em;
+  color: var(--copper-hi);
+  white-space: nowrap;
+}
+.disc-sep-line { flex: 1; height: 1px; background: var(--copper-lo); opacity: .6; }
+.disc-sep-btn {
+  width: 18px; height: 18px;
+  border-radius: var(--r-s);
+  border: 1px solid var(--line);
+  color: var(--text-3);
+  font-size: 10px;
+}
+.disc-sep-btn:hover:not(:disabled) { color: var(--copper-hi); border-color: var(--copper-lo); }
+.disc-sep-btn:disabled { opacity: .3; cursor: default; }
+.disc-sep-btn.del:hover { color: var(--err); background: var(--err-dim); }
+.disc-gap {
+  display: block;
+  width: 100%;
+  height: 8px;
+  margin: 0;
+  padding: 0;
+  font-size: 9px;
+  color: transparent;
+  border-radius: var(--r-s);
+  line-height: 8px;
+  text-align: center;
+}
+.disc-gap:hover {
+  height: 16px;
+  line-height: 16px;
+  color: var(--copper-hi);
+  background: var(--copper-dim);
+}

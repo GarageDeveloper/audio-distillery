@@ -12,6 +12,7 @@ import { Waveform } from "./components/Waveform";
 import { Minimap } from "./components/Minimap";
 import { TrackList } from "./components/TrackList";
 import { ExportDialog } from "./components/ExportDialog";
+import { AlbumMetaForm } from "./components/AlbumMetaForm";
 import { EmptyState } from "./components/EmptyState";
 import { StatusBar } from "./components/StatusBar";
 import { usePlayback } from "./hooks/usePlayback";
@@ -33,6 +34,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(true);
   const [exportOpen, setExportOpen] = useState(false);
+  const [albumOpen, setAlbumOpen] = useState(false);
   const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null);
   const [proposals, setProposals] = useState<RegionSpan[] | null>(null);
   const [dropChoice, setDropChoice] = useState<string[] | null>(null);
@@ -411,6 +413,7 @@ export default function App() {
         onRedo={() => void apply(() => api.redo())}
         onDetectSilences={() => void detectSilences()}
         onExport={() => setExportOpen(true)}
+        onAlbum={() => setAlbumOpen(true)}
         onTogglePanel={() => setPanelOpen((p) => !p)}
         onToggleSnap={() => view && void apply(() => api.setSnapToZero(!view.snap_to_zero))}
       />
@@ -593,6 +596,12 @@ export default function App() {
             onTrackLayerSolo={(trackId, layerId, so) =>
               void apply(() => api.setTrackLayerSolo(trackId, layerId, so))
             }
+            onDiscBreaksChange={(breaks) =>
+              view &&
+              void apply(() =>
+                api.setAlbumMeta({ ...view.album_meta, disc_breaks: breaks })
+              )
+            }
           />
         )}
       </div>
@@ -602,6 +611,32 @@ export default function App() {
       {error && (
         <div className="toast toast-error" onClick={() => setError(null)}>
           {error}
+        </div>
+      )}
+
+      {albumOpen && view && (
+        <div
+          className="modal-backdrop"
+          onClick={(e) => e.target === e.currentTarget && setAlbumOpen(false)}
+        >
+          <div className="modal">
+            <div>
+              <h2>Album metadata</h2>
+              <div className="subtitle">
+                Saved in the project, written natively into every exported file (ID3, MP4,
+                Vorbis, RIFF)
+              </div>
+            </div>
+            <AlbumMetaForm
+              meta={view.album_meta}
+              onChange={(m) => void apply(() => api.setAlbumMeta(m))}
+            />
+            <div className="modal-foot">
+              <button className="btn btn-primary" onClick={() => setAlbumOpen(false)}>
+                Done
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
