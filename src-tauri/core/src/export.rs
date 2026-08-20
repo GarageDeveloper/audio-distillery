@@ -10,7 +10,10 @@ use ts_rs::TS;
 use crate::audio::{layer_parts, ClipInfo, TimelinePart};
 use crate::error::{Result, StillError};
 use crate::naming::render_track_filename;
-use crate::metadata::{is_empty_meta, resolve_tags, write_tags, AlbumMeta, TrackTags};
+use crate::metadata::{
+    is_empty_meta, load_artwork, resolve_tags, write_tags, AlbumMeta, TrackTags,
+};
+use std::sync::Arc;
 use crate::project::{ExportConfig, ExportFormat, TrackInfo};
 
 /// What the mixer needs to know about one layer at export time. Volumes are
@@ -34,6 +37,8 @@ pub struct ExportJob {
     pub layer_volumes: Vec<f32>,
     /// Tags to write into the finished file (None = tagging disabled).
     pub tags: Option<TrackTags>,
+    /// Validated cover image shared by all jobs.
+    pub artwork: Option<Arc<(Vec<u8>, lofty::picture::MimeType)>>,
 }
 
 /// Progress event for ONE track. Exports run in parallel, so several tracks
@@ -99,6 +104,13 @@ pub fn plan_export_with_meta(
         .unwrap_or_else(|| "audio".into());
     let ext = cfg.format.extension();
 
+    // Load and validate the cover once (fail the plan early with a clear
+    // message rather than per-track during the export).
+    let artwork = if meta.artwork_path.is_empty() {
+        None
+    } else {
+        Some(Arc::new(load_artwork(Path::new(&meta.artwork_path))?))
+    };
     let mut used: Vec<PathBuf> = Vec::new();
     let mut jobs = Vec::with_capacity(tracks.len());
     for t in tracks {
@@ -163,6 +175,7 @@ pub fn plan_export_with_meta(
                     tracks.len() as u32,
                 ))
             },
+            artwork: artwork.clone(),
         });
     }
     Ok(jobs)
@@ -281,7 +294,9 @@ pub fn run_export(
                         // Tag the NEW file (never a source). A tagging
                         // failure keeps the audio and surfaces as an error.
                         if let Some(tags) = &job.tags {
-                            if let Err(e) = write_tags(&job.out_path, tags) {
+                            if let Err(e) =
+                                write_tags(&job.out_path, tags, job.artwork.as_deref())
+                            {
                                 errors
                                     .lock()
                                     .unwrap()

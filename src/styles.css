@@ -850,3 +850,20 @@ kbd {
 }
 
 .export-modal { width: 560px; max-height: 88vh; }
+
+/* Cover art picker */
+.meta-grid .meta-artwork { grid-column: 1 / -1; }
+.artwork-row { display: flex; gap: 12px; align-items: center; }
+.artwork-thumb {
+  width: 84px; height: 84px;
+  border-radius: var(--r-m);
+  object-fit: cover;
+  border: 1px solid var(--line);
+  background: var(--bg-deep);
+  flex: none;
+}
+.artwork-empty {
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; color: var(--text-3);
+}
+.artwork-actions { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }

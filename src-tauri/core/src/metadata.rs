@@ -39,6 +39,11 @@ pub struct AlbumMeta {
     /// Empty = single disc. Example: [7, 13] → tracks 1-6 = disc 1,
     /// 7-12 = disc 2, 13+ = disc 3.
     pub disc_breaks: Vec<u32>,
+    /// Path to a cover image (JPEG/PNG), embedded as front cover in every
+    /// exported file that supports pictures (MP4 covr, ID3 APIC, FLAC
+    /// picture block; RIFF INFO has none). Empty = no artwork.
+    #[serde(default)]
+    pub artwork_path: String,
 }
 
 /// Fully resolved tag values for ONE exported track (macros expanded,
@@ -174,11 +179,38 @@ pub fn is_empty_meta(meta: &AlbumMeta) -> bool {
         && meta.date.is_empty()
         && meta.genre.is_empty()
         && meta.comment.is_empty()
+        && meta.artwork_path.is_empty()
+}
+
+/// Read and validate the cover image (JPEG or PNG, checked by magic bytes).
+pub fn load_artwork(path: &Path) -> Result<(Vec<u8>, lofty::picture::MimeType)> {
+    let data = std::fs::read(path).map_err(|_| {
+        StillError::InvalidProject(format!(
+            "Cover image not found or unreadable: {}",
+            path.display()
+        ))
+    })?;
+    let mime = if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        lofty::picture::MimeType::Jpeg
+    } else if data.starts_with(&[0x89, b'P', b'N', b'G']) {
+        lofty::picture::MimeType::Png
+    } else {
+        return Err(StillError::InvalidProject(format!(
+            "Unsupported cover image format (JPEG or PNG expected): {}",
+            path.display()
+        )));
+    };
+    Ok((data, mime))
 }
 
 /// Write the resolved tags into an EXPORTED file (never a source). lofty
 /// picks the container's primary tag format and does the native mapping.
-pub fn write_tags(path: &Path, tags: &TrackTags) -> Result<()> {
+/// `artwork` = validated (bytes, mime) embedded as the front cover.
+pub fn write_tags(
+    path: &Path,
+    tags: &TrackTags,
+    artwork: Option<&(Vec<u8>, lofty::picture::MimeType)>,
+) -> Result<()> {
     let mut tagged = Probe::open(path)
         .map_err(|e| StillError::Io(std::io::Error::other(e.to_string())))?
         .read()
@@ -216,6 +248,18 @@ pub fn write_tags(path: &Path, tags: &TrackTags) -> Result<()> {
         tag.set_disk(tags.disc);
         tag.set_disk_total(tags.disc_total);
     }
+    if let Some((data, _mime)) = artwork {
+        if tag_type != TagType::RiffInfo {
+            // from_reader sniffs the format (mime pre-validated by
+            // load_artwork, so this cannot realistically fail).
+            if let Ok(mut picture) =
+                lofty::picture::Picture::from_reader(&mut &data[..])
+            {
+                picture.set_pic_type(lofty::picture::PictureType::CoverFront);
+                tag.push_picture(picture);
+            }
+        }
+    }
 
     tagged
         .save_to_path(path, WriteOptions::default())
@@ -238,6 +282,7 @@ mod tests {
             genre: "Rock".into(),
             comment: "".into(),
             disc_breaks: vec![7, 13],
+            artwork_path: String::new(),
         }
     }
 

@@ -39,6 +39,7 @@ pub fn run() {
             commands::set_snap_to_zero,
             commands::set_export_config,
             commands::set_album_meta,
+            commands::get_artwork_preview,
             commands::undo,
             commands::redo,
             commands::detect_silences,

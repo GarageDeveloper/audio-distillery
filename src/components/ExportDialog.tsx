@@ -60,7 +60,7 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
       view.album_meta.disc_breaks.length > 0 &&
       cfg.template === "{n} - {title}"
     ) {
-      setCfg((c) => ({ ...c, template: "{disc}/{n} - {title}" }));
+      setCfg((c) => ({ ...c, template: "Disc{disc} - {n} - {title}" }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.album_meta.disc_breaks.length]);

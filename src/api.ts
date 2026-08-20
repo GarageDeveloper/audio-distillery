@@ -77,6 +77,7 @@ export const api = {
     invoke<ProjectView>("set_export_config", { config }),
   setAlbumMeta: (meta: AlbumMeta) =>
     invoke<ProjectView>("set_album_meta", { meta }),
+  getArtworkPreview: () => invoke<string | null>("get_artwork_preview"),
   undo: () => invoke<ProjectView>("undo"),
   redo: () => invoke<ProjectView>("redo"),
   detectSilences: (params: SilenceParams) =>

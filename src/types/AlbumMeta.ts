@@ -23,4 +23,10 @@ date: string, genre: string, comment: string,
  * Empty = single disc. Example: [7, 13] → tracks 1-6 = disc 1,
  * 7-12 = disc 2, 13+ = disc 3.
  */
-disc_breaks: Array<number>, };
+disc_breaks: Array<number>, 
+/**
+ * Path to a cover image (JPEG/PNG), embedded as front cover in every
+ * exported file that supports pictures (MP4 covr, ID3 APIC, FLAC
+ * picture block; RIFF INFO has none). Empty = no artwork.
+ */
+artwork_path: string, };

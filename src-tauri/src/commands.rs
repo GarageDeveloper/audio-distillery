@@ -576,6 +576,35 @@ pub fn rename_track(state: State<'_, AppState>, id: u32, title: String) -> CmdRe
     })
 }
 
+/// Base64 preview of the project's cover image (display only).
+#[tauri::command]
+pub fn get_artwork_preview(state: State<'_, AppState>) -> CmdResult<Option<String>> {
+    with_session(&state, |s| {
+        let path = &s.project.album_meta.artwork_path;
+        if path.is_empty() {
+            return Ok(None);
+        }
+        let (data, mime) =
+            still_core::metadata::load_artwork(Path::new(path)).map_err(err)?;
+        use std::fmt::Write as _;
+        let mut b64 = String::with_capacity(data.len() * 4 / 3 + 4);
+        const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        for chunk in data.chunks(3) {
+            let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+            let n = u32::from_be_bytes([0, b[0], b[1], b[2]]);
+            let _ = write!(
+                b64,
+                "{}{}{}{}",
+                T[(n >> 18 & 63) as usize] as char,
+                T[(n >> 12 & 63) as usize] as char,
+                if chunk.len() > 1 { T[(n >> 6 & 63) as usize] as char } else { '=' },
+                if chunk.len() > 2 { T[(n & 63) as usize] as char } else { '=' },
+            );
+        }
+        Ok(Some(format!("data:{mime};base64,{b64}")))
+    })
+}
+
 /// Store the album metadata (format-agnostic; written to exported files).
 #[tauri::command]
 pub fn set_album_meta(state: State<'_, AppState>, meta: AlbumMeta) -> CmdResult<ProjectView> {

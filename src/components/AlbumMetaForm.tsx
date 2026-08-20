@@ -1,4 +1,7 @@
+import { useEffect, useState } from "react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { AlbumMeta } from "../types/AlbumMeta";
+import { api } from "../api";
 
 interface Props {
   meta: AlbumMeta;
@@ -11,8 +14,48 @@ interface Props {
  * export dialog. Values are the backend's; every edit is an intention. */
 export function AlbumMetaForm({ meta, onChange, showDiscBreaks }: Props) {
   const set = (patch: Partial<AlbumMeta>) => onChange({ ...meta, ...patch });
+  const [preview, setPreview] = useState<string | null>(null);
+  useEffect(() => {
+    if (!meta.artwork_path) {
+      setPreview(null);
+      return;
+    }
+    api.getArtworkPreview().then(setPreview).catch(() => setPreview(null));
+  }, [meta.artwork_path]);
   return (
     <div className="meta-grid">
+      <div className="field meta-artwork">
+        <label>Cover art</label>
+        <div className="artwork-row">
+          {preview ? (
+            <img className="artwork-thumb" src={preview} alt="Cover" />
+          ) : (
+            <div className="artwork-thumb artwork-empty">no cover</div>
+          )}
+          <div className="artwork-actions">
+            <button
+              className="btn"
+              onClick={async () => {
+                const picked = await openDialog({
+                  multiple: false,
+                  filters: [{ name: "Image", extensions: ["jpg", "jpeg", "png"] }],
+                });
+                if (typeof picked === "string") set({ artwork_path: picked });
+              }}
+            >
+              Choose image…
+            </button>
+            {meta.artwork_path && (
+              <button className="btn" onClick={() => set({ artwork_path: "" })}>
+                Remove
+              </button>
+            )}
+            <div className="hint">
+              JPEG or PNG, embedded natively (Apple Music, ID3, FLAC)
+            </div>
+          </div>
+        </div>
+      </div>
       <div className="field">
         <label>Album</label>
         <input
