@@ -38,7 +38,7 @@ export default function App() {
   const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null);
   const [proposals, setProposals] = useState<RegionSpan[] | null>(null);
   const [dropChoice, setDropChoice] = useState<string[] | null>(null);
-  const [minTrackSecs, setMinTrackSecs] = useState(60);
+  const [minTrackSecs, setMinTrackSecs] = useState(120);
   const [waveMode, setWaveMode] = useState<"mix" | "layers">("mix");
   const [selection, setSelection] = useState<RegionSpan | null>(null);
   const [pendingStart, setPendingStart] = useState<number | null>(null);
@@ -168,13 +168,31 @@ export default function App() {
   }, []);
 
   // Native file drag & drop. Several audio files load back-to-back as clips;
-  // dropping audio on an existing session APPENDS it to the timeline.
+  // dropping audio on an existing session APPENDS it to the timeline. While
+  // the Album dialog (or the export dialog's metadata section) is open, a
+  // dropped IMAGE becomes the cover art instead of being refused as
+  // non-audio.
   useEffect(() => {
     const un = getCurrentWebview().onDragDropEvent((e) => {
       if (e.payload.type === "drop" && e.payload.paths.length > 0) {
         const ext = (p: string) => p.split(".").pop()?.toLowerCase() ?? "";
         const still = e.payload.paths.find((p) => ext(p) === "still");
         const audio = e.payload.paths.filter((p) => AUDIO_EXTS.includes(ext(p)));
+        const image = e.payload.paths.find((p) =>
+          ["jpg", "jpeg", "png"].includes(ext(p))
+        );
+        if (image && viewRef.current && (albumOpen || exportOpen)) {
+          void apply(() =>
+            api.setAlbumMeta({ ...viewRef.current!.album_meta, artwork_path: image })
+          );
+          return;
+        }
+        if (image && !still && audio.length === 0) {
+          showError(
+            "To set this image as the album cover, open Album… (or the export dialog) first, then drop it again."
+          );
+          return;
+        }
         if (still) {
           void loadPaths([still], "project");
         } else if (audio.length > 0) {
@@ -194,7 +212,7 @@ export default function App() {
     return () => {
       un.then((f) => f());
     };
-  }, [loadPaths, showError]);
+  }, [loadPaths, showError, albumOpen, exportOpen, apply]);
 
   const pickAudioPaths = useCallback(async (withProject: boolean) => {
     const picked = await openDialog({
