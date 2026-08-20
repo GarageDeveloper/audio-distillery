@@ -227,6 +227,39 @@ mod macos {
         kAudioUnitProperty_ClassInfo,
     ];
 
+    fn au_debug() -> bool {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ON.get_or_init(|| std::env::var("STILL_AU_DEBUG").is_ok())
+    }
+
+    /// Debug listener: logs EVERY property notification the unit emits so we
+    /// can see what a plugin actually signals (preset loads etc.).
+    unsafe extern "C" fn au_debug_listener(
+        _in_ref_con: *mut std::os::raw::c_void,
+        _unit: AudioUnit,
+        prop: AudioUnitPropertyID,
+        scope: AudioUnitScope,
+        elem: AudioUnitElement,
+    ) {
+        eprintln!("[au-debug] property change: id={prop} scope={scope} elem={elem}");
+    }
+
+    /// Broad list of observable properties for debug instrumentation.
+    const DEBUG_PROPS: [AudioUnitPropertyID; 12] = [
+        kAudioUnitProperty_Latency,
+        kAudioUnitProperty_PresentPreset,
+        kAudioUnitProperty_ClassInfo,
+        kAudioUnitProperty_StreamFormat,
+        kAudioUnitProperty_SampleRate,
+        kAudioUnitProperty_TailTime,
+        kAudioUnitProperty_SupportedNumChannels,
+        kAudioUnitProperty_MaximumFramesPerSlice,
+        kAudioUnitProperty_LastRenderError,
+        kAudioUnitProperty_ParameterList,
+        kAudioUnitProperty_ElementCount,
+        kAudioUnitProperty_BypassEffect,
+    ];
+
     /// A hosted AU effect, usable as a `BlockProcessor` insert.
     pub struct AuPlugin {
         unit: AudioUnit,
@@ -403,6 +436,17 @@ mod macos {
                         &*plugin.needs_reinit as *const AtomicBool as *mut _,
                     );
                 }
+                if au_debug() {
+                    eprintln!("[au-debug] instantiated {component_id}");
+                    for prop in DEBUG_PROPS {
+                        let _ = AudioUnitAddPropertyListener(
+                            plugin.unit,
+                            prop,
+                            Some(au_debug_listener),
+                            null_mut(),
+                        );
+                    }
+                }
                 Ok(plugin)
             }
         }
@@ -529,6 +573,9 @@ mod macos {
             // latency change): re-initialize it here on the render thread,
             // between blocks, so its new DSP graph engages.
             if self.needs_reinit.swap(false, Ordering::Acquire) {
+                if au_debug() {
+                    eprintln!("[au-debug] config change → re-initializing the unit");
+                }
                 unsafe {
                     AudioUnitUninitialize(self.unit);
                     if AudioUnitInitialize(self.unit) != 0 {
@@ -537,6 +584,11 @@ mod macos {
                     AudioUnitReset(self.unit, kAudioUnitScope_Global, 0);
                 }
             }
+            let debug_rms_in: f32 = if au_debug() {
+                buffer.iter().map(|v| v * v).sum::<f32>() / buffer.len() as f32
+            } else {
+                0.0
+            };
             let ch = self.channels.min(channels.max(1));
             let frames = buffer.len() / channels;
             if frames == 0 {
@@ -603,6 +655,23 @@ mod macos {
             self.transport
                 .sample_pos
                 .store(self.rendered, Ordering::Relaxed);
+            if au_debug() && (self.rendered / frames as u64) % 200 == 0 {
+                let out_sum: f32 = self
+                    .out_planar
+                    .iter()
+                    .flat_map(|p| p[..frames].iter())
+                    .map(|v| v * v)
+                    .sum::<f32>()
+                    / (frames * self.channels) as f32;
+                let delta_db = 10.0
+                    * ((out_sum + 1e-12) / (debug_rms_in + 1e-12)).log10();
+                eprintln!(
+                    "[au-debug] rms in={:.6} out={:.6} delta={:+.1} dB",
+                    debug_rms_in.sqrt(),
+                    out_sum.sqrt(),
+                    delta_db
+                );
+            }
             // Interleave back.
             for c in 0..channels {
                 let src = &self.out_planar[c.min(ch - 1)];
