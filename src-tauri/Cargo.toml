@@ -12,6 +12,14 @@ members = ["core"]
 name = "still_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# The product name is what macOS shows in Cmd-Tab/Dock for the dev process,
+# so the binary carries it (the "still" short name remains the technical id:
+# crate names, .still extension, window labels).
+[[bin]]
+name = "AudioDistillery"
+path = "src/main.rs"
+
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

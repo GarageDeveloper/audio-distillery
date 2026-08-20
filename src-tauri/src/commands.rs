@@ -677,7 +677,16 @@ pub async fn export_tracks(
     let cancel = state.export_cancel.clone();
     let app2 = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let ffmpeg = still_core::resolve_ffmpeg(&[])?;
+        // The bundled sidecar (externalBin) lives right next to the app
+        // binary; system installs remain the fallback for dev setups.
+        let sidecar: Vec<PathBuf> = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|d| d.to_path_buf()))
+            .map(|dir| {
+                vec![dir.join(if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" })]
+            })
+            .unwrap_or_default();
+        let ffmpeg = still_core::resolve_ffmpeg(&sidecar)?;
         // Progress arrives from several worker threads at once; throttle the
         // stream globally but always let start/end events through.
         let last = std::sync::Mutex::new(Instant::now() - Duration::from_secs(1));
