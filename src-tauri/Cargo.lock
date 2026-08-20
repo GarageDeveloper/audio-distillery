@@ -3573,6 +3573,8 @@ dependencies = [
 name = "still-core"
 version = "0.1.0"
 dependencies = [
+ "core-foundation-sys",
+ "coreaudio-sys",
  "cpal",
  "hound",
  "lofty",

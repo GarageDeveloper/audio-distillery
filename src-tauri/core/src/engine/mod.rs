@@ -33,6 +33,18 @@ use crate::error::{Result, StillError};
 use decode::{LayerDecoder, PlayItem};
 use render::{Renderer, BLOCK_FRAMES};
 
+/// Spec of one master-chain plugin, sent by the control side.
+#[derive(Debug, Clone)]
+pub struct MasterPluginSpec {
+    pub id: u32,
+    pub component: String,
+    pub bypass: bool,
+    pub state: Option<Vec<u8>>,
+}
+
+/// Snapshot of one chain plugin's live state.
+pub type ChainStateSnapshot = Vec<(u32, Option<Vec<u8>>)>;
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../src/types/")]
 pub struct PlaybackState {
@@ -71,6 +83,9 @@ impl VolumeAutomation {
 }
 
 enum Cmd {
+    SetMasterChain(Vec<MasterPluginSpec>, Sender<Vec<String>>),
+    SetPluginBypass(u32, bool),
+    GetChainStates(Sender<ChainStateSnapshot>),
     Load {
         layers: Vec<LayerPlay>,
         total_seconds: f64,
@@ -167,6 +182,28 @@ impl PlayerHandle {
         self.send(Cmd::SetAutomation(automation))
     }
 
+    /// Replace the master-bus mastering chain. Returns per-plugin errors
+    /// (empty = every plugin instantiated fine).
+    pub fn set_master_chain(&self, specs: Vec<MasterPluginSpec>) -> Result<Vec<String>> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.send(Cmd::SetMasterChain(specs, tx))?;
+        rx.recv_timeout(Duration::from_secs(10))
+            .map_err(|_| StillError::Playback("engine did not answer".into()))
+    }
+
+    /// Live bypass toggle (no chain rebuild, keeps plugin state).
+    pub fn set_plugin_bypass(&self, id: u32, bypassed: bool) -> Result<()> {
+        self.send(Cmd::SetPluginBypass(id, bypassed))
+    }
+
+    /// Capture the live state blobs of the chain plugins (for project save).
+    pub fn get_chain_states(&self) -> Result<ChainStateSnapshot> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.send(Cmd::GetChainStates(tx))?;
+        rx.recv_timeout(Duration::from_secs(10))
+            .map_err(|_| StillError::Playback("engine did not answer".into()))
+    }
+
     pub fn play(&self) -> Result<()> {
         self.send(Cmd::Resume)
     }
@@ -217,6 +254,9 @@ fn to_items(playlist: &Playlist, sample_rate: u32) -> Vec<PlayItem> {
 
 fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
     let mut renderer: Option<Renderer> = None;
+    // Chain wanted by the control side; applied to the renderer on load and
+    // whenever it changes (kept here so a reload re-instantiates it).
+    let mut chain_specs: Vec<MasterPluginSpec> = Vec::new();
     let mut producer: Option<rtrb::Producer<f32>> = None;
     let mut _stream: Option<cpal::Stream> = None;
     let mut device_channels = 2usize;
@@ -272,6 +312,34 @@ fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
                     }
                 }
                 shared.loaded.store(true, Ordering::Relaxed);
+                if let Some(r) = &mut renderer {
+                    let _ = apply_chain(r, &chain_specs);
+                }
+            }
+            Ok(Cmd::SetMasterChain(specs, reply)) => {
+                chain_specs = specs;
+                let errors = match &mut renderer {
+                    Some(r) => apply_chain(r, &chain_specs),
+                    None => Vec::new(), // applied at next load
+                };
+                let _ = reply.send(errors);
+            }
+            Ok(Cmd::SetPluginBypass(id, bypassed)) => {
+                if let Some(pos) = chain_specs.iter().position(|s| s.id == id) {
+                    chain_specs[pos].bypass = bypassed;
+                    if let Some(r) = &mut renderer {
+                        if r.master_inserts.len() == chain_specs.len() {
+                            r.master_inserts[pos].set_bypassed(bypassed);
+                        }
+                    }
+                }
+            }
+            Ok(Cmd::GetChainStates(reply)) => {
+                let snapshot = match &renderer {
+                    Some(r) => snapshot_chain(r, &chain_specs),
+                    None => chain_specs.iter().map(|s| (s.id, s.state.clone())).collect(),
+                };
+                let _ = reply.send(snapshot);
             }
             Ok(Cmd::SetAutomation(a)) => {
                 if let Some(r) = &mut renderer {
@@ -356,6 +424,55 @@ fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
             _ => {}
         }
     }
+}
+
+/// (Re)build the master insert chain on the renderer from the specs.
+#[cfg(target_os = "macos")]
+fn apply_chain(r: &mut Renderer, specs: &[MasterPluginSpec]) -> Vec<String> {
+    use crate::aunit::AuPlugin;
+    let mut errors = Vec::new();
+    let mut inserts: Vec<Box<dyn render::BlockProcessor>> = Vec::new();
+    for spec in specs {
+        match AuPlugin::new(&spec.component, r.sample_rate, r.channels) {
+            Ok(mut p) => {
+                if let Some(state) = &spec.state {
+                    if let Err(e) = p.set_state(state) {
+                        errors.push(format!("{}: {e}", spec.component));
+                    }
+                }
+                p.bypass = spec.bypass;
+                inserts.push(Box::new(p));
+            }
+            Err(e) => errors.push(format!("{}: {e}", spec.component)),
+        }
+    }
+    r.master_inserts = inserts;
+    errors
+}
+
+#[cfg(not(target_os = "macos"))]
+fn apply_chain(_r: &mut Renderer, specs: &[MasterPluginSpec]) -> Vec<String> {
+    if specs.is_empty() {
+        Vec::new()
+    } else {
+        vec!["Audio Unit hosting is only available on macOS".into()]
+    }
+}
+
+/// Capture the live plugin states. Instances were built in spec order,
+/// skipping failed ones; a failed plugin keeps its previously saved state.
+fn snapshot_chain(r: &Renderer, specs: &[MasterPluginSpec]) -> ChainStateSnapshot {
+    let mut out = Vec::new();
+    let live = r.master_inserts.len() == specs.len();
+    for (i, spec) in specs.iter().enumerate() {
+        let state = if live {
+            r.master_inserts[i].save_state().or_else(|| spec.state.clone())
+        } else {
+            spec.state.clone()
+        };
+        out.push((spec.id, state));
+    }
+    out
 }
 
 /// Reposition the renderer and mark all in-flight ring frames as stale.

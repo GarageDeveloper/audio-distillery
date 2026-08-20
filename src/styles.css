@@ -867,3 +867,38 @@ kbd {
   font-size: 10px; color: var(--text-3);
 }
 .artwork-actions { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+
+/* Mastering chain dialog */
+.chain-list { display: flex; flex-direction: column; gap: 4px; }
+.chain-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg-deep);
+  border: 1px solid var(--line);
+  border-radius: var(--r-m);
+}
+.chain-row.bypassed { opacity: .5; }
+.chain-num {
+  font-family: var(--font-mono);
+  font-size: 11px; font-weight: 700;
+  color: var(--copper-hi);
+  width: 16px; text-align: right;
+}
+.chain-name { flex: 1; min-width: 0; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chain-del { opacity: 1; width: 20px; height: 20px; border-radius: var(--r-s); color: var(--text-3); }
+.chain-del:hover { color: var(--err); background: var(--err-dim); }
+.plugin-browser {
+  max-height: 220px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 2px;
+  margin-top: 6px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-m);
+  padding: 4px;
+}
+.plugin-item {
+  text-align: left;
+  padding: 6px 10px;
+  border-radius: var(--r-s);
+  color: var(--text);
+}
+.plugin-item:hover { background: var(--copper-dim); color: var(--copper-hi); }

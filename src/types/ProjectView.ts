@@ -3,12 +3,13 @@ import type { AlbumMeta } from "./AlbumMeta";
 import type { AudioInfo } from "./AudioInfo";
 import type { ExportConfig } from "./ExportConfig";
 import type { LayerView } from "./LayerView";
+import type { MasteringPluginView } from "./MasteringPluginView";
 import type { TrackInfo } from "./TrackInfo";
 
 /**
  * Display snapshot sent to the frontend after every mutation.
  */
-export type ProjectView = { audio: AudioInfo, layers: Array<LayerView>, tracks: Array<TrackInfo>, snap_to_zero: boolean, export_config: ExportConfig, project_path: string | null, album_meta: AlbumMeta, 
+export type ProjectView = { audio: AudioInfo, layers: Array<LayerView>, tracks: Array<TrackInfo>, snap_to_zero: boolean, export_config: ExportConfig, project_path: string | null, album_meta: AlbumMeta, mastering_chain: Array<MasteringPluginView>, 
 /**
  * Backend-computed proposal for the next track title (may be empty).
  */

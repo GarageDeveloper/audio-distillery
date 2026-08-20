@@ -20,6 +20,12 @@ pub trait BlockProcessor: Send {
     }
     /// Clear internal state (called on seek).
     fn reset(&mut self);
+    /// Serialize the processor's full state (plugins: preset blob).
+    fn save_state(&self) -> Option<Vec<u8>> {
+        None
+    }
+    /// Live bypass without rebuilding the processor.
+    fn set_bypassed(&mut self, _bypassed: bool) {}
 }
 
 pub const BLOCK_FRAMES: usize = 512;

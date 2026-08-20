@@ -6,6 +6,8 @@
 //! read-only, everywhere, always. Only exports create new files.
 
 pub mod audio;
+pub mod aunit;
+pub mod b64;
 pub mod error;
 pub mod export;
 pub mod ffmpeg;
@@ -28,10 +30,11 @@ pub use export::{
 pub use ffmpeg::resolve_ffmpeg;
 pub use metadata::{resolve_tags, write_tags, AlbumMeta, TrackTags};
 pub use peaks::{merged_base_pyramid, merged_query, PeakPyramid, PeakSlice};
-pub use engine::{LayerPlay, PlaybackState, PlayerHandle, VolumeAutomation};
+pub use aunit::AuComponentInfo;
+pub use engine::{LayerPlay, MasterPluginSpec, PlaybackState, PlayerHandle, VolumeAutomation};
 pub use project::{
     db_to_linear, read_project, sanitize_regions, save_project, ExportConfig, ExportFormat,
-    Layer, LayerView, Project, ProjectState, ProjectView, RegionEdge, RegionSpan, SourceRef,
-    TrackInfo,
+    Layer, LayerView, MasteringPluginCfg, MasteringPluginView, Project, ProjectState,
+    ProjectView, RegionEdge, RegionSpan, SourceRef, TrackInfo,
 };
 pub use silence::{detect_track_regions, SilenceParams};

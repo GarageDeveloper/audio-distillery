@@ -8,6 +8,7 @@ import type { ExportConfig } from "./types/ExportConfig";
 import type { ExportReport } from "./types/ExportReport";
 import type { SilenceParams } from "./types/SilenceParams";
 import type { AlbumMeta } from "./types/AlbumMeta";
+import type { AuComponentInfo } from "./types/AuComponentInfo";
 import type { RegionSpan } from "./types/RegionSpan";
 import type { RegionEdge } from "./types/RegionEdge";
 
@@ -78,6 +79,15 @@ export const api = {
   setAlbumMeta: (meta: AlbumMeta) =>
     invoke<ProjectView>("set_album_meta", { meta }),
   getArtworkPreview: () => invoke<string | null>("get_artwork_preview"),
+  listAudioUnits: () => invoke<AuComponentInfo[]>("list_audio_units"),
+  addMasteringPlugin: (component: string, name: string) =>
+    invoke<ProjectView>("add_mastering_plugin", { component, name }),
+  removeMasteringPlugin: (id: number) =>
+    invoke<ProjectView>("remove_mastering_plugin", { id }),
+  moveMasteringPlugin: (id: number, delta: number) =>
+    invoke<ProjectView>("move_mastering_plugin", { id, delta }),
+  setMasteringBypass: (id: number, bypass: boolean) =>
+    invoke<ProjectView>("set_mastering_bypass", { id, bypass }),
   undo: () => invoke<ProjectView>("undo"),
   redo: () => invoke<ProjectView>("redo"),
   detectSilences: (params: SilenceParams) =>

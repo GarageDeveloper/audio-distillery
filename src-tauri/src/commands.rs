@@ -10,8 +10,8 @@ use tauri::{AppHandle, Emitter, State};
 
 use still_core::project::{ExportConfig, Project};
 use still_core::{
-    AlbumMeta, ExportReport, PeakSlice, PlaybackState, ProjectState, ProjectView, RegionEdge,
-    RegionSpan, SilenceParams,
+    AlbumMeta, AuComponentInfo, ExportReport, PeakSlice, PlaybackState, ProjectState,
+    ProjectView, RegionEdge, RegionSpan, SilenceParams,
 };
 
 use crate::state::AppState;
@@ -156,6 +156,9 @@ async fn load_session(
     // Clamp regions against the real scanned duration (source may have
     // changed since the project was saved) and drop degenerate ones.
     still_core::sanitize_regions(&mut ps.project, ps.info.duration_samples, ps.info.sample_rate);
+    // Re-instantiate the project's mastering chain on the fresh engine
+    // session (errors surface but don't block the load).
+    let _ = state.player.set_master_chain(chain_specs(&ps));
     let view = ps.view();
     *state.session.lock().unwrap() = Some(ps);
     Ok(view)
@@ -582,6 +585,126 @@ pub fn rename_track(state: State<'_, AppState>, id: u32, title: String) -> CmdRe
     })
 }
 
+/// The mastering chain as engine specs (decoding saved state blobs).
+fn chain_specs(s: &ProjectState) -> Vec<still_core::engine::MasterPluginSpec> {
+    s.project
+        .mastering_chain
+        .iter()
+        .map(|c| still_core::engine::MasterPluginSpec {
+            id: c.id,
+            component: c.component.clone(),
+            bypass: c.bypass,
+            state: c.state_b64.as_deref().and_then(still_core::b64::decode),
+        })
+        .collect()
+}
+
+/// Snapshot live plugin states into the project, then rebuild the engine
+/// chain from the (updated) project — the sequence that keeps user tweaks
+/// across add/remove/reorder operations.
+fn sync_chain(state: &State<'_, AppState>, s: &mut ProjectState) -> CmdResult<()> {
+    let errors = state
+        .player
+        .set_master_chain(chain_specs(s))
+        .map_err(err)?;
+    if let Some(e) = errors.first() {
+        return Err(format!("Mastering chain: {e}"));
+    }
+    Ok(())
+}
+
+fn snapshot_chain_states(state: &State<'_, AppState>, s: &mut ProjectState) {
+    if s.project.mastering_chain.is_empty() {
+        return;
+    }
+    if let Ok(snapshot) = state.player.get_chain_states() {
+        for (id, blob) in snapshot {
+            if let Some(cfg) = s.project.mastering_chain.iter_mut().find(|c| c.id == id) {
+                if let Some(b) = blob {
+                    cfg.state_b64 = Some(still_core::b64::encode(&b));
+                }
+            }
+        }
+    }
+}
+
+/// Installed Audio Unit effects (macOS).
+#[tauri::command]
+pub fn list_audio_units() -> CmdResult<Vec<AuComponentInfo>> {
+    Ok(still_core::aunit::list_effects())
+}
+
+#[tauri::command]
+pub fn add_mastering_plugin(
+    state: State<'_, AppState>,
+    component: String,
+    name: String,
+) -> CmdResult<ProjectView> {
+    with_session(&state, |s| {
+        snapshot_chain_states(&state, s);
+        let id = s.project.next_plugin_id;
+        s.project.next_plugin_id += 1;
+        s.project
+            .mastering_chain
+            .push(still_core::MasteringPluginCfg {
+                id,
+                component,
+                name,
+                bypass: false,
+                state_b64: None,
+            });
+        sync_chain(&state, s)?;
+        Ok(s.view())
+    })
+}
+
+#[tauri::command]
+pub fn remove_mastering_plugin(state: State<'_, AppState>, id: u32) -> CmdResult<ProjectView> {
+    with_session(&state, |s| {
+        snapshot_chain_states(&state, s);
+        s.project.mastering_chain.retain(|c| c.id != id);
+        sync_chain(&state, s)?;
+        Ok(s.view())
+    })
+}
+
+/// Move a plugin up (-1) or down (+1) in the chain.
+#[tauri::command]
+pub fn move_mastering_plugin(
+    state: State<'_, AppState>,
+    id: u32,
+    delta: i32,
+) -> CmdResult<ProjectView> {
+    with_session(&state, |s| {
+        snapshot_chain_states(&state, s);
+        let chain = &mut s.project.mastering_chain;
+        if let Some(pos) = chain.iter().position(|c| c.id == id) {
+            let new_pos = (pos as i64 + delta as i64)
+                .clamp(0, chain.len() as i64 - 1) as usize;
+            let item = chain.remove(pos);
+            chain.insert(new_pos, item);
+        }
+        sync_chain(&state, s)?;
+        Ok(s.view())
+    })
+}
+
+/// Live bypass — no rebuild, the plugin keeps its state.
+#[tauri::command]
+pub fn set_mastering_bypass(
+    state: State<'_, AppState>,
+    id: u32,
+    bypass: bool,
+) -> CmdResult<ProjectView> {
+    with_session(&state, |s| {
+        if let Some(cfg) = s.project.mastering_chain.iter_mut().find(|c| c.id == id) {
+            cfg.bypass = bypass;
+        }
+        state.player.set_plugin_bypass(id, bypass).map_err(err)?;
+        Ok(s.view())
+    })
+}
+
 /// Base64 preview of the project's cover image (display only).
 #[tauri::command]
 pub fn get_artwork_preview(state: State<'_, AppState>) -> CmdResult<Option<String>> {
@@ -770,6 +893,8 @@ pub fn cancel_export(state: State<'_, AppState>) -> CmdResult<()> {
 #[tauri::command]
 pub fn save_project(state: State<'_, AppState>, path: Option<String>) -> CmdResult<ProjectView> {
     with_session(&state, |s| {
+        // Persist the LIVE plugin states (knob tweaks) into the recipe.
+        snapshot_chain_states(&state, s);
         let target = match path.map(PathBuf::from).or_else(|| s.project_path.clone()) {
             Some(p) => p,
             None => return Err("No project file path given.".to_string()),

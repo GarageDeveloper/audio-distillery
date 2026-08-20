@@ -132,6 +132,24 @@ worker count. Each `ExportProgress` event concerns ONE track
 `overall_progress` / `completed_tracks` for the global state. Report order is
 always track order, regardless of finish order.
 
+## Mastering chain (macOS)
+
+| Command | Parameters | Returns | Errors |
+|---|---|---|---|
+| `list_audio_units` | — | `AuComponentInfo[]` (installed 'aufx' effects; empty off-macOS) | — |
+| `add_mastering_plugin` | `component: string` ("aufx:xxxx:yyyy"), `name: string` | `ProjectView` | plugin not installed / failed to instantiate |
+| `remove_mastering_plugin` | `id: number` | `ProjectView` | — |
+| `move_mastering_plugin` | `id: number`, `delta: number` | `ProjectView` | — |
+| `set_mastering_bypass` | `id: number`, `bypass: boolean` | `ProjectView` (LIVE: no rebuild, plugin keeps its state) | — |
+
+The chain lives on the master bus of the realtime engine (after the layer
+sum) and processes playback live. Structural changes (add/remove/reorder)
+first snapshot the live plugin states, then rebuild the chain, so knob
+tweaks survive. `save_project` snapshots the states into the `.still`
+(`kAudioUnitProperty_ClassInfo` binary plist, base64) and loading a project
+re-instantiates the chain with them. Export does NOT render through the
+chain yet (phase C).
+
 ## Playback
 
 | Command | Parameters | Returns |
