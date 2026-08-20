@@ -85,6 +85,7 @@ impl VolumeAutomation {
 enum Cmd {
     SetMasterChain(Vec<MasterPluginSpec>, Sender<Vec<String>>),
     SetPluginBypass(u32, bool),
+    GetPluginHandle(u32, Sender<usize>),
     GetChainStates(Sender<ChainStateSnapshot>),
     Load {
         layers: Vec<LayerPlay>,
@@ -194,6 +195,15 @@ impl PlayerHandle {
     /// Live bypass toggle (no chain rebuild, keeps plugin state).
     pub fn set_plugin_bypass(&self, id: u32, bypassed: bool) -> Result<()> {
         self.send(Cmd::SetPluginBypass(id, bypassed))
+    }
+
+    /// Native handle (AudioUnit pointer) of a chain plugin, for its editor
+    /// window. 0 when the plugin is unknown or failed to instantiate.
+    pub fn plugin_handle(&self, id: u32) -> Result<usize> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.send(Cmd::GetPluginHandle(id, tx))?;
+        rx.recv_timeout(Duration::from_secs(5))
+            .map_err(|_| StillError::Playback("engine did not answer".into()))
     }
 
     /// Capture the live state blobs of the chain plugins (for project save).
@@ -333,6 +343,19 @@ fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
                         }
                     }
                 }
+            }
+            Ok(Cmd::GetPluginHandle(id, reply)) => {
+                let handle = chain_specs
+                    .iter()
+                    .position(|s| s.id == id)
+                    .and_then(|pos| {
+                        renderer.as_ref().and_then(|r| {
+                            (r.master_inserts.len() == chain_specs.len())
+                                .then(|| r.master_inserts[pos].raw_handle())
+                        })
+                    })
+                    .unwrap_or(0);
+                let _ = reply.send(handle);
             }
             Ok(Cmd::GetChainStates(reply)) => {
                 let snapshot = match &renderer {

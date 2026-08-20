@@ -26,6 +26,10 @@ pub trait BlockProcessor: Send {
     }
     /// Live bypass without rebuilding the processor.
     fn set_bypassed(&mut self, _bypassed: bool) {}
+    /// Raw native handle (AudioUnit pointer) for editor windows; 0 = none.
+    fn raw_handle(&self) -> usize {
+        0
+    }
 }
 
 pub const BLOCK_FRAMES: usize = 512;

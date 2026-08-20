@@ -60,6 +60,15 @@ export function MasteringDialog({ view, onClose, onError, onViewChange }: Props)
                   {p.name}
                 </span>
                 <button
+                  className="btn chain-edit"
+                  title="Open the plugin's editor window"
+                  onClick={() => {
+                    api.openPluginEditor(p.id).catch((e) => onError(String(e)));
+                  }}
+                >
+                  Edit
+                </button>
+                <button
                   className="disc-sep-btn"
                   disabled={i === 0}
                   title="Move earlier in the chain"
@@ -132,8 +141,10 @@ export function MasteringDialog({ view, onClose, onError, onViewChange }: Props)
         </div>
 
         <div className="hint">
-          Plugin knobs keep their values in the project (saved on ⌘S). Plugin editor
-          windows and the export render through the chain arrive in the next steps.
+          Edit opens the plugin's own window (or a generic parameter view) — tweak while
+          playing. Settings are saved in the project (⌘S). Note: reordering or
+          removing plugins closes open editors; the export render through the chain
+          arrives in the next step.
         </div>
 
         <div className="modal-foot">

@@ -1,4 +1,5 @@
 mod commands;
+mod editor;
 mod state;
 
 use state::AppState;
@@ -45,6 +46,7 @@ pub fn run() {
             commands::remove_mastering_plugin,
             commands::move_mastering_plugin,
             commands::set_mastering_bypass,
+            commands::open_plugin_editor,
             commands::undo,
             commands::redo,
             commands::detect_silences,

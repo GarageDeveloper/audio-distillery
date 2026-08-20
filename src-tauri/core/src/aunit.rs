@@ -465,6 +465,10 @@ mod macos {
         fn set_bypassed(&mut self, bypassed: bool) {
             self.bypass = bypassed;
         }
+
+        fn raw_handle(&self) -> usize {
+            self.unit as usize
+        }
     }
 
     #[cfg(test)]

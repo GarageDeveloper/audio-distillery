@@ -158,6 +158,7 @@ async fn load_session(
     still_core::sanitize_regions(&mut ps.project, ps.info.duration_samples, ps.info.sample_rate);
     // Re-instantiate the project's mastering chain on the fresh engine
     // session (errors surface but don't block the load).
+    state.editors.close_all(&app);
     let _ = state.player.set_master_chain(chain_specs(&ps));
     let view = ps.view();
     *state.session.lock().unwrap() = Some(ps);
@@ -601,8 +602,14 @@ fn chain_specs(s: &ProjectState) -> Vec<still_core::engine::MasterPluginSpec> {
 
 /// Snapshot live plugin states into the project, then rebuild the engine
 /// chain from the (updated) project — the sequence that keeps user tweaks
-/// across add/remove/reorder operations.
-fn sync_chain(state: &State<'_, AppState>, s: &mut ProjectState) -> CmdResult<()> {
+/// across add/remove/reorder operations. Editor windows are closed first:
+/// they reference the AudioUnit instances the rebuild destroys.
+fn sync_chain(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    s: &mut ProjectState,
+) -> CmdResult<()> {
+    state.editors.close_all(app);
     let errors = state
         .player
         .set_master_chain(chain_specs(s))
@@ -636,6 +643,7 @@ pub fn list_audio_units() -> CmdResult<Vec<AuComponentInfo>> {
 
 #[tauri::command]
 pub fn add_mastering_plugin(
+    app: AppHandle,
     state: State<'_, AppState>,
     component: String,
     name: String,
@@ -653,17 +661,21 @@ pub fn add_mastering_plugin(
                 bypass: false,
                 state_b64: None,
             });
-        sync_chain(&state, s)?;
+        sync_chain(&app, &state, s)?;
         Ok(s.view())
     })
 }
 
 #[tauri::command]
-pub fn remove_mastering_plugin(state: State<'_, AppState>, id: u32) -> CmdResult<ProjectView> {
+pub fn remove_mastering_plugin(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: u32,
+) -> CmdResult<ProjectView> {
     with_session(&state, |s| {
         snapshot_chain_states(&state, s);
         s.project.mastering_chain.retain(|c| c.id != id);
-        sync_chain(&state, s)?;
+        sync_chain(&app, &state, s)?;
         Ok(s.view())
     })
 }
@@ -671,6 +683,7 @@ pub fn remove_mastering_plugin(state: State<'_, AppState>, id: u32) -> CmdResult
 /// Move a plugin up (-1) or down (+1) in the chain.
 #[tauri::command]
 pub fn move_mastering_plugin(
+    app: AppHandle,
     state: State<'_, AppState>,
     id: u32,
     delta: i32,
@@ -684,7 +697,7 @@ pub fn move_mastering_plugin(
             let item = chain.remove(pos);
             chain.insert(new_pos, item);
         }
-        sync_chain(&state, s)?;
+        sync_chain(&app, &state, s)?;
         Ok(s.view())
     })
 }
@@ -703,6 +716,29 @@ pub fn set_mastering_bypass(
         state.player.set_plugin_bypass(id, bypass).map_err(err)?;
         Ok(s.view())
     })
+}
+
+/// Open (or re-show) the native editor window of a mastering plugin.
+#[tauri::command]
+pub fn open_plugin_editor(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: u32,
+) -> CmdResult<()> {
+    let (unit, name) = with_session(&state, |s| {
+        let name = s
+            .project
+            .mastering_chain
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| c.name.clone())
+            .ok_or_else(|| "unknown plugin".to_string())?;
+        Ok((state.player.plugin_handle(id).map_err(err)?, name))
+    })?;
+    if unit == 0 {
+        return Err("This plugin is not running (did it fail to load?).".into());
+    }
+    state.editors.open(&app, id, unit, &name)
 }
 
 /// Base64 preview of the project's cover image (display only).
