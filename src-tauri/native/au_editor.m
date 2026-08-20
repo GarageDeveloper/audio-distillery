@@ -73,6 +73,8 @@ static NSView *still_build_view(AudioUnit unit) {
   return view;
 }
 
+static void still_mount_view(NSWindow *win, NSView *view);
+
 // The plugin changed its whole configuration (preset load): rebuild the
 // view. Debounced — notifications can burst during one load, and the plugin
 // may not be ready for a view request immediately.
@@ -94,12 +96,27 @@ static void still_classinfo_changed(void *refcon, AudioUnit unit,
           NSView *fresh = still_build_view(unit);
           if (fresh) {
             NSRect f = fresh.frame;
-            [ctx.window setContentView:fresh];
             if (f.size.width > 100 && f.size.height > 60)
               [ctx.window setContentSize:f.size];
+            still_mount_view(ctx.window, fresh);
           }
         });
   });
+}
+
+// Embed the AU view inside a CONTAINER — never directly as contentView.
+// Plugins that rebuild their UI (iZotope's Hook/Core architecture reloads
+// its whole core on preset changes) replace their view within its
+// superview; with the view as contentView that replacement fails and
+// leaves a dead interface. Inside a plain container it just works.
+static void still_mount_view(NSWindow *win, NSView *view) {
+  NSView *container = win.contentView;
+  for (NSView *sub in [container.subviews copy])
+    [sub removeFromSuperview];
+  view.frame = container.bounds;
+  view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+  view.postsFrameChangedNotifications = YES;
+  [container addSubview:view];
 }
 
 void *still_open_au_editor(void *unitPtr, const char *title) {
@@ -121,7 +138,23 @@ void *still_open_au_editor(void *unitPtr, const char *title) {
                     defer:NO];
   win.title = [NSString stringWithUTF8String:title];
   win.releasedWhenClosed = NO;
-  [win setContentView:view];
+  win.contentView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, frame.size.width,
+                                                             frame.size.height)];
+  still_mount_view(win, view);
+  // Follow the plugin view's own size changes (preset loads may resize it).
+  [[NSNotificationCenter defaultCenter]
+      addObserverForName:NSViewFrameDidChangeNotification
+                  object:view
+                   queue:[NSOperationQueue mainQueue]
+              usingBlock:^(NSNotification *note) {
+                NSView *v = note.object;
+                if (v.window == win && v.superview == win.contentView) {
+                  NSSize s = v.frame.size;
+                  if (s.width > 100 && s.height > 60 &&
+                      !NSEqualSizes(s, [win.contentView frame].size))
+                    [win setContentSize:s];
+                }
+              }];
   [win center];
   [win makeKeyAndOrderFront:nil];
 
