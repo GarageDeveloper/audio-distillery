@@ -12,6 +12,8 @@ import { Waveform } from "./components/Waveform";
 import { Minimap } from "./components/Minimap";
 import { TrackList } from "./components/TrackList";
 import { ExportDialog } from "./components/ExportDialog";
+import { AlbumMetaForm } from "./components/AlbumMetaForm";
+import { Backdrop } from "./components/Backdrop";
 import { EmptyState } from "./components/EmptyState";
 import { StatusBar } from "./components/StatusBar";
 import { usePlayback } from "./hooks/usePlayback";
@@ -33,10 +35,11 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(true);
   const [exportOpen, setExportOpen] = useState(false);
+  const [albumOpen, setAlbumOpen] = useState(false);
   const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null);
   const [proposals, setProposals] = useState<RegionSpan[] | null>(null);
   const [dropChoice, setDropChoice] = useState<string[] | null>(null);
-  const [minTrackSecs, setMinTrackSecs] = useState(60);
+  const [minTrackSecs, setMinTrackSecs] = useState(120);
   const [waveMode, setWaveMode] = useState<"mix" | "layers">("mix");
   const [selection, setSelection] = useState<RegionSpan | null>(null);
   const [pendingStart, setPendingStart] = useState<number | null>(null);
@@ -166,13 +169,31 @@ export default function App() {
   }, []);
 
   // Native file drag & drop. Several audio files load back-to-back as clips;
-  // dropping audio on an existing session APPENDS it to the timeline.
+  // dropping audio on an existing session APPENDS it to the timeline. While
+  // the Album dialog (or the export dialog's metadata section) is open, a
+  // dropped IMAGE becomes the cover art instead of being refused as
+  // non-audio.
   useEffect(() => {
     const un = getCurrentWebview().onDragDropEvent((e) => {
       if (e.payload.type === "drop" && e.payload.paths.length > 0) {
         const ext = (p: string) => p.split(".").pop()?.toLowerCase() ?? "";
         const still = e.payload.paths.find((p) => ext(p) === "still");
         const audio = e.payload.paths.filter((p) => AUDIO_EXTS.includes(ext(p)));
+        const image = e.payload.paths.find((p) =>
+          ["jpg", "jpeg", "png"].includes(ext(p))
+        );
+        if (image && viewRef.current && (albumOpen || exportOpen)) {
+          void apply(() =>
+            api.setAlbumMeta({ ...viewRef.current!.album_meta, artwork_path: image })
+          );
+          return;
+        }
+        if (image && !still && audio.length === 0) {
+          showError(
+            "To set this image as the album cover, open Album… (or the export dialog) first, then drop it again."
+          );
+          return;
+        }
         if (still) {
           void loadPaths([still], "project");
         } else if (audio.length > 0) {
@@ -192,7 +213,7 @@ export default function App() {
     return () => {
       un.then((f) => f());
     };
-  }, [loadPaths, showError]);
+  }, [loadPaths, showError, albumOpen, exportOpen, apply]);
 
   const pickAudioPaths = useCallback(async (withProject: boolean) => {
     const picked = await openDialog({
@@ -411,6 +432,7 @@ export default function App() {
         onRedo={() => void apply(() => api.redo())}
         onDetectSilences={() => void detectSilences()}
         onExport={() => setExportOpen(true)}
+        onAlbum={() => setAlbumOpen(true)}
         onTogglePanel={() => setPanelOpen((p) => !p)}
         onToggleSnap={() => view && void apply(() => api.setSnapToZero(!view.snap_to_zero))}
       />
@@ -593,6 +615,12 @@ export default function App() {
             onTrackLayerSolo={(trackId, layerId, so) =>
               void apply(() => api.setTrackLayerSolo(trackId, layerId, so))
             }
+            onDiscBreaksChange={(breaks) =>
+              view &&
+              void apply(() =>
+                api.setAlbumMeta({ ...view.album_meta, disc_breaks: breaks })
+              )
+            }
           />
         )}
       </div>
@@ -605,8 +633,31 @@ export default function App() {
         </div>
       )}
 
+      {albumOpen && view && (
+        <Backdrop onClose={() => {}}>
+          <div className="modal">
+            <div>
+              <h2>Album metadata</h2>
+              <div className="subtitle">
+                Saved in the project, written natively into every exported file (ID3, MP4,
+                Vorbis, RIFF)
+              </div>
+            </div>
+            <AlbumMetaForm
+              meta={view.album_meta}
+              onChange={(m) => void apply(() => api.setAlbumMeta(m))}
+            />
+            <div className="modal-foot">
+              <button className="btn btn-primary" onClick={() => setAlbumOpen(false)}>
+                Done
+              </button>
+            </div>
+          </div>
+        </Backdrop>
+      )}
+
       {dropChoice && (
-        <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && setDropChoice(null)}>
+        <Backdrop onClose={() => setDropChoice(null)}>
           <div className="modal drop-choice">
             <h2>
               {dropChoice.length} audio file{dropChoice.length > 1 ? "s" : ""}
@@ -657,7 +708,7 @@ export default function App() {
               </button>
             </div>
           </div>
-        </div>
+        </Backdrop>
       )}
 
       {exportOpen && view && (

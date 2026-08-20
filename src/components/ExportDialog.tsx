@@ -7,7 +7,10 @@ import type { ExportConfig } from "../types/ExportConfig";
 import type { ExportFormat } from "../types/ExportFormat";
 import type { ExportProgress } from "../types/ExportProgress";
 import type { ExportReport } from "../types/ExportReport";
+import type { AlbumMeta } from "../types/AlbumMeta";
 import { api } from "../api";
+import { AlbumMetaForm } from "./AlbumMetaForm";
+import { Backdrop } from "./Backdrop";
 
 interface Props {
   view: ProjectView;
@@ -33,6 +36,13 @@ type Phase = "settings" | "running" | "report";
 
 export function ExportDialog({ view, progress, onClose, onError, onViewChange }: Props) {
   const [cfg, setCfg] = useState<ExportConfig>({ ...view.export_config });
+  // Collapsed by default: metadata is edited any time via the Album… button;
+  // this section is just a shortcut.
+  const [metaOpen, setMetaOpen] = useState(false);
+  const meta: AlbumMeta = view.album_meta;
+  const saveMeta = (m: AlbumMeta) => {
+    api.setAlbumMeta(m).then(onViewChange).catch((e) => onError(String(e)));
+  };
   const [phase, setPhase] = useState<Phase>("settings");
   const [report, setReport] = useState<ExportReport | null>(null);
   // Tracks export in parallel: accumulate the per-track progress events.
@@ -43,6 +53,18 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
       setPerTrack((m) => ({ ...m, [progress.track_number]: progress.track_progress }));
     }
   }, [progress]);
+
+  // Multi-disc album still on the default naming: sort tracks into one
+  // folder per disc.
+  useEffect(() => {
+    if (
+      view.album_meta.disc_breaks.length > 0 &&
+      cfg.template === "{n} - {title}"
+    ) {
+      setCfg((c) => ({ ...c, template: "Disc{disc} - {n} - {title}" }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view.album_meta.disc_breaks.length]);
 
   // Default destination: ~/Music/AudioDistillery (never the source folder).
   useEffect(() => {
@@ -57,12 +79,21 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
 
   const preview = () => {
     const t = view.tracks[Math.min(1, view.tracks.length - 1)];
+    const breaks = view.album_meta.disc_breaks
+      .filter((b) => b >= 2 && b <= view.tracks.length)
+      .sort((a, b) => a - b);
+    const starts = [1, ...breaks];
+    let discIdx = 0;
+    for (let i = 0; i < starts.length; i++) if (starts[i] <= t.number) discIdx = i;
+    const inDisc = t.number - starts[discIdx] + 1;
     const width = Math.max(String(view.tracks.length).length, 2);
-    const n = String(t.number).padStart(width, "0");
     const name = cfg.template
-      .replace("{n}", n)
+      .replace("{n}", String(breaks.length > 0 ? inDisc : t.number).padStart(width, "0"))
+      .replace("{disc}", String(discIdx + 1))
       .replace("{title}", t.title)
       .replace("{titre}", t.title)
+      .replace("{album}", view.album_meta.album)
+      .replace("{year}", view.album_meta.date.replace(/\D/g, "").slice(0, 4))
       .replace("{source}", view.audio.path.split(/[/\\]/).pop()?.replace(/\.[^.]+$/, "") ?? "");
     return `${name}.${EXT[cfg.format]}`;
   };
@@ -90,13 +121,12 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
   const trackCount = view.tracks.length;
 
   return (
-    <div
-      className="modal-backdrop"
-      onClick={(e) => {
-        if (e.target === e.currentTarget && phase !== "running") onClose();
+    <Backdrop
+      onClose={() => {
+        if (phase !== "running") onClose();
       }}
     >
-      <div className="modal">
+      <div className="modal export-modal">
         {phase === "settings" && (
           <>
             <div>
@@ -178,6 +208,22 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
             </div>
 
             <div className="field">
+              <button
+                className="meta-toggle"
+                onClick={() => setMetaOpen(!metaOpen)}
+                aria-expanded={metaOpen}
+              >
+                {metaOpen ? "▾" : "▸"} Metadata (tags)
+                <span className="hint-inline">
+                  written natively per format — ID3, MP4, Vorbis, RIFF
+                </span>
+              </button>
+              {metaOpen && (
+                <AlbumMetaForm meta={meta} onChange={saveMeta} showDiscBreaks />
+              )}
+            </div>
+
+            <div className="field">
               <label>File naming</label>
               <input
                 className="text-input mono"
@@ -185,7 +231,8 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
                 onChange={(e) => setCfg({ ...cfg, template: e.target.value })}
               />
               <div className="hint">
-                Preview: {preview()} — placeholders: {"{n} {title} {source}"}
+                Preview: {preview()} — macros: {"{n} {title} {disc} {album} {year} …"} — a
+                {" / "}creates a subfolder (e.g. {"{disc}/{n} - {title}"})
               </div>
             </div>
 
@@ -295,6 +342,6 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
           </>
         )}
       </div>
-    </div>
+    </Backdrop>
   );
 }

@@ -10,8 +10,8 @@ use tauri::{AppHandle, Emitter, State};
 
 use still_core::project::{ExportConfig, Project};
 use still_core::{
-    ExportReport, PeakSlice, PlaybackState, ProjectState, ProjectView, RegionEdge, RegionSpan,
-    SilenceParams,
+    AlbumMeta, ExportReport, PeakSlice, PlaybackState, ProjectState, ProjectView, RegionEdge,
+    RegionSpan, SilenceParams,
 };
 
 use crate::state::AppState;
@@ -576,6 +576,44 @@ pub fn rename_track(state: State<'_, AppState>, id: u32, title: String) -> CmdRe
     })
 }
 
+/// Base64 preview of the project's cover image (display only).
+#[tauri::command]
+pub fn get_artwork_preview(state: State<'_, AppState>) -> CmdResult<Option<String>> {
+    with_session(&state, |s| {
+        let path = &s.project.album_meta.artwork_path;
+        if path.is_empty() {
+            return Ok(None);
+        }
+        let (data, mime) =
+            still_core::metadata::load_artwork(Path::new(path)).map_err(err)?;
+        use std::fmt::Write as _;
+        let mut b64 = String::with_capacity(data.len() * 4 / 3 + 4);
+        const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        for chunk in data.chunks(3) {
+            let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+            let n = u32::from_be_bytes([0, b[0], b[1], b[2]]);
+            let _ = write!(
+                b64,
+                "{}{}{}{}",
+                T[(n >> 18 & 63) as usize] as char,
+                T[(n >> 12 & 63) as usize] as char,
+                if chunk.len() > 1 { T[(n >> 6 & 63) as usize] as char } else { '=' },
+                if chunk.len() > 2 { T[(n & 63) as usize] as char } else { '=' },
+            );
+        }
+        Ok(Some(format!("data:{mime};base64,{b64}")))
+    })
+}
+
+/// Store the album metadata (format-agnostic; written to exported files).
+#[tauri::command]
+pub fn set_album_meta(state: State<'_, AppState>, meta: AlbumMeta) -> CmdResult<ProjectView> {
+    with_session(&state, |s| {
+        s.project.album_meta = meta;
+        Ok(s.view())
+    })
+}
+
 #[tauri::command]
 pub fn set_snap_to_zero(state: State<'_, AppState>, enabled: bool) -> CmdResult<ProjectView> {
     with_session(&state, |s| {
@@ -655,7 +693,9 @@ pub async fn export_tracks(
         // the UI requires an explicit choice; here we only forbid emptiness.
         s.project.export_config = config.clone();
         let source = PathBuf::from(&s.info.path);
-        let jobs = still_core::plan_export(&tracks, &config, &source).map_err(err)?;
+        let jobs =
+            still_core::export::plan_export_with_meta(&tracks, &config, &source, &s.project.album_meta)
+                .map_err(err)?;
         let layers: Vec<still_core::LayerMix> = s
             .info
             .layers

@@ -5,6 +5,14 @@ import { formatDuration, formatTimecode } from "../lib/format";
 import { LayersPanel } from "./LayersPanel";
 import { GainInput } from "./GainInput";
 
+/** (track-in-disc, disc) for a global 1-based track number. */
+function discPos(breaks: number[], number: number): { n: number; disc: number } {
+  const starts = [1, ...breaks.filter((b) => b >= 2).sort((a, b) => a - b)];
+  let disc = 0;
+  for (let i = 0; i < starts.length; i++) if (starts[i] <= number) disc = i;
+  return { n: number - starts[disc] + 1, disc: disc + 1 };
+}
+
 interface Props {
   view: ProjectView;
   playheadSample: number;
@@ -22,6 +30,7 @@ interface Props {
   onTrackLayerGain: (trackId: number, layerId: number, gainDb: number | null) => void;
   onTrackLayerMute: (trackId: number, layerId: number, muted: boolean | null) => void;
   onTrackLayerSolo: (trackId: number, layerId: number, solo: boolean | null) => void;
+  onDiscBreaksChange: (breaks: number[]) => void;
 }
 
 export function TrackList({
@@ -41,6 +50,7 @@ export function TrackList({
   onTrackLayerGain,
   onTrackLayerMute,
   onTrackLayerSolo,
+  onDiscBreaksChange,
 }: Props) {
   const [editing, setEditing] = useState<number | null>(null);
   const [mixOpen, setMixOpen] = useState<number | null>(null);
@@ -108,8 +118,60 @@ export function TrackList({
         {view.tracks.map((t, i) => {
           const isPlaying =
             playheadSample >= t.start_sample && playheadSample < t.end_sample;
+          const breaks = view.album_meta.disc_breaks
+            .filter((b) => b >= 2 && b <= view.tracks.length)
+            .sort((a, b) => a - b);
+          const multiDisc = breaks.length > 0;
+          const pos = discPos(breaks, t.number);
+          const breakIdx = breaks.indexOf(t.number);
+          const canMoveUp = breakIdx >= 0 && !breaks.includes(t.number - 1) && t.number > 2;
+          const canMoveDown =
+            breakIdx >= 0 && !breaks.includes(t.number + 1) && t.number < view.tracks.length;
+          const moveBreak = (delta: number) => {
+            const next = breaks.filter((b) => b !== t.number);
+            next.push(t.number + delta);
+            onDiscBreaksChange(next);
+          };
           return (
             <div key={t.id} className="track-item">
+            {breakIdx >= 0 && (
+              <div className="disc-sep">
+                <span className="disc-sep-label">Disc {pos.disc}</span>
+                <span className="disc-sep-line" />
+                <button
+                  className="disc-sep-btn"
+                  disabled={!canMoveUp}
+                  title="Start this disc one track earlier"
+                  onClick={() => moveBreak(-1)}
+                >
+                  ↑
+                </button>
+                <button
+                  className="disc-sep-btn"
+                  disabled={!canMoveDown}
+                  title="Start this disc one track later"
+                  onClick={() => moveBreak(1)}
+                >
+                  ↓
+                </button>
+                <button
+                  className="disc-sep-btn del"
+                  title="Remove this disc break (merge with the previous disc)"
+                  onClick={() => onDiscBreaksChange(breaks.filter((b) => b !== t.number))}
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+            {i > 0 && breakIdx < 0 && (
+              <button
+                className="disc-gap"
+                title={`Start a new disc at track ${t.number}`}
+                onClick={() => onDiscBreaksChange([...breaks, t.number])}
+              >
+                + Disc break
+              </button>
+            )}
             <div
               className={`track-row ${isPlaying ? "playing" : ""} ${
                 selectedTrack === t.id ? "selected" : ""
@@ -124,7 +186,12 @@ export function TrackList({
                 setEditing(t.id);
               }}
             >
-              <span className="num">{String(t.number).padStart(2, "0")}</span>
+              <span
+                className="num"
+                title={multiDisc ? `Album track ${t.number} — disc ${pos.disc}` : undefined}
+              >
+                {String(multiDisc ? pos.n : t.number).padStart(2, "0")}
+              </span>
               {editing === t.id ? (
                 <input
                   ref={inputRef}

@@ -30,6 +30,7 @@ interface Props {
   onRedo: () => void;
   onDetectSilences: () => void;
   onExport: () => void;
+  onAlbum: () => void;
   onTogglePanel: () => void;
   onToggleSnap: () => void;
 }
@@ -182,6 +183,13 @@ export function Toolbar(p: Props) {
               title="Suggest split points from silences"
             >
               Auto-split
+            </button>
+            <button
+              className="btn"
+              onClick={p.onAlbum}
+              title="Album metadata (tags written to exported files)"
+            >
+              Album…
             </button>
             <button
               className="btn btn-primary"
