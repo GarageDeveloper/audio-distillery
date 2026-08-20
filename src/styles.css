@@ -848,3 +848,5 @@ kbd {
   color: var(--copper-hi);
   background: var(--copper-dim);
 }
+
+.export-modal { width: 560px; max-height: 88vh; }

@@ -35,9 +35,9 @@ type Phase = "settings" | "running" | "report";
 
 export function ExportDialog({ view, progress, onClose, onError, onViewChange }: Props) {
   const [cfg, setCfg] = useState<ExportConfig>({ ...view.export_config });
-  const [metaOpen, setMetaOpen] = useState(
-    Object.values(view.album_meta).some((v) => (Array.isArray(v) ? v.length > 0 : v !== ""))
-  );
+  // Collapsed by default: metadata is edited any time via the Album… button;
+  // this section is just a shortcut.
+  const [metaOpen, setMetaOpen] = useState(false);
   const meta: AlbumMeta = view.album_meta;
   const saveMeta = (m: AlbumMeta) => {
     api.setAlbumMeta(m).then(onViewChange).catch((e) => onError(String(e)));
@@ -53,6 +53,18 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
     }
   }, [progress]);
 
+  // Multi-disc album still on the default naming: sort tracks into one
+  // folder per disc.
+  useEffect(() => {
+    if (
+      view.album_meta.disc_breaks.length > 0 &&
+      cfg.template === "{n} - {title}"
+    ) {
+      setCfg((c) => ({ ...c, template: "{disc}/{n} - {title}" }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view.album_meta.disc_breaks.length]);
+
   // Default destination: ~/Music/AudioDistillery (never the source folder).
   useEffect(() => {
     if (!cfg.dest_dir) {
@@ -66,12 +78,21 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
 
   const preview = () => {
     const t = view.tracks[Math.min(1, view.tracks.length - 1)];
+    const breaks = view.album_meta.disc_breaks
+      .filter((b) => b >= 2 && b <= view.tracks.length)
+      .sort((a, b) => a - b);
+    const starts = [1, ...breaks];
+    let discIdx = 0;
+    for (let i = 0; i < starts.length; i++) if (starts[i] <= t.number) discIdx = i;
+    const inDisc = t.number - starts[discIdx] + 1;
     const width = Math.max(String(view.tracks.length).length, 2);
-    const n = String(t.number).padStart(width, "0");
     const name = cfg.template
-      .replace("{n}", n)
+      .replace("{n}", String(breaks.length > 0 ? inDisc : t.number).padStart(width, "0"))
+      .replace("{disc}", String(discIdx + 1))
       .replace("{title}", t.title)
       .replace("{titre}", t.title)
+      .replace("{album}", view.album_meta.album)
+      .replace("{year}", view.album_meta.date.replace(/\D/g, "").slice(0, 4))
       .replace("{source}", view.audio.path.split(/[/\\]/).pop()?.replace(/\.[^.]+$/, "") ?? "");
     return `${name}.${EXT[cfg.format]}`;
   };
@@ -105,7 +126,7 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
         if (e.target === e.currentTarget && phase !== "running") onClose();
       }}
     >
-      <div className="modal">
+      <div className="modal export-modal">
         {phase === "settings" && (
           <>
             <div>
@@ -210,7 +231,8 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
                 onChange={(e) => setCfg({ ...cfg, template: e.target.value })}
               />
               <div className="hint">
-                Preview: {preview()} — same macros as metadata: {"{n} {title} {disc} {album} {year} …"}
+                Preview: {preview()} — macros: {"{n} {title} {disc} {album} {year} …"} — a
+                {" / "}creates a subfolder (e.g. {"{disc}/{n} - {title}"})
               </div>
             </div>
 

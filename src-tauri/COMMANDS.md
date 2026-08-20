@@ -113,8 +113,13 @@ container's native tags — ID3v2 (MP3), MP4 atoms (M4A/AAC), Vorbis comments
 each disc; disc n°/total derive from `disc_breaks` (track numbers starting a
 new disc). Every text field and the file-naming template accept the macros
 `{title} {n} {ntotal} {disc} {dtotal} {album} {artist} {album_artist}
-{date} {year} {source}`. Sources are never touched — tagging failures keep
-the audio file and surface in `ExportReport.errors`.
+{date} {year} {source}`. A `/` in the naming TEMPLATE creates subfolders
+(e.g. `{disc}/{n} - {title}` sorts a multi-disc album into one folder per
+disc; the UI switches to that template automatically when disc breaks exist
+and the template is still the default) — templates are split before values
+are injected, so a slash inside a title can never create a directory.
+Sources are never touched — tagging failures keep the audio file and surface
+in `ExportReport.errors`.
 
 Tracks are encoded **in parallel**: one ffmpeg process per worker, with
 `available cores − 2` workers (never fewer than 1, never more than the track

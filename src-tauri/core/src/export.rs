@@ -102,34 +102,46 @@ pub fn plan_export_with_meta(
     let mut used: Vec<PathBuf> = Vec::new();
     let mut jobs = Vec::with_capacity(tracks.len());
     for t in tracks {
-        // File naming supports the same macros as the metadata fields
-        // ({album}, {disc}, {year}…); classic tokens keep working through
-        // render_track_filename's sanitizing pass.
+        // File naming supports the same macros as the metadata fields.
+        // `/` in the TEMPLATE creates subfolders (e.g. "{disc}/{n} - {title}"
+        // sorts a multi-disc album into one folder per disc); the template is
+        // split BEFORE values are injected, so a title containing a slash can
+        // never create a directory — each segment is sanitized on its own.
         let numbering = crate::metadata::disc_numbering(
             &meta.disc_breaks,
             t.number,
             tracks.len() as u32,
         );
-        let expanded = crate::metadata::expand_macros(
-            &cfg.template,
-            &crate::metadata::MacroContext {
-                meta,
-                title: &t.title,
-                source_stem: &source_stem,
-                numbering,
-            },
-        );
-        let base = render_track_filename(
-            &expanded,
-            t.number as usize,
-            tracks.len(),
-            &t.title,
-            &source_stem,
-        );
-        let mut candidate = dest.join(format!("{base}.{ext}"));
+        let ctx = crate::metadata::MacroContext {
+            meta,
+            title: &t.title,
+            source_stem: &source_stem,
+            numbering,
+        };
+        let segments: Vec<String> = cfg
+            .template
+            .split('/')
+            .map(|seg| {
+                render_track_filename(
+                    &crate::metadata::expand_macros(seg, &ctx),
+                    t.number as usize,
+                    tracks.len(),
+                    &t.title,
+                    &source_stem,
+                )
+            })
+            .filter(|s| !s.is_empty())
+            .collect();
+        let (base, subdirs) = segments
+            .split_last()
+            .map(|(b, d)| (b.clone(), d.to_vec()))
+            .unwrap_or_else(|| ("Untitled".to_string(), Vec::new()));
+        let parent = subdirs.iter().fold(dest.clone(), |acc, d| acc.join(d));
+        std::fs::create_dir_all(&parent)?;
+        let mut candidate = parent.join(format!("{base}.{ext}"));
         let mut k = 1;
         while candidate.exists() || used.contains(&candidate) {
-            candidate = dest.join(format!("{base} ({k}).{ext}"));
+            candidate = parent.join(format!("{base} ({k}).{ext}"));
             k += 1;
         }
         used.push(candidate.clone());
@@ -558,6 +570,39 @@ mod tests {
         assert_eq!(
             jobs[0].out_path.file_name().unwrap(),
             "01 - Intro (1).flac"
+        );
+    }
+
+    #[test]
+    fn multi_disc_template_builds_subfolders() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = ExportConfig {
+            template: "{disc}/{n} - {title}".into(),
+            dest_dir: dir.path().display().to_string(),
+            ..Default::default()
+        };
+        let meta = AlbumMeta {
+            disc_breaks: vec![2],
+            album: "X".into(),
+            ..Default::default()
+        };
+        let tracks = vec![
+            track(1, "One", 0, 44_100),
+            track(2, "Two", 44_100, 88_200),
+        ];
+        let jobs =
+            plan_export_with_meta(&tracks, &cfg, Path::new("/x/source.wav"), &meta).unwrap();
+        assert!(jobs[0].out_path.ends_with("1/01 - One.flac"), "{:?}", jobs[0].out_path);
+        assert!(jobs[1].out_path.ends_with("2/01 - Two.flac"), "{:?}", jobs[1].out_path);
+        assert!(jobs[0].out_path.parent().unwrap().is_dir());
+        // A slash in a TITLE must not create a folder.
+        let tracks2 = vec![track(1, "AC/DC Cover", 0, 44_100)];
+        let jobs2 =
+            plan_export_with_meta(&tracks2, &cfg, Path::new("/x/source.wav"), &meta).unwrap();
+        assert!(
+            jobs2[0].out_path.ends_with("1/01 - AC_DC Cover.flac"),
+            "{:?}",
+            jobs2[0].out_path
         );
     }
 
