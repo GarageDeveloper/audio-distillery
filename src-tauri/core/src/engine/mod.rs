@@ -104,6 +104,8 @@ enum Cmd {
 /// State shared between control side, render thread and device callback.
 struct Shared {
     playing: AtomicBool,
+    /// Same playing state as an Arc the plugin transport callbacks can own.
+    playing_flag: Arc<AtomicBool>,
     loaded: AtomicBool,
     seek_base: AtomicU64,
     consumed: AtomicU64,
@@ -119,6 +121,7 @@ impl Shared {
     fn new() -> Self {
         Self {
             playing: AtomicBool::new(false),
+            playing_flag: Arc::new(AtomicBool::new(false)),
             loaded: AtomicBool::new(false),
             seek_base: AtomicU64::new(0),
             consumed: AtomicU64::new(0),
@@ -302,6 +305,7 @@ fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
                 shared.sample_rate.store(sample_rate as u64, Ordering::Relaxed);
                 shared.total_samples.store(total_samples, Ordering::Relaxed);
                 shared.playing.store(false, Ordering::Relaxed);
+                shared.playing_flag.store(false, Ordering::Relaxed);
                 shared.seek_base.store(0, Ordering::Relaxed);
                 shared.consumed.store(0, Ordering::Relaxed);
                 shared.ring_written.store(0, Ordering::Relaxed);
@@ -323,13 +327,13 @@ fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
                 }
                 shared.loaded.store(true, Ordering::Relaxed);
                 if let Some(r) = &mut renderer {
-                    let _ = apply_chain(r, &chain_specs);
+                    let _ = apply_chain(r, &chain_specs, &shared);
                 }
             }
             Ok(Cmd::SetMasterChain(specs, reply)) => {
                 chain_specs = specs;
                 let errors = match &mut renderer {
-                    Some(r) => apply_chain(r, &chain_specs),
+                    Some(r) => apply_chain(r, &chain_specs, &shared),
                     None => Vec::new(), // applied at next load
                 };
                 let _ = reply.send(errors);
@@ -371,6 +375,7 @@ fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
             }
             Ok(Cmd::Pause) => {
                 shared.playing.store(false, Ordering::Relaxed);
+                shared.playing_flag.store(false, Ordering::Relaxed);
             }
             Ok(Cmd::Resume) => {
                 if let Some(r) = &mut renderer {
@@ -378,6 +383,7 @@ fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
                         seek_engine(&shared, r, 0);
                     }
                     shared.playing.store(true, Ordering::Relaxed);
+                    shared.playing_flag.store(true, Ordering::Relaxed);
                 }
             }
             Ok(Cmd::Seek(secs)) => {
@@ -391,6 +397,7 @@ fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
                     seek_engine(&shared, r, 0);
                 }
                 shared.playing.store(false, Ordering::Relaxed);
+                shared.playing_flag.store(false, Ordering::Relaxed);
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
@@ -429,6 +436,7 @@ fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
                         >= shared.ring_written.load(Ordering::Relaxed)
                 {
                     shared.playing.store(false, Ordering::Relaxed);
+                shared.playing_flag.store(false, Ordering::Relaxed);
                 }
             }
             (Some(r), None) => {
@@ -437,6 +445,7 @@ fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
                 let got = r.render_block(&mut block, BLOCK_FRAMES);
                 if got == 0 {
                     shared.playing.store(false, Ordering::Relaxed);
+                shared.playing_flag.store(false, Ordering::Relaxed);
                 } else {
                     shared.consumed.fetch_add(got as u64, Ordering::Relaxed);
                     std::thread::sleep(Duration::from_secs_f64(
@@ -451,12 +460,21 @@ fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
 
 /// (Re)build the master insert chain on the renderer from the specs.
 #[cfg(target_os = "macos")]
-fn apply_chain(r: &mut Renderer, specs: &[MasterPluginSpec]) -> Vec<String> {
+fn apply_chain(
+    r: &mut Renderer,
+    specs: &[MasterPluginSpec],
+    shared: &Arc<Shared>,
+) -> Vec<String> {
     use crate::aunit::AuPlugin;
     let mut errors = Vec::new();
     let mut inserts: Vec<Box<dyn render::BlockProcessor>> = Vec::new();
     for spec in specs {
-        match AuPlugin::new(&spec.component, r.sample_rate, r.channels) {
+        match AuPlugin::new(
+            &spec.component,
+            r.sample_rate,
+            r.channels,
+            shared_playing_flag(shared),
+        ) {
             Ok(mut p) => {
                 if let Some(state) = &spec.state {
                     if let Err(e) = p.set_state(state) {
@@ -473,8 +491,13 @@ fn apply_chain(r: &mut Renderer, specs: &[MasterPluginSpec]) -> Vec<String> {
     errors
 }
 
+/// The engine's playing flag, cloneable for plugin transport callbacks.
+fn shared_playing_flag(shared: &Arc<Shared>) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+    shared.playing_flag.clone()
+}
+
 #[cfg(not(target_os = "macos"))]
-fn apply_chain(_r: &mut Renderer, specs: &[MasterPluginSpec]) -> Vec<String> {
+fn apply_chain(_r: &mut Renderer, specs: &[MasterPluginSpec], _shared: &Arc<Shared>) -> Vec<String> {
     if specs.is_empty() {
         Vec::new()
     } else {

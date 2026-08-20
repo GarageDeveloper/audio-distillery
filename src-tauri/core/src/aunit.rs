@@ -35,6 +35,8 @@ mod macos {
     use crate::error::{Result, StillError};
     use coreaudio_sys::*;
     use std::ptr::{null, null_mut};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::Arc;
 
     fn fourcc(s: &str) -> u32 {
         let b = s.as_bytes();
@@ -110,6 +112,44 @@ mod macos {
         out
     }
 
+    /// Host transport info exposed to the plugin (iZotope-style analyzers
+    /// gate their UI on the host reporting a playing transport).
+    pub struct TransportStore {
+        pub playing: Arc<AtomicBool>,
+        pub sample_pos: AtomicU64,
+    }
+
+    unsafe extern "C" fn transport_state_cb(
+        in_ref_con: *mut std::os::raw::c_void,
+        out_is_playing: *mut Boolean,
+        out_transport_changed: *mut Boolean,
+        out_current_sample: *mut Float64,
+        out_is_cycling: *mut Boolean,
+        out_cycle_start: *mut Float64,
+        out_cycle_end: *mut Float64,
+    ) -> OSStatus {
+        let store = &*(in_ref_con as *const TransportStore);
+        if !out_is_playing.is_null() {
+            *out_is_playing = store.playing.load(Ordering::Relaxed) as Boolean;
+        }
+        if !out_transport_changed.is_null() {
+            *out_transport_changed = 0;
+        }
+        if !out_current_sample.is_null() {
+            *out_current_sample = store.sample_pos.load(Ordering::Relaxed) as f64;
+        }
+        if !out_is_cycling.is_null() {
+            *out_is_cycling = 0;
+        }
+        if !out_cycle_start.is_null() {
+            *out_cycle_start = 0.0;
+        }
+        if !out_cycle_end.is_null() {
+            *out_cycle_end = 0.0;
+        }
+        0
+    }
+
     /// Planar input the render callback feeds to the AU when it pulls.
     struct InputStore {
         planar: Vec<Vec<f32>>,
@@ -151,11 +191,15 @@ mod macos {
     pub struct AuPlugin {
         unit: AudioUnit,
         input: Box<InputStore>,
+        transport: Box<TransportStore>,
         out_planar: Vec<Vec<f32>>,
         channels: usize,
         sample_rate: u32,
         pub bypass: bool,
         rendered: u64,
+        /// Consecutive render failures, for self-healing (a plugin that
+        /// reconfigures its DSP on preset load can transiently error).
+        render_errors: u32,
     }
 
     // The raw AudioUnit pointer is only ever used from the thread that owns
@@ -189,8 +233,14 @@ mod macos {
 
     impl AuPlugin {
         /// Instantiate `component_id` ("aufx:xxxx:yyyy") at the session
-        /// format and prepare it for block rendering.
-        pub fn new(component_id: &str, sample_rate: u32, channels: usize) -> Result<Self> {
+        /// format and prepare it for block rendering. `playing` feeds the
+        /// host transport callback the plugin UIs poll.
+        pub fn new(
+            component_id: &str,
+            sample_rate: u32,
+            channels: usize,
+            playing: Arc<AtomicBool>,
+        ) -> Result<Self> {
             let parts: Vec<&str> = component_id.split(':').collect();
             if parts.len() != 3 || parts.iter().any(|p| p.len() != 4) {
                 return Err(StillError::Playback(format!(
@@ -258,11 +308,16 @@ mod macos {
                         planar: vec![vec![0.0; 4096]; channels],
                         frames: 0,
                     }),
+                    transport: Box::new(TransportStore {
+                        playing,
+                        sample_pos: AtomicU64::new(0),
+                    }),
                     out_planar: vec![vec![0.0; 4096]; channels],
                     channels,
                     sample_rate,
                     bypass: false,
                     rendered: 0,
+                    render_errors: 0,
                 };
                 let cb = AURenderCallbackStruct {
                     inputProc: Some(input_cb),
@@ -279,6 +334,23 @@ mod macos {
                     ),
                     "set render callback",
                 )?;
+                // Host transport callbacks: plugin UIs (spectrum analyzers,
+                // meters) poll these to know the host is rolling.
+                let host_cb = HostCallbackInfo {
+                    hostUserData: &*plugin.transport as *const TransportStore as *mut _,
+                    beatAndTempoProc: None,
+                    musicalTimeLocationProc: None,
+                    transportStateProc: Some(transport_state_cb),
+                    transportStateProc2: None,
+                };
+                let _ = AudioUnitSetProperty(
+                    plugin.unit,
+                    kAudioUnitProperty_HostCallbacks,
+                    kAudioUnitScope_Global,
+                    0,
+                    &host_cb as *const _ as *const _,
+                    std::mem::size_of::<HostCallbackInfo>() as u32,
+                );
                 check(AudioUnitInitialize(plugin.unit), "initialize")?;
                 Ok(plugin)
             }
@@ -433,11 +505,32 @@ mod macos {
                     b.mDataByteSize = (frames * 4) as u32;
                     b.mData = self.out_planar[c].as_mut_ptr() as *mut _;
                 }
-                if AudioUnitRender(self.unit, &mut flags, &ts, 0, frames as u32, abl) != 0 {
-                    return; // render failure: leave the dry signal untouched
+                let status =
+                    AudioUnitRender(self.unit, &mut flags, &ts, 0, frames as u32, abl);
+                if status != 0 {
+                    // A plugin reconfiguring its DSP (preset load from its
+                    // own UI) can transiently fail; self-heal instead of
+                    // silently going dry forever: reset first, then a full
+                    // re-initialize if errors persist.
+                    self.render_errors += 1;
+                    if self.render_errors == 3 {
+                        AudioUnitReset(self.unit, kAudioUnitScope_Global, 0);
+                    } else if self.render_errors == 6 {
+                        AudioUnitUninitialize(self.unit);
+                        AudioUnitInitialize(self.unit);
+                    } else if self.render_errors == 7 {
+                        eprintln!(
+                            "audio unit render keeps failing (OSStatus {status}) — passing dry signal"
+                        );
+                    }
+                    return; // leave the dry signal untouched this block
                 }
+                self.render_errors = 0;
             }
             self.rendered += frames as u64;
+            self.transport
+                .sample_pos
+                .store(self.rendered, Ordering::Relaxed);
             // Interleave back.
             for c in 0..channels {
                 let src = &self.out_planar[c.min(ch - 1)];
@@ -488,7 +581,13 @@ mod macos {
         #[test]
         fn hosts_a_stock_effect_and_roundtrips_state() {
             // AULowpass ships with macOS.
-            let mut p = AuPlugin::new("aufx:lpas:appl", 44_100, 2).expect("instantiate");
+            let mut p = AuPlugin::new(
+                "aufx:lpas:appl",
+                44_100,
+                2,
+                Arc::new(AtomicBool::new(true)),
+            )
+            .expect("instantiate");
             // A 10 kHz-ish square through a lowpass must come out altered.
             let frames = 512;
             let mut buf: Vec<f32> = (0..frames * 2)

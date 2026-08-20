@@ -446,8 +446,13 @@ fn export_one_rendered(
     let mut inserts: Vec<Box<dyn crate::engine::render::BlockProcessor>> = Vec::new();
     #[cfg(target_os = "macos")]
     for spec in chain {
-        let mut p = crate::aunit::AuPlugin::new(&spec.component, sample_rate, channels)
-            .map_err(|e| StillError::Ffmpeg(format!("{}: {e}", spec.component)))?;
+        let mut p = crate::aunit::AuPlugin::new(
+            &spec.component,
+            sample_rate,
+            channels,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        )
+        .map_err(|e| StillError::Ffmpeg(format!("{}: {e}", spec.component)))?;
         if let Some(state) = &spec.state {
             let _ = p.set_state(state);
         }
