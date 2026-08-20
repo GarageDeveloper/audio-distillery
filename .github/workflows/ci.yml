@@ -45,6 +45,11 @@ jobs:
       - name: Frontend install
         run: npm ci
 
+      # The tauri-build script requires the ffmpeg sidecar declared in
+      # externalBin to exist, even to compile tests.
+      - name: Fetch ffmpeg sidecar
+        run: node scripts/fetch-ffmpeg.mjs
+
       - name: Backend tests (core + app)
         working-directory: src-tauri
         run: cargo test --workspace
