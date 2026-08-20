@@ -142,11 +142,16 @@ always track order, regardless of finish order.
 | `player_state` | — | `PlaybackState` |
 
 The backend owns the playback clock; the frontend polls `player_state` and
-only interpolates between polls for smooth drawing. Playback follows a
-volume AUTOMATION derived from the project: session faders/mutes/solos by
-default, replaced inside each track region by that track's overrides — what
-you hear is always `TrackInfo.layer_volumes`, the same values the export
-uses.
+only interpolates between polls for smooth drawing. Playback runs on the
+realtime engine: decode → per-layer insert slots → volume automation →
+sum → master insert slots → ring buffer → device callback. The insert
+slots are empty today; they are where AU/VST3 mastering plugins will
+process (per layer, per track via automation, or on the master bus). The
+playhead is sample-accurate (frames actually consumed by the device).
+Playback follows a volume AUTOMATION derived from the project: session
+faders/mutes/solos by default, replaced inside each track region by that
+track's overrides — what you hear is always `TrackInfo.layer_volumes`, the
+same values the export uses.
 
 ## Events
 

@@ -11,8 +11,8 @@ pub mod export;
 pub mod ffmpeg;
 pub mod metadata;
 pub mod naming;
+pub mod engine;
 pub mod peaks;
-pub mod playback;
 pub mod project;
 pub mod silence;
 
@@ -28,7 +28,7 @@ pub use export::{
 pub use ffmpeg::resolve_ffmpeg;
 pub use metadata::{resolve_tags, write_tags, AlbumMeta, TrackTags};
 pub use peaks::{merged_base_pyramid, merged_query, PeakPyramid, PeakSlice};
-pub use playback::{LayerPlay, PlaybackState, PlayerHandle, VolumeAutomation};
+pub use engine::{LayerPlay, PlaybackState, PlayerHandle, VolumeAutomation};
 pub use project::{
     db_to_linear, read_project, sanitize_regions, save_project, ExportConfig, ExportFormat,
     Layer, LayerView, Project, ProjectState, ProjectView, RegionEdge, RegionSpan, SourceRef,
