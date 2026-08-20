@@ -847,6 +847,8 @@ pub async fn export_tracks(
     let _ = state.player.pause();
 
     let prepared = with_session(&state, |s| {
+        // Export what you HEAR: capture the live plugin states first.
+        snapshot_chain_states(&state, s);
         let tracks = s.tracks();
         if tracks.is_empty() {
             return Err(
@@ -869,9 +871,9 @@ pub async fn export_tracks(
                 clips: scanned.clips.clone(),
             })
             .collect();
-        Ok((layers, s.info.channels, s.info.sample_rate, jobs))
+        Ok((layers, s.info.channels, s.info.sample_rate, jobs, chain_specs(s)))
     });
-    let (layers, session_channels, sample_rate, jobs) = match prepared {
+    let (layers, session_channels, sample_rate, jobs, chain) = match prepared {
         Ok(x) => x,
         Err(e) => {
             state.export_running.store(false, Ordering::SeqCst);
@@ -895,13 +897,14 @@ pub async fn export_tracks(
         // Progress arrives from several worker threads at once; throttle the
         // stream globally but always let start/end events through.
         let last = std::sync::Mutex::new(Instant::now() - Duration::from_secs(1));
-        Ok::<ExportReport, still_core::StillError>(still_core::run_export(
+        Ok::<ExportReport, still_core::StillError>(still_core::export::run_export_with_chain(
             &ffmpeg,
             &layers,
             session_channels,
             sample_rate,
             &jobs,
             &config,
+            &chain,
             &cancel,
             |p| {
                 let force = p.track_progress == 0.0 || p.track_progress == 1.0;

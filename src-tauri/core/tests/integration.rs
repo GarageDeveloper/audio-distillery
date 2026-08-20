@@ -596,6 +596,89 @@ fn exported_files_carry_native_tags() {
     assert_eq!(sum, checksum(&wav));
 }
 
+/// Mastering chain at export (macOS): a track rendered through a hosted
+/// AULowpass must differ audibly from the dry export, keep the exact sample
+/// length, and leave the sources untouched. An empty chain stays on the
+/// pure-ffmpeg path (covered by every other export test).
+#[cfg(target_os = "macos")]
+#[test]
+fn export_renders_through_mastering_chain() {
+    let Ok(ffmpeg) = resolve_ffmpeg(&[]) else {
+        eprintln!("ffmpeg not found — chain export test skipped");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let wav = dir.path().join("source.wav");
+    // 440 Hz content: a lowpass with a low cutoff will tame it measurably.
+    write_wav(&wav, &[(2.0, 0.6)]);
+    let before = checksum(&wav);
+    let (info, peaks) = scan_file(&wav, |_| {}).unwrap();
+    let mut state = ProjectState::new(
+        Project::new(vec![wav.display().to_string()]),
+        info,
+        vec![peaks],
+    );
+    state.add_region(0, SR as u64, None).unwrap();
+    let cfg = ExportConfig {
+        format: ExportFormat::Wav,
+        dest_dir: dir.path().join("out").display().to_string(),
+        ..Default::default()
+    };
+    let cancel = AtomicBool::new(false);
+
+    // Dry reference.
+    let jobs_dry = plan_export(&state.tracks(), &cfg, &wav).unwrap();
+    let rep = run_export(&ffmpeg, &mix_of(&state), 2, SR, &jobs_dry, &cfg, &cancel, |_| {});
+    assert!(rep.errors.is_empty(), "{:?}", rep.errors);
+
+    // Through the chain (fresh instance per worker, like the app).
+    let chain = vec![still_core::MasterPluginSpec {
+        id: 1,
+        component: "aufx:lpas:appl".into(),
+        bypass: false,
+        state: None,
+    }];
+    let jobs_wet = plan_export(&state.tracks(), &cfg, &wav).unwrap();
+    let rep2 = still_core::export::run_export_with_chain(
+        &ffmpeg,
+        &mix_of(&state),
+        2,
+        SR,
+        &jobs_wet,
+        &cfg,
+        &chain,
+        &cancel,
+        |_| {},
+    );
+    assert!(rep2.errors.is_empty(), "{:?}", rep2.errors);
+
+    let read = |p: &Path| -> Vec<i16> {
+        hound::WavReader::open(p)
+            .unwrap()
+            .samples::<i16>()
+            .map(|s| s.unwrap())
+            .collect()
+    };
+    let dry = read(&jobs_dry[0].out_path);
+    let wet = read(&jobs_wet[0].out_path);
+    // Exact same length (latency compensated), audibly different content.
+    assert_eq!(dry.len(), wet.len());
+    assert_eq!(wet.len() as u64, SR as u64 * 2);
+    let diff = dry
+        .iter()
+        .zip(&wet)
+        .filter(|(a, b)| (**a as i32 - **b as i32).abs() > 64)
+        .count();
+    assert!(
+        diff > wet.len() / 10,
+        "chain output too close to dry ({diff} differing samples)"
+    );
+    // RMS should DROP through a lowpass on a 440 Hz tone with default
+    // cutoff? Not necessarily — assert difference only (above).
+
+    assert_eq!(checksum(&wav), before);
+}
+
 /// Clips with mismatched formats are refused with an actionable error.
 #[test]
 fn mismatched_clip_formats_are_rejected() {

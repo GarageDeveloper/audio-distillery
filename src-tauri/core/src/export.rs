@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::audio::{layer_parts, ClipInfo, TimelinePart};
+use crate::engine::decode::{LayerDecoder, PlayItem};
+use crate::engine::render::{Renderer, BLOCK_FRAMES};
+use crate::engine::{MasterPluginSpec, VolumeAutomation};
 use crate::error::{Result, StillError};
 use crate::naming::render_track_filename;
 use crate::metadata::{
@@ -235,6 +238,36 @@ pub fn run_export(
     cancel: &AtomicBool,
     on_progress: impl Fn(ExportProgress) + Send + Sync,
 ) -> ExportReport {
+    run_export_with_chain(
+        ffmpeg,
+        layers,
+        session_channels,
+        sample_rate,
+        jobs,
+        cfg,
+        &[],
+        cancel,
+        on_progress,
+    )
+}
+
+/// Like [`run_export`], rendering each track through the MASTERING CHAIN
+/// when one is given: the engine's own Renderer produces the processed PCM
+/// (each worker instantiates its own plugin chain from the specs, with the
+/// live states snapshotted by the caller), which is piped to ffmpeg for
+/// encoding only. An empty chain keeps the pure-ffmpeg graph path.
+#[allow(clippy::too_many_arguments)]
+pub fn run_export_with_chain(
+    ffmpeg: &Path,
+    layers: &[LayerMix],
+    session_channels: u16,
+    sample_rate: u32,
+    jobs: &[ExportJob],
+    cfg: &ExportConfig,
+    chain: &[MasterPluginSpec],
+    cancel: &AtomicBool,
+    on_progress: impl Fn(ExportProgress) + Send + Sync,
+) -> ExportReport {
     let count = jobs.len() as u32;
     let cores = std::thread::available_parallelism()
         .map(|n| n.get())
@@ -280,16 +313,31 @@ pub fn run_export(
                 }
                 let job = &jobs[i];
                 emit(i, 0.0);
-                match export_one(
-                    ffmpeg,
-                    layers,
-                    session_channels,
-                    sample_rate,
-                    job,
-                    cfg,
-                    cancel,
-                    |p| emit(i, p),
-                ) {
+                let result = if chain.is_empty() {
+                    export_one(
+                        ffmpeg,
+                        layers,
+                        session_channels,
+                        sample_rate,
+                        job,
+                        cfg,
+                        cancel,
+                        |p| emit(i, p),
+                    )
+                } else {
+                    export_one_rendered(
+                        ffmpeg,
+                        layers,
+                        session_channels,
+                        sample_rate,
+                        job,
+                        cfg,
+                        chain,
+                        cancel,
+                        |p| emit(i, p),
+                    )
+                };
+                match result {
                     Ok(()) => {
                         // Tag the NEW file (never a source). A tagging
                         // failure keeps the audio and surfaces as an error.
@@ -339,6 +387,183 @@ pub fn run_export(
         errors: errors.into_iter().map(|(_, e)| e).collect(),
         cancelled: cancel.load(Ordering::SeqCst),
     }
+}
+
+/// Render one track OFFLINE through the mastering chain and pipe the PCM
+/// to ffmpeg for encoding. Latency-compensated: the chain's total reported
+/// latency is rendered ahead and dropped, so the output stays sample-exact.
+#[allow(clippy::too_many_arguments)]
+fn export_one_rendered(
+    ffmpeg: &Path,
+    layers: &[LayerMix],
+    session_channels: u16,
+    sample_rate: u32,
+    job: &ExportJob,
+    cfg: &ExportConfig,
+    chain: &[MasterPluginSpec],
+    cancel: &AtomicBool,
+    mut on_progress: impl FnMut(f32),
+) -> Result<()> {
+    let channels = (session_channels.max(1) as usize).min(2);
+
+    // Full-timeline playlists per layer; the decoder seek positions us at
+    // the region start sample-accurately.
+    let decoders: Vec<LayerDecoder> = layers
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| job.layer_volumes.get(*i).copied().unwrap_or(1.0) > 0.0)
+        .map(|(_, l)| {
+            let mut items = Vec::new();
+            let mut cursor = 0u64;
+            for c in &l.clips {
+                if c.start_sample > cursor {
+                    items.push(PlayItem::Silence {
+                        samples: c.start_sample - cursor,
+                    });
+                }
+                items.push(PlayItem::File {
+                    path: PathBuf::from(&c.path),
+                    samples: c.duration_samples,
+                });
+                cursor = c.start_sample + c.duration_samples;
+            }
+            LayerDecoder::new(items, channels)
+        })
+        .collect();
+    let volumes: Vec<f32> = job
+        .layer_volumes
+        .iter()
+        .copied()
+        .filter(|v| *v > 0.0)
+        .collect();
+    if decoders.is_empty() {
+        return Err(StillError::Ffmpeg(
+            "the track region covers no audible audio (are all layers muted?)".into(),
+        ));
+    }
+
+    // Instantiate THIS worker's own plugin chain from the specs.
+    let mut inserts: Vec<Box<dyn crate::engine::render::BlockProcessor>> = Vec::new();
+    #[cfg(target_os = "macos")]
+    for spec in chain {
+        let mut p = crate::aunit::AuPlugin::new(&spec.component, sample_rate, channels)
+            .map_err(|e| StillError::Ffmpeg(format!("{}: {e}", spec.component)))?;
+        if let Some(state) = &spec.state {
+            let _ = p.set_state(state);
+        }
+        p.bypass = spec.bypass;
+        inserts.push(Box::new(p));
+    }
+    #[cfg(not(target_os = "macos"))]
+    if !chain.is_empty() {
+        return Err(StillError::Ffmpeg(
+            "the mastering chain requires macOS (Audio Units)".into(),
+        ));
+    }
+    let latency: u64 = inserts.iter().map(|p| p.latency_samples() as u64).sum();
+
+    let track_len = job.end_sample.saturating_sub(job.start_sample);
+    let mut renderer = Renderer::new(
+        decoders,
+        VolumeAutomation {
+            default: volumes,
+            spans: Vec::new(),
+        },
+        sample_rate,
+        channels,
+        job.end_sample + latency,
+    );
+    renderer.master_inserts = inserts;
+    renderer.seek(job.start_sample);
+
+    // ffmpeg encodes raw f32le PCM from stdin.
+    let mut cmd = Command::new(ffmpeg);
+    cmd.arg("-hide_banner")
+        .arg("-v")
+        .arg("error")
+        .arg("-f")
+        .arg("f32le")
+        .arg("-ar")
+        .arg(sample_rate.to_string())
+        .arg("-ac")
+        .arg(channels.to_string())
+        .arg("-i")
+        .arg("pipe:0")
+        .args(codec_args(cfg))
+        .arg(&job.out_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            StillError::FfmpegNotFound
+        } else {
+            StillError::Ffmpeg(e.to_string())
+        }
+    })?;
+    let mut stdin = child.stdin.take().expect("stdin piped");
+    let mut stderr = child.stderr.take().expect("stderr piped");
+    let stderr_reader = std::thread::spawn(move || {
+        let mut buf = String::new();
+        use std::io::Read as _;
+        let _ = stderr.read_to_string(&mut buf);
+        buf
+    });
+
+    let mut block = vec![0.0f32; BLOCK_FRAMES * channels];
+    let mut to_skip = latency; // drop the chain's latency head
+    let mut written = 0u64;
+    let mut failed_write = false;
+    'render: while written < track_len {
+        if cancel.load(Ordering::SeqCst) {
+            break 'render;
+        }
+        let got = renderer.render_block(&mut block, BLOCK_FRAMES);
+        if got == 0 {
+            break;
+        }
+        let mut offset = 0usize;
+        if to_skip > 0 {
+            let drop_n = (to_skip.min(got as u64)) as usize;
+            offset = drop_n;
+            to_skip -= drop_n as u64;
+        }
+        let usable = ((got - offset) as u64).min(track_len - written) as usize;
+        if usable > 0 {
+            let bytes: &[u8] = unsafe {
+                std::slice::from_raw_parts(
+                    block[offset * channels..].as_ptr() as *const u8,
+                    usable * channels * 4,
+                )
+            };
+            use std::io::Write as _;
+            if stdin.write_all(bytes).is_err() {
+                failed_write = true;
+                break 'render;
+            }
+            written += usable as u64;
+            if written % (sample_rate as u64 / 2).max(1) < BLOCK_FRAMES as u64 {
+                on_progress((written as f32 / track_len.max(1) as f32).min(1.0));
+            }
+        }
+    }
+    drop(stdin); // EOF → ffmpeg finalizes the file
+    let status = child.wait().map_err(|e| StillError::Ffmpeg(e.to_string()))?;
+    let err_output = stderr_reader.join().unwrap_or_default();
+    if cancel.load(Ordering::SeqCst) {
+        let _ = std::fs::remove_file(&job.out_path);
+        return Err(StillError::Ffmpeg("cancelled".into()));
+    }
+    if !status.success() || failed_write {
+        let msg = err_output.trim();
+        return Err(StillError::Ffmpeg(if msg.is_empty() {
+            format!("ffmpeg exited with {status}")
+        } else {
+            msg.to_string()
+        }));
+    }
+    on_progress(1.0);
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

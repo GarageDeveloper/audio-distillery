@@ -142,9 +142,9 @@ export function MasteringDialog({ view, onClose, onError, onViewChange }: Props)
 
         <div className="hint">
           Edit opens the plugin's own window (or a generic parameter view) — tweak while
-          playing. Settings are saved in the project (⌘S). Note: reordering or
-          removing plugins closes open editors; the export render through the chain
-          arrives in the next step.
+          playing. Settings are saved in the project (⌘S) and the export renders
+          every track through this chain, exactly as heard. Reordering or removing
+          plugins closes open editors.
         </div>
 
         <div className="modal-foot">
