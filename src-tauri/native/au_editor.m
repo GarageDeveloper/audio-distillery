@@ -1,11 +1,13 @@
 // Native AU editor windows. MUST be called on the main thread (AppKit).
 //
 // still_open_au_editor: tries the plugin's own Cocoa view
-// (kAudioUnitProperty_CocoaUI), falls back to CoreAudioKit's AUGenericView
-// (parameter sliders — also covers AUv3 units bridged through the v2 API).
-// Returns a retained NSWindow*; windows hide on close (releasedWhenClosed=NO)
-// so still_show_au_editor can bring them back, and still_close_au_editor
-// releases them for good (before a chain rebuild destroys the AudioUnit).
+// (kAudioUnitProperty_CocoaUI), falls back to CoreAudioKit's AUGenericView.
+// A property listener on kAudioUnitProperty_ClassInfo REBUILDS the view in
+// place when the plugin swaps its configuration (preset loads from the
+// plugin's own UI — iZotope et al. expect the host to do this; keeping the
+// old NSView leaves a dead, unresponsive interface).
+//
+// The opaque handle returned to Rust is a retained StillEditorContext.
 
 #import <Cocoa/Cocoa.h>
 #import <AudioToolbox/AudioToolbox.h>
@@ -19,11 +21,16 @@
                       withSize:(NSSize)inPreferredSize;
 @end
 
-void *still_open_au_editor(void *unitPtr, const char *title) {
-  AudioUnit unit = (AudioUnit)unitPtr;
-  NSView *view = nil;
+@interface StillEditorContext : NSObject
+@property(nonatomic, assign) AudioUnit unit;
+@property(nonatomic, strong) NSWindow *window;
+@property(nonatomic, assign) int64_t generation;
+@end
+@implementation StillEditorContext
+@end
 
-  // 1) The plugin's custom Cocoa view, when it ships one.
+static NSView *still_build_view(AudioUnit unit) {
+  NSView *view = nil;
   UInt32 size = 0;
   Boolean writable = false;
   if (AudioUnitGetPropertyInfo(unit, kAudioUnitProperty_CocoaUI,
@@ -58,13 +65,46 @@ void *still_open_au_editor(void *unitPtr, const char *title) {
     }
     free(info);
   }
-
-  // 2) Generic parameter view (works for every unit, incl. bridged AUv3).
   if (!view) {
     AUGenericView *gv = [[AUGenericView alloc] initWithAudioUnit:unit];
     gv.showsExpertParameters = YES;
     view = gv;
   }
+  return view;
+}
+
+// The plugin changed its whole configuration (preset load): rebuild the
+// view. Debounced — notifications can burst during one load, and the plugin
+// may not be ready for a view request immediately.
+static void still_classinfo_changed(void *refcon, AudioUnit unit,
+                                    AudioUnitPropertyID prop,
+                                    AudioUnitScope scope,
+                                    AudioUnitElement elem) {
+  (void)prop;
+  (void)scope;
+  (void)elem;
+  StillEditorContext *ctx = (__bridge StillEditorContext *)refcon;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    int64_t gen = ++ctx.generation;
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)),
+        dispatch_get_main_queue(), ^{
+          if (ctx.generation != gen || !ctx.window)
+            return;
+          NSView *fresh = still_build_view(unit);
+          if (fresh) {
+            NSRect f = fresh.frame;
+            [ctx.window setContentView:fresh];
+            if (f.size.width > 100 && f.size.height > 60)
+              [ctx.window setContentSize:f.size];
+          }
+        });
+  });
+}
+
+void *still_open_au_editor(void *unitPtr, const char *title) {
+  AudioUnit unit = (AudioUnit)unitPtr;
+  NSView *view = still_build_view(unit);
   if (!view)
     return NULL;
 
@@ -84,16 +124,28 @@ void *still_open_au_editor(void *unitPtr, const char *title) {
   [win setContentView:view];
   [win center];
   [win makeKeyAndOrderFront:nil];
-  return (__bridge_retained void *)win;
+
+  StillEditorContext *ctx = [[StillEditorContext alloc] init];
+  ctx.unit = unit;
+  ctx.window = win;
+  ctx.generation = 0;
+  AudioUnitAddPropertyListener(unit, kAudioUnitProperty_ClassInfo,
+                               still_classinfo_changed, (__bridge void *)ctx);
+  return (__bridge_retained void *)ctx;
 }
 
-void still_show_au_editor(void *winPtr) {
-  NSWindow *win = (__bridge NSWindow *)winPtr;
-  [win makeKeyAndOrderFront:nil];
+void still_show_au_editor(void *ctxPtr) {
+  StillEditorContext *ctx = (__bridge StillEditorContext *)ctxPtr;
+  [ctx.window makeKeyAndOrderFront:nil];
 }
 
-void still_close_au_editor(void *winPtr) {
-  NSWindow *win = (__bridge_transfer NSWindow *)winPtr;
-  [win close];
-  // ARC releases `win` here (transfer).
+void still_close_au_editor(void *ctxPtr) {
+  StillEditorContext *ctx = (__bridge_transfer StillEditorContext *)ctxPtr;
+  AudioUnitRemovePropertyListenerWithUserData(ctx.unit,
+                                              kAudioUnitProperty_ClassInfo,
+                                              still_classinfo_changed,
+                                              (__bridge void *)ctx);
+  [ctx.window close];
+  ctx.window = nil;
+  // ARC releases ctx here (transfer).
 }

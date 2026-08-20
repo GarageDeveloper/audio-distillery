@@ -302,7 +302,7 @@ mod macos {
                     "set max frames",
                 )?;
 
-                let mut plugin = Self {
+                let plugin = Self {
                     unit,
                     input: Box::new(InputStore {
                         planar: vec![vec![0.0; 4096]; channels],
