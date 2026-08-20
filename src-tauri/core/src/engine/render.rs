@@ -108,6 +108,21 @@ impl Renderer {
         self.pos >= self.total_samples
     }
 
+    /// Idle pump: silence processed through the MASTER chain, without
+    /// advancing the timeline. Real hosts render continuously even with the
+    /// transport stopped — plugins (iZotope cores reloading on preset
+    /// changes, reverb tails, meters) depend on that constant pumping.
+    pub fn render_idle_block(&mut self, out: &mut [f32], frames: usize) -> usize {
+        let frames = frames.min(BLOCK_FRAMES);
+        let ch = self.channels;
+        let out = &mut out[..frames * ch];
+        out.fill(0.0);
+        for p in &mut self.master_inserts {
+            p.process(out, ch, self.sample_rate);
+        }
+        frames
+    }
+
     /// Render up to `frames` frames into `out` (interleaved, session
     /// channels). Returns the frame count actually rendered (0 at the end).
     pub fn render_block(&mut self, out: &mut [f32], frames: usize) -> usize {

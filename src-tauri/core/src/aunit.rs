@@ -38,6 +38,25 @@ mod macos {
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::Arc;
 
+    extern "C" {
+        fn objc_autoreleasePoolPush() -> *mut std::os::raw::c_void;
+        fn objc_autoreleasePoolPop(pool: *mut std::os::raw::c_void);
+    }
+
+    /// RAII autorelease pool: plugin render code allocates ObjC objects on
+    /// our Rust threads, which MUST be drained per block.
+    struct Pool(*mut std::os::raw::c_void);
+    impl Pool {
+        fn new() -> Self {
+            Self(unsafe { objc_autoreleasePoolPush() })
+        }
+    }
+    impl Drop for Pool {
+        fn drop(&mut self) {
+            unsafe { objc_autoreleasePoolPop(self.0) }
+        }
+    }
+
     fn fourcc(s: &str) -> u32 {
         let b = s.as_bytes();
         ((b[0] as u32) << 24) | ((b[1] as u32) << 16) | ((b[2] as u32) << 8) | b[3] as u32
@@ -187,11 +206,33 @@ mod macos {
         0
     }
 
+    /// Set from AU property listeners (any thread) when the plugin changes
+    /// its configuration (latency/preset/state): the render side must
+    /// re-initialize the unit — the canonical host reaction; without it,
+    /// wrappers like iZotope's Hook fall back to a dry passthrough.
+    unsafe extern "C" fn au_config_changed(
+        in_ref_con: *mut std::os::raw::c_void,
+        _unit: AudioUnit,
+        _prop: AudioUnitPropertyID,
+        _scope: AudioUnitScope,
+        _elem: AudioUnitElement,
+    ) {
+        let flag = &*(in_ref_con as *const AtomicBool);
+        flag.store(true, Ordering::Release);
+    }
+
+    const CONFIG_PROPS: [AudioUnitPropertyID; 3] = [
+        kAudioUnitProperty_Latency,
+        kAudioUnitProperty_PresentPreset,
+        kAudioUnitProperty_ClassInfo,
+    ];
+
     /// A hosted AU effect, usable as a `BlockProcessor` insert.
     pub struct AuPlugin {
         unit: AudioUnit,
         input: Box<InputStore>,
         transport: Box<TransportStore>,
+        needs_reinit: Box<AtomicBool>,
         out_planar: Vec<Vec<f32>>,
         channels: usize,
         sample_rate: u32,
@@ -312,6 +353,7 @@ mod macos {
                         playing,
                         sample_pos: AtomicU64::new(0),
                     }),
+                    needs_reinit: Box::new(AtomicBool::new(false)),
                     out_planar: vec![vec![0.0; 4096]; channels],
                     channels,
                     sample_rate,
@@ -352,6 +394,15 @@ mod macos {
                     std::mem::size_of::<HostCallbackInfo>() as u32,
                 );
                 check(AudioUnitInitialize(plugin.unit), "initialize")?;
+                // React to configuration changes the way real hosts do.
+                for prop in CONFIG_PROPS {
+                    let _ = AudioUnitAddPropertyListener(
+                        plugin.unit,
+                        prop,
+                        Some(au_config_changed),
+                        &*plugin.needs_reinit as *const AtomicBool as *mut _,
+                    );
+                }
                 Ok(plugin)
             }
         }
@@ -454,6 +505,14 @@ mod macos {
     impl Drop for AuPlugin {
         fn drop(&mut self) {
             unsafe {
+                for prop in CONFIG_PROPS {
+                    let _ = AudioUnitRemovePropertyListenerWithUserData(
+                        self.unit,
+                        prop,
+                        Some(au_config_changed),
+                        &*self.needs_reinit as *const AtomicBool as *mut _,
+                    );
+                }
                 AudioUnitUninitialize(self.unit);
                 AudioComponentInstanceDispose(self.unit);
             }
@@ -464,6 +523,19 @@ mod macos {
         fn process(&mut self, buffer: &mut [f32], channels: usize, _sample_rate: u32) {
             if self.bypass {
                 return;
+            }
+            let _pool = Pool::new();
+            // The plugin announced a configuration change (preset load,
+            // latency change): re-initialize it here on the render thread,
+            // between blocks, so its new DSP graph engages.
+            if self.needs_reinit.swap(false, Ordering::Acquire) {
+                unsafe {
+                    AudioUnitUninitialize(self.unit);
+                    if AudioUnitInitialize(self.unit) != 0 {
+                        eprintln!("audio unit re-initialize failed after config change");
+                    }
+                    AudioUnitReset(self.unit, kAudioUnitScope_Global, 0);
+                }
             }
             let ch = self.channels.min(channels.max(1));
             let frames = buffer.len() / channels;
