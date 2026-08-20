@@ -123,17 +123,17 @@ pub fn clip_segments(clips: &[ClipInfo], start: u64, end: u64) -> Vec<(usize, u6
     out
 }
 
-struct Opened {
-    format: Box<dyn FormatReader>,
-    decoder: Box<dyn Decoder>,
-    track_id: u32,
-    sample_rate: u32,
-    channels: u16,
-    n_frames_hint: Option<u64>,
+pub(crate) struct Opened {
+    pub(crate) format: Box<dyn FormatReader>,
+    pub(crate) decoder: Box<dyn Decoder>,
+    pub(crate) track_id: u32,
+    pub(crate) sample_rate: u32,
+    pub(crate) channels: u16,
+    pub(crate) n_frames_hint: Option<u64>,
 }
 
 /// Open a source file strictly read-only and prepare a decoder.
-fn open(path: &Path) -> Result<Opened> {
+pub(crate) fn open(path: &Path) -> Result<Opened> {
     if !path.is_file() {
         return Err(StillError::FileNotFound(path.display().to_string()));
     }

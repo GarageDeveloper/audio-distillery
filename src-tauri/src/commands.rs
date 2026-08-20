@@ -145,10 +145,12 @@ async fn load_session(
     };
     state
         .player
-        .load(
+        .load_session(
             playlists_of(&ps.info),
             ps.info.duration_seconds,
             automation_of(&ps),
+            ps.info.sample_rate,
+            ps.info.channels.max(1) as usize,
         )
         .map_err(err)?;
     // Clamp regions against the real scanned duration (source may have
@@ -204,10 +206,12 @@ async fn rescan_with_groups(
         still_core::sanitize_regions(&mut s.project, s.info.duration_samples, s.info.sample_rate);
         state
             .player
-            .load(
+            .load_session(
                 playlists_of(&s.info),
                 s.info.duration_seconds,
                 automation_of(s),
+                s.info.sample_rate,
+                s.info.channels.max(1) as usize,
             )
             .map_err(err)?;
         Ok(s.view())
@@ -425,10 +429,12 @@ pub fn set_track_layer_gain(
 pub fn remove_layer(state: State<'_, AppState>, id: u32) -> CmdResult<ProjectView> {
     with_session(&state, |s| {
         s.remove_layer(id).map_err(err)?;
-        let _ = state.player.load(
+        let _ = state.player.load_session(
             playlists_of(&s.info),
             s.info.duration_seconds,
             automation_of(s),
+            s.info.sample_rate,
+            s.info.channels.max(1) as usize,
         );
         Ok(s.view())
     })
@@ -798,10 +804,12 @@ pub async fn load_project(
     ps.project_path = Some(project_path);
     state
         .player
-        .load(
+        .load_session(
             playlists_of(&ps.info),
             ps.info.duration_seconds,
             automation_of(&ps),
+            ps.info.sample_rate,
+            ps.info.channels.max(1) as usize,
         )
         .map_err(err)?;
     still_core::sanitize_regions(&mut ps.project, ps.info.duration_samples, ps.info.sample_rate);
