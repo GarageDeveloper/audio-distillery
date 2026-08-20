@@ -786,3 +786,24 @@ kbd {
 }
 .layer-solo.on { background: var(--copper); color: var(--text-on-accent); border-color: var(--copper-lo); }
 .track-mix-top .layer-mute.ov, .track-mix-top .layer-solo.ov { box-shadow: 0 0 0 2px var(--copper-dim); border-color: var(--copper-lo); }
+
+/* Metadata section of the export dialog */
+.meta-toggle {
+  display: flex; align-items: baseline; gap: 8px;
+  font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .13em;
+  color: var(--text-2);
+  padding: 0;
+}
+.meta-toggle:hover { color: var(--copper-hi); }
+.meta-toggle .hint-inline {
+  font-weight: 400; text-transform: none; letter-spacing: 0;
+  color: var(--text-3); font-size: 11px;
+}
+.meta-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 12px;
+  margin-top: 8px;
+}
+.meta-grid .meta-comment, .meta-grid .meta-hint { grid-column: 1 / -1; }

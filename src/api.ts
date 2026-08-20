@@ -7,6 +7,7 @@ import type { PlaybackState } from "./types/PlaybackState";
 import type { ExportConfig } from "./types/ExportConfig";
 import type { ExportReport } from "./types/ExportReport";
 import type { SilenceParams } from "./types/SilenceParams";
+import type { AlbumMeta } from "./types/AlbumMeta";
 import type { RegionSpan } from "./types/RegionSpan";
 import type { RegionEdge } from "./types/RegionEdge";
 
@@ -74,6 +75,8 @@ export const api = {
     invoke<ProjectView>("set_snap_to_zero", { enabled }),
   setExportConfig: (config: ExportConfig) =>
     invoke<ProjectView>("set_export_config", { config }),
+  setAlbumMeta: (meta: AlbumMeta) =>
+    invoke<ProjectView>("set_album_meta", { meta }),
   undo: () => invoke<ProjectView>("undo"),
   redo: () => invoke<ProjectView>("redo"),
   detectSilences: (params: SilenceParams) =>

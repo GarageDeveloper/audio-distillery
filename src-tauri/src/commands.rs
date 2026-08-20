@@ -10,8 +10,8 @@ use tauri::{AppHandle, Emitter, State};
 
 use still_core::project::{ExportConfig, Project};
 use still_core::{
-    ExportReport, PeakSlice, PlaybackState, ProjectState, ProjectView, RegionEdge, RegionSpan,
-    SilenceParams,
+    AlbumMeta, ExportReport, PeakSlice, PlaybackState, ProjectState, ProjectView, RegionEdge,
+    RegionSpan, SilenceParams,
 };
 
 use crate::state::AppState;
@@ -576,6 +576,15 @@ pub fn rename_track(state: State<'_, AppState>, id: u32, title: String) -> CmdRe
     })
 }
 
+/// Store the album metadata (format-agnostic; written to exported files).
+#[tauri::command]
+pub fn set_album_meta(state: State<'_, AppState>, meta: AlbumMeta) -> CmdResult<ProjectView> {
+    with_session(&state, |s| {
+        s.project.album_meta = meta;
+        Ok(s.view())
+    })
+}
+
 #[tauri::command]
 pub fn set_snap_to_zero(state: State<'_, AppState>, enabled: bool) -> CmdResult<ProjectView> {
     with_session(&state, |s| {
@@ -655,7 +664,9 @@ pub async fn export_tracks(
         // the UI requires an explicit choice; here we only forbid emptiness.
         s.project.export_config = config.clone();
         let source = PathBuf::from(&s.info.path);
-        let jobs = still_core::plan_export(&tracks, &config, &source).map_err(err)?;
+        let jobs =
+            still_core::export::plan_export_with_meta(&tracks, &config, &source, &s.project.album_meta)
+                .map_err(err)?;
         let layers: Vec<still_core::LayerMix> = s
             .info
             .layers

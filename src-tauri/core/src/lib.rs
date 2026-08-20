@@ -9,6 +9,7 @@ pub mod audio;
 pub mod error;
 pub mod export;
 pub mod ffmpeg;
+pub mod metadata;
 pub mod naming;
 pub mod peaks;
 pub mod playback;
@@ -25,6 +26,7 @@ pub use export::{
     LayerMix,
 };
 pub use ffmpeg::resolve_ffmpeg;
+pub use metadata::{resolve_tags, write_tags, AlbumMeta, TrackTags};
 pub use peaks::{merged_base_pyramid, merged_query, PeakPyramid, PeakSlice};
 pub use playback::{LayerPlay, PlaybackState, PlayerHandle, VolumeAutomation};
 pub use project::{

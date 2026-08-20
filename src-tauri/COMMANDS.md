@@ -92,6 +92,7 @@ frontend prefills the add-track input with it, nothing more.
 | `export_tracks` | `config: ExportConfig` | `ExportReport` | export already running, empty destination, ffmpeg not found |
 | `cancel_export` | — | `void` | — |
 | `set_export_config` | `config: ExportConfig` | `ProjectView` | no audio loaded |
+| `set_album_meta` | `meta: AlbumMeta` | `ProjectView` (album/artist/date/genre/comment + `disc_breaks`; persisted in the project) | no audio loaded |
 | `get_default_export_dir` | — | `string` (`~/Music/AudioDistillery`) | — |
 
 `export_tracks` pauses playback first (listening is pointless during an
@@ -104,6 +105,16 @@ session-wide layer gains for that track only (ffmpeg `amix` with
 `normalize=0`; mono layers are upmixed to the session layout). Existing files are never overwritten: names are suffixed ` (1)`,
 ` (2)`, … Per-track failures land in `ExportReport.errors`; the other tracks
 still export.
+
+After each successful encode the backend writes the album metadata into the
+NEW file through one abstract model (`AlbumMeta`): lofty maps it to the
+container's native tags — ID3v2 (MP3), MP4 atoms (M4A/AAC), Vorbis comments
+(FLAC), RIFF INFO (WAV; no disc fields there). Track n°/total restart on
+each disc; disc n°/total derive from `disc_breaks` (track numbers starting a
+new disc). Every text field and the file-naming template accept the macros
+`{title} {n} {ntotal} {disc} {dtotal} {album} {artist} {album_artist}
+{date} {year} {source}`. Sources are never touched — tagging failures keep
+the audio file and surface in `ExportReport.errors`.
 
 Tracks are encoded **in parallel**: one ffmpeg process per worker, with
 `available cores − 2` workers (never fewer than 1, never more than the track

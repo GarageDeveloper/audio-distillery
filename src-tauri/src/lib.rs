@@ -38,6 +38,7 @@ pub fn run() {
             commands::rename_track,
             commands::set_snap_to_zero,
             commands::set_export_config,
+            commands::set_album_meta,
             commands::undo,
             commands::redo,
             commands::detect_silences,

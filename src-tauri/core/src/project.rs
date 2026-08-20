@@ -6,9 +6,10 @@ use ts_rs::TS;
 
 use crate::audio::AudioInfo;
 use crate::error::{Result, StillError};
+use crate::metadata::AlbumMeta;
 use crate::peaks::PeakPyramid;
 
-pub const PROJECT_VERSION: u32 = 5;
+pub const PROJECT_VERSION: u32 = 6;
 pub const MIN_GAIN_DB: f32 = -60.0;
 pub const MAX_GAIN_DB: f32 = 12.0;
 /// A track region may never be shorter than this.
@@ -135,6 +136,10 @@ pub struct Project {
     pub regions: Vec<Region>,
     pub snap_to_zero: bool,
     pub export_config: ExportConfig,
+    /// Album metadata written to exported files (format-agnostic; lofty
+    /// maps it to each container's native tags).
+    #[serde(default)]
+    pub album_meta: AlbumMeta,
     pub next_region_id: u32,
     pub next_layer_id: u32,
 }
@@ -161,6 +166,7 @@ impl Project {
             regions: Vec::new(),
             snap_to_zero: false,
             export_config: ExportConfig::default(),
+            album_meta: AlbumMeta::default(),
             next_region_id: 1,
             next_layer_id,
         }
@@ -235,6 +241,7 @@ pub struct ProjectView {
     pub snap_to_zero: bool,
     pub export_config: ExportConfig,
     pub project_path: Option<String>,
+    pub album_meta: AlbumMeta,
     /// Backend-computed proposal for the next track title (may be empty).
     pub suggested_title: String,
     pub can_undo: bool,
@@ -880,6 +887,7 @@ impl ProjectState {
                 .project_path
                 .as_ref()
                 .map(|p| p.display().to_string()),
+            album_meta: self.project.album_meta.clone(),
             suggested_title: self.suggest_title(),
             can_undo: !self.undo.is_empty(),
             can_redo: !self.redo.is_empty(),
@@ -1052,6 +1060,7 @@ fn migrate_v4(legacy: LegacyProjectV4) -> Project {
         regions: legacy.regions,
         snap_to_zero: legacy.snap_to_zero,
         export_config: legacy.export_config.unwrap_or_default(),
+        album_meta: AlbumMeta::default(),
         next_region_id: legacy.next_region_id,
         next_layer_id: legacy.next_layer_id,
     }
@@ -1088,6 +1097,14 @@ pub fn read_project(path: &Path) -> Result<Project> {
         let legacy: LegacyProjectV4 = serde_json::from_str(&data)
             .map_err(|e| StillError::InvalidProject(e.to_string()))?;
         return Ok(migrate_v4(legacy));
+    }
+    // v5 → v6 only added `album_meta`, which is #[serde(default)]: parse as
+    // current and bump the version.
+    if version == 5 {
+        let mut p: Project = serde_json::from_str(&data)
+            .map_err(|e| StillError::InvalidProject(e.to_string()))?;
+        p.version = PROJECT_VERSION;
+        return Ok(p);
     }
     serde_json::from_str(&data).map_err(|e| StillError::InvalidProject(e.to_string()))
 }

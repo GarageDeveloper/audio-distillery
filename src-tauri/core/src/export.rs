@@ -10,6 +10,7 @@ use ts_rs::TS;
 use crate::audio::{layer_parts, ClipInfo, TimelinePart};
 use crate::error::{Result, StillError};
 use crate::naming::render_track_filename;
+use crate::metadata::{is_empty_meta, resolve_tags, write_tags, AlbumMeta, TrackTags};
 use crate::project::{ExportConfig, ExportFormat, TrackInfo};
 
 /// What the mixer needs to know about one layer at export time. Volumes are
@@ -31,6 +32,8 @@ pub struct ExportJob {
     /// Resolved linear volume per layer for THIS track (gains, mutes and
     /// solos, session-wide or overridden — straight from TrackInfo).
     pub layer_volumes: Vec<f32>,
+    /// Tags to write into the finished file (None = tagging disabled).
+    pub tags: Option<TrackTags>,
 }
 
 /// Progress event for ONE track. Exports run in parallel, so several tracks
@@ -72,6 +75,17 @@ pub fn plan_export(
     cfg: &ExportConfig,
     source_path: &Path,
 ) -> Result<Vec<ExportJob>> {
+    plan_export_with_meta(tracks, cfg, source_path, &AlbumMeta::default())
+}
+
+/// Like [`plan_export`], resolving each track's tags from the album
+/// metadata (macros expanded, disc numbering computed).
+pub fn plan_export_with_meta(
+    tracks: &[TrackInfo],
+    cfg: &ExportConfig,
+    source_path: &Path,
+    meta: &AlbumMeta,
+) -> Result<Vec<ExportJob>> {
     if cfg.dest_dir.trim().is_empty() {
         return Err(StillError::InvalidProject(
             "no destination folder selected".into(),
@@ -88,8 +102,25 @@ pub fn plan_export(
     let mut used: Vec<PathBuf> = Vec::new();
     let mut jobs = Vec::with_capacity(tracks.len());
     for t in tracks {
-        let base = render_track_filename(
+        // File naming supports the same macros as the metadata fields
+        // ({album}, {disc}, {year}…); classic tokens keep working through
+        // render_track_filename's sanitizing pass.
+        let numbering = crate::metadata::disc_numbering(
+            &meta.disc_breaks,
+            t.number,
+            tracks.len() as u32,
+        );
+        let expanded = crate::metadata::expand_macros(
             &cfg.template,
+            &crate::metadata::MacroContext {
+                meta,
+                title: &t.title,
+                source_stem: &source_stem,
+                numbering,
+            },
+        );
+        let base = render_track_filename(
+            &expanded,
             t.number as usize,
             tracks.len(),
             &t.title,
@@ -109,6 +140,17 @@ pub fn plan_export(
             end_sample: t.end_sample,
             out_path: candidate,
             layer_volumes: t.layer_volumes.clone(),
+            tags: if is_empty_meta(meta) {
+                None
+            } else {
+                Some(resolve_tags(
+                    meta,
+                    &t.title,
+                    &source_stem,
+                    t.number,
+                    tracks.len() as u32,
+                ))
+            },
         });
     }
     Ok(jobs)
@@ -224,6 +266,16 @@ pub fn run_export(
                     |p| emit(i, p),
                 ) {
                     Ok(()) => {
+                        // Tag the NEW file (never a source). A tagging
+                        // failure keeps the audio and surfaces as an error.
+                        if let Some(tags) = &job.tags {
+                            if let Err(e) = write_tags(&job.out_path, tags) {
+                                errors
+                                    .lock()
+                                    .unwrap()
+                                    .push((i, format!("{}: {e}", job.out_path.display())));
+                            }
+                        }
                         files.lock().unwrap().push((
                             i,
                             ExportedFile {
