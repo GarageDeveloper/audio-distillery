@@ -37,7 +37,6 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
   const [recent, setRecent] = useState<string[]>(loadRecent());
   // Pointer-based slot dragging (HTML5 DnD is owned by Tauri's file drop).
   const slotsRef = useRef<HTMLDivElement | null>(null);
-  const suppressClick = useRef(false);
   const [drag, setDrag] = useState<{
     from: number;
     over: number;
@@ -68,8 +67,12 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
   const startDrag = (e: React.PointerEvent, from: number, id: number) => {
     if (e.button !== 0) return;
     if ((e.target as HTMLElement).closest(".strip-actions")) return;
-    const slotEl = e.currentTarget as HTMLElement;
-    const pointerId = e.pointerId;
+    // WebKit only delivers pointermove during a press when the pointer is
+    // captured — but capture also swallows the buttons' click events. So:
+    // capture right away to make dragging possible, and synthesize the
+    // "click" ourselves on release when no drag engaged.
+    const clickedName = !!(e.target as HTMLElement).closest(".strip-name");
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     const startY = e.clientY;
     let started = false;
     const insertionAt = (y: number) => {
@@ -89,16 +92,6 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
       if (!started) {
         if (Math.abs(ev.clientY - startY) < 5) return;
         started = true;
-        suppressClick.current = true;
-        // Capture only once the drag engages: WebKit needs it to keep
-        // delivering pointermove outside the pressed element, but capturing
-        // on pointerdown would retarget pointerup away from the slot's
-        // buttons and kill their plain clicks.
-        try {
-          slotEl.setPointerCapture(pointerId);
-        } catch {
-          /* pointer already gone */
-        }
       }
       setDrag({ from, over: insertionAt(ev.clientY), x: ev.clientX, y: ev.clientY });
     };
@@ -111,9 +104,10 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
         const over = insertionAt(ev.clientY);
         const to = over > from ? over - 1 : over;
         if (to !== from) run(() => api.moveMasteringPlugin(id, to - from));
+      } else if (!started && ev.type !== "pointercancel" && clickedName) {
+        // Plain click on the plugin name (capture ate the click event).
+        api.openPluginEditor(id).catch((err) => onError(String(err)));
       }
-      // Let the in-flight click event fire (and be swallowed) first.
-      setTimeout(() => (suppressClick.current = false), 0);
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
@@ -178,13 +172,11 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
             ].join(" ")}
             onPointerDown={(e) => startDrag(e, i, p.id)}
           >
+            {/* The editor-open "click" is synthesized in startDrag's pointerup
+                (pointer capture keeps real click events from firing). */}
             <button
               className="strip-name"
               title={`${p.name} — click to open the editor, drag to reorder`}
-              onClick={() => {
-                if (suppressClick.current) return;
-                api.openPluginEditor(p.id).catch((e) => onError(String(e)));
-              }}
             >
               {p.name}
             </button>
