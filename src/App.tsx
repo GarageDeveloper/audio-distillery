@@ -377,6 +377,22 @@ export default function App() {
     [playback, showError]
   );
 
+  /// Track-list clicks: jump to the track AND start playback if stopped.
+  const seekToAndPlay = useCallback(
+    (sample: number) => {
+      api
+        .playerSeek(sample)
+        .then((s) => {
+          playback.adopt(s);
+          if (!s.playing) {
+            return api.playerToggle().then(playback.adopt);
+          }
+        })
+        .catch((e) => showError(String(e)));
+    },
+    [playback, showError]
+  );
+
   const detectSilences = useCallback(async () => {
     try {
       const found = await api.detectSilences({
@@ -603,7 +619,7 @@ export default function App() {
             onSelectTrack={setSelectedTrack}
             onRename={(id, title) => void apply(() => api.renameTrack(id, title))}
             onRemoveRegion={(id) => void apply(() => api.removeRegion(id))}
-            onSeek={seekTo}
+            onSeek={seekToAndPlay}
             onLayerGain={(id, db) => void apply(() => api.setLayerGain(id, db))}
             onLayerMute={(id, m) => void apply(() => api.setLayerMuted(id, m))}
             onLayerSolo={(id, so) => void apply(() => api.setLayerSolo(id, so))}
