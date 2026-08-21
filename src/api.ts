@@ -9,6 +9,7 @@ import type { ExportReport } from "./types/ExportReport";
 import type { SilenceParams } from "./types/SilenceParams";
 import type { AlbumMeta } from "./types/AlbumMeta";
 import type { AuComponentInfo } from "./types/AuComponentInfo";
+import type { ChainPresetInfo } from "./types/ChainPresetInfo";
 import type { RegionSpan } from "./types/RegionSpan";
 import type { RegionEdge } from "./types/RegionEdge";
 
@@ -90,6 +91,13 @@ export const api = {
     invoke<ProjectView>("set_mastering_bypass", { id, bypass }),
   openPluginEditor: (id: number) => invoke<void>("open_plugin_editor", { id }),
   reloadMasteringChain: () => invoke<ProjectView>("reload_mastering_chain"),
+  saveChainPreset: (name: string) =>
+    invoke<ChainPresetInfo[]>("save_chain_preset", { name }),
+  listChainPresets: () => invoke<ChainPresetInfo[]>("list_chain_presets"),
+  loadChainPreset: (name: string) =>
+    invoke<ProjectView>("load_chain_preset", { name }),
+  deleteChainPreset: (name: string) =>
+    invoke<ChainPresetInfo[]>("delete_chain_preset", { name }),
   undo: () => invoke<ProjectView>("undo"),
   redo: () => invoke<ProjectView>("redo"),
   detectSilences: (params: SilenceParams) =>

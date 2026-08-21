@@ -1047,3 +1047,58 @@ kbd {
 
 /* Click affordance on the name (the rest of the card reads as draggable) */
 .strip-name { cursor: pointer; }
+
+/* ---------- Chain presets menu ---------- */
+.strip-head-actions { display: flex; align-items: center; gap: 4px; }
+.strip-head-actions .active { color: var(--copper); }
+.presets-menu {
+  flex: none;
+  padding: 8px;
+  border-bottom: 1px solid var(--line-soft);
+  display: flex; flex-direction: column; gap: 6px;
+}
+.presets-menu .hint { font-size: 12px; color: var(--text-3); padding: 2px 2px 0; }
+.preset-list {
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-m);
+  background: var(--bg-deep);
+  padding: 3px;
+  display: flex; flex-direction: column;
+}
+.preset-item { display: flex; align-items: center; }
+.preset-load {
+  flex: 1;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 5px 8px;
+  border-radius: var(--r-s);
+  font-size: 12px;
+  text-align: left;
+  min-width: 0;
+}
+.preset-load:hover { background: var(--copper-dim); }
+.preset-load:hover .picker-name { color: var(--copper); }
+.preset-del {
+  width: 22px; height: 22px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--r-s);
+  color: var(--text-3);
+  opacity: 0;
+  transition: opacity var(--t-fast);
+}
+.preset-item:hover .preset-del { opacity: 1; }
+.preset-del:hover { color: var(--err); background: var(--err-dim); }
+.preset-save { display: flex; gap: 6px; }
+.preset-save .text-input {
+  flex: 1; min-width: 0;
+  background: var(--bg-deep);
+  border: 1px solid var(--line);
+  border-radius: var(--r-s);
+  padding: 5px 8px;
+  font-size: 12px;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.preset-save .text-input:focus { border-color: var(--copper-lo); outline: none; }
+.preset-save .btn { height: 27px; padding: 0 10px; font-size: 12px; flex: none; }

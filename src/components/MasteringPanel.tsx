@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ProjectView } from "../types/ProjectView";
 import type { AuComponentInfo } from "../types/AuComponentInfo";
+import type { ChainPresetInfo } from "../types/ChainPresetInfo";
 import { api } from "../api";
 
 interface Props {
@@ -35,6 +36,9 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
   const [filter, setFilter] = useState("");
   const [maker, setMaker] = useState<string | null>(null);
   const [recent, setRecent] = useState<string[]>(loadRecent());
+  const [presetsOpen, setPresetsOpen] = useState(false);
+  const [presets, setPresets] = useState<ChainPresetInfo[]>([]);
+  const [presetName, setPresetName] = useState("");
   // Pointer-based slot dragging (HTML5 DnD is owned by Tauri's file drop).
   const slotsRef = useRef<HTMLDivElement | null>(null);
   const [drag, setDrag] = useState<{
@@ -63,6 +67,26 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
 
   const chain = view.mastering_chain;
   const query = filter.trim().toLowerCase();
+
+  const togglePresets = () => {
+    const opening = !presetsOpen;
+    setPresetsOpen(opening);
+    if (opening) {
+      api.listChainPresets().then(setPresets).catch((e) => onError(String(e)));
+    }
+  };
+
+  const savePreset = () => {
+    const name = presetName.trim();
+    if (!name || chain.length === 0) return;
+    api
+      .saveChainPreset(name)
+      .then((list) => {
+        setPresets(list);
+        setPresetName("");
+      })
+      .catch((e) => onError(String(e)));
+  };
 
   // Drag gesture, same pattern as the waveform markers: pointer capture on
   // the slot + move/up handlers ON THE SLOT ITSELF (capture retargets every
@@ -174,16 +198,90 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
     <aside className="mastering-panel">
       <div className="track-panel-head">
         <span className="label">Mastering</span>
-        {chain.length > 0 && (
+        <div className="strip-head-actions">
           <button
-            className="disc-sep-btn reload-btn"
-            title="Re-instantiate every plugin with its current settings"
-            onClick={() => run(() => api.reloadMasteringChain())}
+            className={`disc-sep-btn ${presetsOpen ? "active" : ""}`}
+            title="Saved chains (presets)"
+            onClick={togglePresets}
           >
-            ⟳
+            ▾
           </button>
-        )}
+          {chain.length > 0 && (
+            <button
+              className="disc-sep-btn reload-btn"
+              title="Re-instantiate every plugin with its current settings"
+              onClick={() => run(() => api.reloadMasteringChain())}
+            >
+              ⟳
+            </button>
+          )}
+        </div>
       </div>
+
+      {presetsOpen && (
+        <div className="presets-menu">
+          {presets.length === 0 ? (
+            <div className="hint">No saved chains yet.</div>
+          ) : (
+            <div className="preset-list">
+              {presets.map((p) => (
+                <div
+                  key={p.name}
+                  className="preset-item"
+                  title={p.plugins.join(" → ")}
+                >
+                  <button
+                    className="preset-load"
+                    onClick={() => {
+                      setPresetsOpen(false);
+                      run(() => api.loadChainPreset(p.name));
+                    }}
+                  >
+                    <span className="picker-name">{p.name}</span>
+                    <span className="picker-maker">{p.plugins.length}</span>
+                  </button>
+                  <button
+                    className="del preset-del"
+                    title="Delete this preset"
+                    onClick={() =>
+                      api
+                        .deleteChainPreset(p.name)
+                        .then(setPresets)
+                        .catch((e) => onError(String(e)))
+                    }
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="preset-save">
+            <input
+              className="text-input"
+              placeholder="Save chain as…"
+              value={presetName}
+              onChange={(e) => setPresetName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") savePreset();
+                if (e.key === "Escape") setPresetsOpen(false);
+              }}
+            />
+            <button
+              className="btn"
+              disabled={!presetName.trim() || chain.length === 0}
+              title={
+                chain.length === 0
+                  ? "The chain is empty"
+                  : "Save the current chain (plugin settings included)"
+              }
+              onClick={savePreset}
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="strip-slots" ref={slotsRef}>
         {chain.map((p, i) => (

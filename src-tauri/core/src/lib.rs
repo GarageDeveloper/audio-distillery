@@ -8,6 +8,7 @@
 pub mod audio;
 pub mod aunit;
 pub mod b64;
+pub mod chain_presets;
 pub mod error;
 pub mod export;
 pub mod ffmpeg;
@@ -31,6 +32,7 @@ pub use ffmpeg::resolve_ffmpeg;
 pub use metadata::{resolve_tags, write_tags, AlbumMeta, TrackTags};
 pub use peaks::{merged_base_pyramid, merged_query, PeakPyramid, PeakSlice};
 pub use aunit::AuComponentInfo;
+pub use chain_presets::{ChainPreset, ChainPresetInfo};
 pub use engine::{LayerPlay, MasterPluginSpec, PlaybackState, PlayerHandle, VolumeAutomation};
 pub use project::{
     db_to_linear, read_project, sanitize_regions, save_project, ExportConfig, ExportFormat,
