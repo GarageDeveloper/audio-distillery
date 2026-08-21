@@ -1044,3 +1044,6 @@ kbd {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   transform: rotate(-1.5deg);
 }
+
+/* Click affordance on the name (the rest of the card reads as draggable) */
+.strip-name { cursor: pointer; }
