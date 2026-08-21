@@ -64,54 +64,78 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
   const chain = view.mastering_chain;
   const query = filter.trim().toLowerCase();
 
-  const startDrag = (e: React.PointerEvent, from: number, id: number) => {
+  // Drag gesture, same pattern as the waveform markers: pointer capture on
+  // the slot + move/up handlers ON THE SLOT ITSELF (capture retargets every
+  // pointer event to it). The gesture lives in a ref; `drag` state only
+  // drives the visuals. A press that never crosses the 5px threshold is a
+  // click, synthesized on release (capture eats real click events).
+  const gesture = useRef<{
+    from: number;
+    id: number;
+    startY: number;
+    clickedName: boolean;
+    started: boolean;
+  } | null>(null);
+
+  const insertionAt = (y: number, fallback: number) => {
+    const els = slotsRef.current?.querySelectorAll<HTMLElement>(".strip-slot");
+    if (!els) return fallback;
+    let over = els.length;
+    for (let i = 0; i < els.length; i++) {
+      const r = els[i].getBoundingClientRect();
+      if (y < r.top + r.height / 2) {
+        over = i;
+        break;
+      }
+    }
+    return over;
+  };
+
+  const onSlotPointerDown = (e: React.PointerEvent, from: number, id: number) => {
     if (e.button !== 0) return;
     if ((e.target as HTMLElement).closest(".strip-actions")) return;
-    // WebKit only delivers pointermove during a press when the pointer is
-    // captured — but capture also swallows the buttons' click events. So:
-    // capture right away to make dragging possible, and synthesize the
-    // "click" ourselves on release when no drag engaged.
-    const clickedName = !!(e.target as HTMLElement).closest(".strip-name");
+    gesture.current = {
+      from,
+      id,
+      startY: e.clientY,
+      clickedName: !!(e.target as HTMLElement).closest(".strip-name"),
+      started: false,
+    };
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    const startY = e.clientY;
-    let started = false;
-    const insertionAt = (y: number) => {
-      const els = slotsRef.current?.querySelectorAll<HTMLElement>(".strip-slot");
-      if (!els) return from;
-      let over = els.length;
-      for (let i = 0; i < els.length; i++) {
-        const r = els[i].getBoundingClientRect();
-        if (y < r.top + r.height / 2) {
-          over = i;
-          break;
-        }
-      }
-      return over;
-    };
-    const onMove = (ev: PointerEvent) => {
-      if (!started) {
-        if (Math.abs(ev.clientY - startY) < 5) return;
-        started = true;
-      }
-      setDrag({ from, over: insertionAt(ev.clientY), x: ev.clientX, y: ev.clientY });
-    };
-    const onUp = (ev: PointerEvent) => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onUp);
-      setDrag(null);
-      if (started && ev.type !== "pointercancel") {
-        const over = insertionAt(ev.clientY);
-        const to = over > from ? over - 1 : over;
-        if (to !== from) run(() => api.moveMasteringPlugin(id, to - from));
-      } else if (!started && ev.type !== "pointercancel" && clickedName) {
-        // Plain click on the plugin name (capture ate the click event).
-        api.openPluginEditor(id).catch((err) => onError(String(err)));
-      }
-    };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onUp);
+  };
+
+  const onSlotPointerMove = (e: React.PointerEvent) => {
+    const g = gesture.current;
+    if (!g) return;
+    if (!g.started) {
+      if (Math.abs(e.clientY - g.startY) < 5) return;
+      g.started = true;
+    }
+    setDrag({
+      from: g.from,
+      over: insertionAt(e.clientY, g.from),
+      x: e.clientX,
+      y: e.clientY,
+    });
+  };
+
+  const onSlotPointerUp = (e: React.PointerEvent) => {
+    const g = gesture.current;
+    gesture.current = null;
+    setDrag(null);
+    if (!g) return;
+    if (g.started) {
+      const over = insertionAt(e.clientY, g.from);
+      const to = over > g.from ? over - 1 : over;
+      if (to !== g.from) run(() => api.moveMasteringPlugin(g.id, to - g.from));
+    } else if (g.clickedName) {
+      api.openPluginEditor(g.id).catch((err) => onError(String(err)));
+    }
+  };
+
+  const onSlotPointerCancel = () => {
+    gesture.current = null;
+    setDrag(null);
   };
 
   const makers = useMemo(() => {
@@ -170,7 +194,10 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
                 ? "drop-after"
                 : "",
             ].join(" ")}
-            onPointerDown={(e) => startDrag(e, i, p.id)}
+            onPointerDown={(e) => onSlotPointerDown(e, i, p.id)}
+            onPointerMove={onSlotPointerMove}
+            onPointerUp={onSlotPointerUp}
+            onPointerCancel={onSlotPointerCancel}
           >
             {/* The editor-open "click" is synthesized in startDrag's pointerup
                 (pointer capture keeps real click events from firing). */}
