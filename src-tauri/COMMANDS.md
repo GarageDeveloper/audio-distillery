@@ -141,6 +141,15 @@ always track order, regardless of finish order.
 | `remove_mastering_plugin` | `id: number` | `ProjectView` | — |
 | `move_mastering_plugin` | `id: number`, `delta: number` | `ProjectView` | — |
 | `set_mastering_bypass` | `id: number`, `bypass: boolean` | `ProjectView` (LIVE: no rebuild, plugin keeps its state) | — |
+| `save_chain_preset` | `name: string` | `ChainPresetInfo[]` (refreshed list; same name overwrites) | empty chain / empty name |
+| `list_chain_presets` | — | `ChainPresetInfo[]` (sorted by name) | — |
+| `load_chain_preset` | `name: string` | `ProjectView` (chain REPLACED, fresh ids, instances recreated) | preset not found / plugin failed to instantiate (previous chain restored) |
+| `delete_chain_preset` | `name: string` | `ChainPresetInfo[]` (refreshed list) | — |
+
+Chain presets are named recipes (components, bypass flags, plugin states)
+stored outside any project, one JSON per preset in
+`<app-data>/chain-presets/`. `save_chain_preset` snapshots the LIVE states
+first, so what you hear is what gets saved.
 
 The chain lives on the master bus of the realtime engine (after the layer
 sum) and processes playback live. Structural changes (add/remove/reorder)

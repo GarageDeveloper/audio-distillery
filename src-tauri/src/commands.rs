@@ -728,6 +728,83 @@ pub fn reload_mastering_chain(
     })
 }
 
+/// Directory holding the user's named chain presets (app-owned, outside
+/// any project).
+fn presets_dir(app: &AppHandle) -> CmdResult<PathBuf> {
+    use tauri::Manager;
+    app.path()
+        .app_data_dir()
+        .map(|d| d.join("chain-presets"))
+        .map_err(|e| e.to_string())
+}
+
+/// Save the CURRENT chain (live states included) as a named preset.
+/// Same name = overwrite. Returns the refreshed preset list.
+#[tauri::command]
+pub fn save_chain_preset(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+) -> CmdResult<Vec<still_core::ChainPresetInfo>> {
+    let dir = presets_dir(&app)?;
+    with_session(&state, |s| {
+        snapshot_chain_states(&app, &state, s);
+        let preset = still_core::ChainPreset::from_chain(&name, &s.project.mastering_chain);
+        still_core::chain_presets::save_preset(&dir, &preset).map_err(err)
+    })
+}
+
+#[tauri::command]
+pub fn list_chain_presets(app: AppHandle) -> CmdResult<Vec<still_core::ChainPresetInfo>> {
+    still_core::chain_presets::list_presets(&presets_dir(&app)?).map_err(err)
+}
+
+/// Replace the current chain with a preset's plugins (fresh project ids,
+/// instances recreated). Rolls back to the previous chain if any plugin
+/// fails to instantiate.
+#[tauri::command]
+pub fn load_chain_preset(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+) -> CmdResult<ProjectView> {
+    let dir = presets_dir(&app)?;
+    with_session(&state, |s| {
+        let preset = still_core::chain_presets::load_preset(&dir, &name).map_err(err)?;
+        let previous = std::mem::take(&mut s.project.mastering_chain);
+        let previous_next_id = s.project.next_plugin_id;
+        for p in preset.plugins {
+            let id = s.project.next_plugin_id;
+            s.project.next_plugin_id += 1;
+            s.project
+                .mastering_chain
+                .push(still_core::MasteringPluginCfg {
+                    id,
+                    component: p.component,
+                    name: p.name,
+                    bypass: p.bypass,
+                    state_b64: p.state_b64,
+                });
+        }
+        if let Err(e) = rebuild_chain(&app, &state, s, true) {
+            s.project.mastering_chain = previous;
+            s.project.next_plugin_id = previous_next_id;
+            let _ = rebuild_chain(&app, &state, s, true);
+            return Err(e);
+        }
+        Ok(s.view())
+    })
+}
+
+/// Delete a preset. Returns the refreshed preset list.
+#[tauri::command]
+pub fn delete_chain_preset(
+    app: AppHandle,
+    name: String,
+) -> CmdResult<Vec<still_core::ChainPresetInfo>> {
+    still_core::chain_presets::delete_preset(&presets_dir(&app)?, &name).map_err(err)
+}
+
 /// Live bypass — the plugin instance keeps its state.
 #[tauri::command]
 pub fn set_mastering_bypass(
