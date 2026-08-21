@@ -43,3 +43,21 @@ Architecture, command contract and design system:
 - `CLAUDE.md` — the two non-negotiable rules and their decisive tests.
 - `src-tauri/COMMANDS.md` — frontend/backend contract.
 - `design/DESIGN.md` — design system ("Alambic" direction).
+
+## License
+
+AudioDistillery is released under the [MIT License](LICENSE).
+
+### Third-party notices
+
+- **VST** is a trademark of Steinberg Media Technologies GmbH, registered in
+  Europe and other countries. VST 3 hosting is implemented on the
+  MIT-licensed [`vst3`](https://crates.io/crates/vst3) Rust bindings
+  (coupler-rs); the VST 3 SDK itself is MIT-licensed by Steinberg since
+  version 3.8.
+- **Audio Units** and macOS are technologies of Apple Inc.
+- Exports are performed by a bundled [FFmpeg](https://ffmpeg.org) binary
+  (separate sidecar process), built and distributed by
+  [ffmpeg.martin-riedl.de](https://ffmpeg.martin-riedl.de) under the GPL;
+  its sources are available from that site. FFmpeg is a trademark of
+  Fabrice Bellard.
