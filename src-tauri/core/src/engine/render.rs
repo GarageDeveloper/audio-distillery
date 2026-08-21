@@ -20,6 +20,45 @@ pub trait BlockProcessor: Send {
     }
     /// Clear internal state (called on seek).
     fn reset(&mut self);
+    /// Serialize the processor's full state (plugins: preset blob).
+    fn save_state(&self) -> Option<Vec<u8>> {
+        None
+    }
+    /// Live bypass without rebuilding the processor.
+    fn set_bypassed(&mut self, _bypassed: bool) {}
+    /// Raw native handle (AudioUnit pointer) for editor windows; 0 = none.
+    fn raw_handle(&self) -> usize {
+        0
+    }
+    /// Restore a previously saved state blob; false = unsupported/failed.
+    fn restore_state(&mut self, _state: &[u8]) -> bool {
+        false
+    }
+}
+
+/// Insert proxy sharing a processor between the MAIN thread (lifecycle:
+/// creation, state, disposal — where AU plugins expect to live) and the
+/// render thread (processing only). Render uses try_lock and passes the
+/// dry signal for the rare blocks where a lifecycle operation holds the
+/// lock — never blocking the audio path.
+pub struct SharedInsert {
+    pub inner: std::sync::Arc<std::sync::Mutex<Box<dyn BlockProcessor>>>,
+}
+
+impl BlockProcessor for SharedInsert {
+    fn process(&mut self, buffer: &mut [f32], channels: usize, sample_rate: u32) {
+        if let Ok(mut p) = self.inner.try_lock() {
+            p.process(buffer, channels, sample_rate);
+        }
+    }
+    fn latency_samples(&self) -> u32 {
+        self.inner.try_lock().map(|p| p.latency_samples()).unwrap_or(0)
+    }
+    fn reset(&mut self) {
+        if let Ok(mut p) = self.inner.try_lock() {
+            p.reset();
+        }
+    }
 }
 
 pub const BLOCK_FRAMES: usize = 512;
@@ -96,6 +135,21 @@ impl Renderer {
 
     pub fn finished(&self) -> bool {
         self.pos >= self.total_samples
+    }
+
+    /// Idle pump: silence processed through the MASTER chain, without
+    /// advancing the timeline. Real hosts render continuously even with the
+    /// transport stopped — plugins (iZotope cores reloading on preset
+    /// changes, reverb tails, meters) depend on that constant pumping.
+    pub fn render_idle_block(&mut self, out: &mut [f32], frames: usize) -> usize {
+        let frames = frames.min(BLOCK_FRAMES);
+        let ch = self.channels;
+        let out = &mut out[..frames * ch];
+        out.fill(0.0);
+        for p in &mut self.master_inserts {
+            p.process(out, ch, self.sample_rate);
+        }
+        frames
     }
 
     /// Render up to `frames` frames into `out` (interleaved, session

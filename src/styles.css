@@ -867,3 +867,183 @@ kbd {
   font-size: 10px; color: var(--text-3);
 }
 .artwork-actions { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+
+/* Mastering chain dialog */
+.chain-list { display: flex; flex-direction: column; gap: 4px; }
+.chain-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg-deep);
+  border: 1px solid var(--line);
+  border-radius: var(--r-m);
+}
+.chain-row.bypassed { opacity: .5; }
+.chain-num {
+  font-family: var(--font-mono);
+  font-size: 11px; font-weight: 700;
+  color: var(--copper-hi);
+  width: 16px; text-align: right;
+}
+.chain-name { flex: 1; min-width: 0; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chain-del { opacity: 1; width: 20px; height: 20px; border-radius: var(--r-s); color: var(--text-3); }
+.chain-del:hover { color: var(--err); background: var(--err-dim); }
+.plugin-browser {
+  max-height: 220px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 2px;
+  margin-top: 6px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-m);
+  padding: 4px;
+}
+.plugin-item {
+  text-align: left;
+  padding: 6px 10px;
+  border-radius: var(--r-s);
+  color: var(--text);
+}
+.plugin-item:hover { background: var(--copper-dim); color: var(--copper-hi); }
+
+.chain-edit { height: 24px; padding: 0 10px; font-size: 12px; }
+
+.chain-head { display: flex; align-items: center; justify-content: space-between; }
+.chain-head .btn { height: 24px; padding: 0 10px; font-size: 12px; }
+
+/* ---------- Mastering strip (column right of the track list) ---------- */
+.mastering-panel {
+  width: 232px;
+  flex: none;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+  display: flex; flex-direction: column;
+  min-height: 0;
+}
+.mastering-panel .reload-btn { font-size: 13px; }
+.strip-slots {
+  flex: 1; overflow-y: auto;
+  padding: 8px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.strip-slot {
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-m);
+  background: var(--panel-2);
+  padding: 6px 8px;
+  display: flex; flex-direction: column; gap: 4px;
+  transition: border-color var(--t-fast) var(--ease);
+}
+.strip-slot:hover { border-color: var(--copper-lo); }
+.strip-slot.bypassed { opacity: .45; }
+.strip-name {
+  width: 100%;
+  text-align: left;
+  font-weight: 600; font-size: 12px;
+  color: var(--text-1, inherit);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.strip-name:hover { color: var(--copper); }
+.strip-actions {
+  display: flex; align-items: center; gap: 4px;
+  opacity: 0;
+  transition: opacity var(--t-fast);
+}
+.strip-slot:hover .strip-actions { opacity: 1; }
+.strip-actions button {
+  width: 20px; height: 20px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--r-s);
+  font-size: 11px;
+  color: var(--text-3);
+}
+.strip-actions button:hover:not(:disabled) { background: var(--panel); color: var(--text-2); }
+.strip-actions button:disabled { opacity: .3; }
+.strip-actions .layer-mute.on { color: var(--copper); background: var(--copper-dim); }
+.strip-actions .strip-del { margin-left: auto; }
+.strip-actions .strip-del:hover { color: var(--err); background: var(--err-dim); }
+.strip-add {
+  border: 1px dashed var(--line);
+  border-radius: var(--r-m);
+  padding: 8px;
+  font-size: 12px;
+  color: var(--text-3);
+  text-align: center;
+  transition: color var(--t-fast), border-color var(--t-fast);
+}
+.strip-add:hover { color: var(--copper); border-color: var(--copper-lo); }
+
+/* ---------- Plugin picker (Logic-style browser) ---------- */
+.plugin-picker {
+  display: flex; flex-direction: column; gap: 6px;
+  min-height: 0;
+}
+.plugin-picker .text-input {
+  width: 100%;
+  background: var(--bg-deep);
+  border: 1px solid var(--line);
+  border-radius: var(--r-s);
+  padding: 5px 8px;
+  font-size: 12px;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.plugin-picker .text-input:focus { border-color: var(--copper-lo); outline: none; }
+.picker-list {
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-m);
+  background: var(--bg-deep);
+  display: flex; flex-direction: column;
+  padding: 3px;
+}
+.picker-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: var(--r-s);
+  font-size: 12px;
+  text-align: left;
+}
+.picker-item:hover { background: var(--copper-dim); }
+.picker-name {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.picker-maker {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.picker-item:hover .picker-name { color: var(--copper); }
+.picker-back { font-weight: 600; color: var(--text-2); }
+.picker-section {
+  padding: 6px 8px 2px;
+  font-size: 10px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .12em;
+  color: var(--text-3);
+}
+.picker-list .hint { padding: 6px 8px; font-size: 12px; color: var(--text-3); }
+.picker-cancel { align-self: flex-end; height: 24px; padding: 0 10px; font-size: 12px; }
+
+/* Slot drag-reorder */
+.strip-slot { cursor: grab; }
+.strip-slot.dragging { opacity: .35; cursor: grabbing; }
+.strip-slot.drop-before { box-shadow: 0 -4px 0 -2px var(--copper); }
+.strip-slot.drop-after { box-shadow: 0 4px 0 -2px var(--copper); }
+
+/* Floating ghost card that follows the pointer while dragging a slot */
+.strip-ghost {
+  position: fixed;
+  z-index: 200;
+  pointer-events: none;
+  width: 180px;
+  padding: 6px 10px;
+  border-radius: var(--r-m);
+  border: 1px solid var(--copper);
+  background: var(--panel-2);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
+  font-size: 12px; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transform: rotate(-1.5deg);
+}
+
+/* Click affordance on the name (the rest of the card reads as draggable) */
+.strip-name { cursor: pointer; }

@@ -1,4 +1,6 @@
+mod chain_host;
 mod commands;
+mod editor;
 mod state;
 
 use state::AppState;
@@ -40,6 +42,13 @@ pub fn run() {
             commands::set_export_config,
             commands::set_album_meta,
             commands::get_artwork_preview,
+            commands::list_audio_units,
+            commands::add_mastering_plugin,
+            commands::remove_mastering_plugin,
+            commands::move_mastering_plugin,
+            commands::set_mastering_bypass,
+            commands::open_plugin_editor,
+            commands::reload_mastering_chain,
             commands::undo,
             commands::redo,
             commands::detect_silences,

@@ -33,6 +33,18 @@ use crate::error::{Result, StillError};
 use decode::{LayerDecoder, PlayItem};
 use render::{Renderer, BLOCK_FRAMES};
 
+/// Spec of one master-chain plugin, sent by the control side.
+#[derive(Debug, Clone)]
+pub struct MasterPluginSpec {
+    pub id: u32,
+    pub component: String,
+    pub bypass: bool,
+    pub state: Option<Vec<u8>>,
+}
+
+/// Snapshot of one chain plugin's live state.
+pub type ChainStateSnapshot = Vec<(u32, Option<Vec<u8>>)>;
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../src/types/")]
 pub struct PlaybackState {
@@ -71,6 +83,10 @@ impl VolumeAutomation {
 }
 
 enum Cmd {
+    /// Install ready-made master inserts (built on the MAIN thread). The
+    /// ack lets the caller drop its old Arc handles only after the engine
+    /// released its own — so plugin disposal happens on the caller's thread.
+    SetMasterInserts(Vec<Box<dyn render::BlockProcessor>>, Sender<()>),
     Load {
         layers: Vec<LayerPlay>,
         total_seconds: f64,
@@ -88,6 +104,8 @@ enum Cmd {
 /// State shared between control side, render thread and device callback.
 struct Shared {
     playing: AtomicBool,
+    /// Same playing state as an Arc the plugin transport callbacks can own.
+    playing_flag: Arc<AtomicBool>,
     loaded: AtomicBool,
     seek_base: AtomicU64,
     consumed: AtomicU64,
@@ -103,6 +121,7 @@ impl Shared {
     fn new() -> Self {
         Self {
             playing: AtomicBool::new(false),
+            playing_flag: Arc::new(AtomicBool::new(false)),
             loaded: AtomicBool::new(false),
             seek_base: AtomicU64::new(0),
             consumed: AtomicU64::new(0),
@@ -167,6 +186,24 @@ impl PlayerHandle {
         self.send(Cmd::SetAutomation(automation))
     }
 
+    /// Install the master-insert chain (proxies built on the main thread;
+    /// the engine only processes). Waits for the engine to release its old
+    /// inserts so their disposal runs on the CALLER's thread.
+    pub fn set_master_inserts(
+        &self,
+        inserts: Vec<Box<dyn render::BlockProcessor>>,
+    ) -> Result<()> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.send(Cmd::SetMasterInserts(inserts, tx))?;
+        rx.recv_timeout(Duration::from_secs(10))
+            .map_err(|_| StillError::Playback("engine did not answer".into()))
+    }
+
+    /// The engine's playing flag, shared with plugin transport callbacks.
+    pub fn playing_flag(&self) -> Arc<AtomicBool> {
+        self.shared.playing_flag.clone()
+    }
+
     pub fn play(&self) -> Result<()> {
         self.send(Cmd::Resume)
     }
@@ -217,6 +254,8 @@ fn to_items(playlist: &Playlist, sample_rate: u32) -> Vec<PlayItem> {
 
 fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
     let mut renderer: Option<Renderer> = None;
+    // Inserts survive a session reload (they're main-thread-owned proxies).
+    let mut pending_inserts: Vec<Box<dyn render::BlockProcessor>> = Vec::new();
     let mut producer: Option<rtrb::Producer<f32>> = None;
     let mut _stream: Option<cpal::Stream> = None;
     let mut device_channels = 2usize;
@@ -252,6 +291,7 @@ fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
                 shared.sample_rate.store(sample_rate as u64, Ordering::Relaxed);
                 shared.total_samples.store(total_samples, Ordering::Relaxed);
                 shared.playing.store(false, Ordering::Relaxed);
+                shared.playing_flag.store(false, Ordering::Relaxed);
                 shared.seek_base.store(0, Ordering::Relaxed);
                 shared.consumed.store(0, Ordering::Relaxed);
                 shared.ring_written.store(0, Ordering::Relaxed);
@@ -272,6 +312,20 @@ fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
                     }
                 }
                 shared.loaded.store(true, Ordering::Relaxed);
+                if let Some(r) = &mut renderer {
+                    r.master_inserts = std::mem::take(&mut pending_inserts);
+                }
+            }
+            Ok(Cmd::SetMasterInserts(inserts, reply)) => {
+                match &mut renderer {
+                    Some(r) => {
+                        // Old proxies dropped BEFORE the ack so the caller
+                        // (main thread) owns the last Arc at disposal time.
+                        r.master_inserts = inserts;
+                    }
+                    None => pending_inserts = inserts,
+                }
+                let _ = reply.send(());
             }
             Ok(Cmd::SetAutomation(a)) => {
                 if let Some(r) = &mut renderer {
@@ -280,6 +334,7 @@ fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
             }
             Ok(Cmd::Pause) => {
                 shared.playing.store(false, Ordering::Relaxed);
+                shared.playing_flag.store(false, Ordering::Relaxed);
             }
             Ok(Cmd::Resume) => {
                 if let Some(r) = &mut renderer {
@@ -287,6 +342,7 @@ fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
                         seek_engine(&shared, r, 0);
                     }
                     shared.playing.store(true, Ordering::Relaxed);
+                    shared.playing_flag.store(true, Ordering::Relaxed);
                 }
             }
             Ok(Cmd::Seek(secs)) => {
@@ -300,6 +356,7 @@ fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
                     seek_engine(&shared, r, 0);
                 }
                 shared.playing.store(false, Ordering::Relaxed);
+                shared.playing_flag.store(false, Ordering::Relaxed);
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
@@ -338,6 +395,7 @@ fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
                         >= shared.ring_written.load(Ordering::Relaxed)
                 {
                     shared.playing.store(false, Ordering::Relaxed);
+                shared.playing_flag.store(false, Ordering::Relaxed);
                 }
             }
             (Some(r), None) => {
@@ -346,6 +404,7 @@ fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
                 let got = r.render_block(&mut block, BLOCK_FRAMES);
                 if got == 0 {
                     shared.playing.store(false, Ordering::Relaxed);
+                shared.playing_flag.store(false, Ordering::Relaxed);
                 } else {
                     shared.consumed.fetch_add(got as u64, Ordering::Relaxed);
                     std::thread::sleep(Duration::from_secs_f64(

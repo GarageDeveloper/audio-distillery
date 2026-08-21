@@ -14,6 +14,7 @@ import { TrackList } from "./components/TrackList";
 import { ExportDialog } from "./components/ExportDialog";
 import { AlbumMetaForm } from "./components/AlbumMetaForm";
 import { Backdrop } from "./components/Backdrop";
+import { MasteringPanel } from "./components/MasteringPanel";
 import { EmptyState } from "./components/EmptyState";
 import { StatusBar } from "./components/StatusBar";
 import { usePlayback } from "./hooks/usePlayback";
@@ -622,6 +623,10 @@ export default function App() {
               )
             }
           />
+        )}
+
+        {view && (
+          <MasteringPanel view={view} onError={showError} onViewChange={setView} />
         )}
       </div>
 

@@ -140,6 +140,12 @@ pub struct Project {
     /// maps it to each container's native tags).
     #[serde(default)]
     pub album_meta: AlbumMeta,
+    /// Master-bus mastering chain: ordered AU plugins with their saved
+    /// state. Declarative like everything else in the recipe.
+    #[serde(default)]
+    pub mastering_chain: Vec<MasteringPluginCfg>,
+    #[serde(default = "default_next_plugin_id")]
+    pub next_plugin_id: u32,
     pub next_region_id: u32,
     pub next_layer_id: u32,
 }
@@ -167,6 +173,8 @@ impl Project {
             snap_to_zero: false,
             export_config: ExportConfig::default(),
             album_meta: AlbumMeta::default(),
+            mastering_chain: Vec::new(),
+            next_plugin_id: 1,
             next_region_id: 1,
             next_layer_id,
         }
@@ -180,6 +188,33 @@ impl Project {
     pub fn source_groups(&self) -> Vec<Vec<SourceRef>> {
         self.layers.iter().map(|l| l.sources.clone()).collect()
     }
+}
+
+fn default_next_plugin_id() -> u32 {
+    1
+}
+
+/// One plugin of the mastering chain, as persisted in the project.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MasteringPluginCfg {
+    pub id: u32,
+    /// AU component id "aufx:xxxx:yyyy".
+    pub component: String,
+    pub name: String,
+    pub bypass: bool,
+    /// Base64 binary plist of the plugin state (ClassInfo).
+    #[serde(default)]
+    pub state_b64: Option<String>,
+}
+
+/// Display state of one mastering-chain plugin.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../src/types/")]
+pub struct MasteringPluginView {
+    pub id: u32,
+    pub component: String,
+    pub name: String,
+    pub bypass: bool,
 }
 
 pub fn db_to_linear(db: f32) -> f32 {
@@ -242,6 +277,7 @@ pub struct ProjectView {
     pub export_config: ExportConfig,
     pub project_path: Option<String>,
     pub album_meta: AlbumMeta,
+    pub mastering_chain: Vec<MasteringPluginView>,
     /// Backend-computed proposal for the next track title (may be empty).
     pub suggested_title: String,
     pub can_undo: bool,
@@ -888,6 +924,17 @@ impl ProjectState {
                 .as_ref()
                 .map(|p| p.display().to_string()),
             album_meta: self.project.album_meta.clone(),
+            mastering_chain: self
+                .project
+                .mastering_chain
+                .iter()
+                .map(|c| MasteringPluginView {
+                    id: c.id,
+                    component: c.component.clone(),
+                    name: c.name.clone(),
+                    bypass: c.bypass,
+                })
+                .collect(),
             suggested_title: self.suggest_title(),
             can_undo: !self.undo.is_empty(),
             can_redo: !self.redo.is_empty(),
@@ -1061,6 +1108,8 @@ fn migrate_v4(legacy: LegacyProjectV4) -> Project {
         snap_to_zero: legacy.snap_to_zero,
         export_config: legacy.export_config.unwrap_or_default(),
         album_meta: AlbumMeta::default(),
+        mastering_chain: Vec::new(),
+        next_plugin_id: 1,
         next_region_id: legacy.next_region_id,
         next_layer_id: legacy.next_layer_id,
     }
