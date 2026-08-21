@@ -141,6 +141,7 @@ always track order, regardless of finish order.
 | `remove_mastering_plugin` | `id: number` | `ProjectView` | — |
 | `move_mastering_plugin` | `id: number`, `delta: number` | `ProjectView` | — |
 | `set_mastering_bypass` | `id: number`, `bypass: boolean` | `ProjectView` (LIVE: no rebuild, plugin keeps its state) | — |
+| `chain_latency` | — | `number` (summed LIVE chain latency, samples at session rate; display only — export self-compensates) | — |
 | `save_chain_preset` | `name: string` | `ChainPresetInfo[]` (refreshed list; same name overwrites) | empty chain / empty name |
 | `list_chain_presets` | — | `ChainPresetInfo[]` (sorted by name) | — |
 | `load_chain_preset` | `name: string` | `ProjectView` (chain REPLACED, fresh ids, instances recreated) | preset not found / plugin failed to instantiate (previous chain restored) |

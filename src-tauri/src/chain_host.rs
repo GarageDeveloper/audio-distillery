@@ -138,6 +138,17 @@ impl ChainHost {
         })
     }
 
+    /// Summed reported latency of the given plugins, in samples. Brief
+    /// per-slot locks (same pattern as raw_handle); the render thread's
+    /// try_lock passes dry for at most one block on a rare collision.
+    pub fn total_latency(&self, ids: &[u32]) -> u64 {
+        let slots = self.slots.lock().unwrap();
+        ids.iter()
+            .filter_map(|id| slots.get(id))
+            .map(|s| s.lock().map(|p| p.latency_samples() as u64).unwrap_or(0))
+            .sum()
+    }
+
     /// Native handle for the editor window.
     pub fn raw_handle(&self, id: u32) -> usize {
         self.slots

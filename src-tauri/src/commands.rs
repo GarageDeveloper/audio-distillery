@@ -807,6 +807,16 @@ pub fn delete_chain_preset(
     still_core::chain_presets::delete_preset(&presets_dir(&app)?, &name).map_err(err)
 }
 
+/// Total reported latency of the LIVE mastering chain, in samples at the
+/// session rate. Display only — export compensates on its own.
+#[tauri::command]
+pub fn chain_latency(state: State<'_, AppState>) -> CmdResult<u64> {
+    with_session(&state, |s| {
+        let ids: Vec<u32> = s.project.mastering_chain.iter().map(|c| c.id).collect();
+        Ok(state.chain.total_latency(&ids))
+    })
+}
+
 /// Live bypass — the plugin instance keeps its state.
 #[tauri::command]
 pub fn set_mastering_bypass(
