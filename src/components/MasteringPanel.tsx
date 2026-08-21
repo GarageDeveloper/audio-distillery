@@ -68,9 +68,8 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
   const startDrag = (e: React.PointerEvent, from: number, id: number) => {
     if (e.button !== 0) return;
     if ((e.target as HTMLElement).closest(".strip-actions")) return;
-    // Without capture, WebKit stops delivering pointermove as soon as the
-    // pointer leaves the pressed element.
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    const slotEl = e.currentTarget as HTMLElement;
+    const pointerId = e.pointerId;
     const startY = e.clientY;
     let started = false;
     const insertionAt = (y: number) => {
@@ -91,6 +90,15 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
         if (Math.abs(ev.clientY - startY) < 5) return;
         started = true;
         suppressClick.current = true;
+        // Capture only once the drag engages: WebKit needs it to keep
+        // delivering pointermove outside the pressed element, but capturing
+        // on pointerdown would retarget pointerup away from the slot's
+        // buttons and kill their plain clicks.
+        try {
+          slotEl.setPointerCapture(pointerId);
+        } catch {
+          /* pointer already gone */
+        }
       }
       setDrag({ from, over: insertionAt(ev.clientY), x: ev.clientX, y: ev.clientY });
     };
