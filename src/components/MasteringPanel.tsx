@@ -38,7 +38,12 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
   // Pointer-based slot dragging (HTML5 DnD is owned by Tauri's file drop).
   const slotsRef = useRef<HTMLDivElement | null>(null);
   const suppressClick = useRef(false);
-  const [drag, setDrag] = useState<{ from: number; over: number } | null>(null);
+  const [drag, setDrag] = useState<{
+    from: number;
+    over: number;
+    x: number;
+    y: number;
+  } | null>(null);
 
   useEffect(() => {
     api.listAudioUnits().then(setAvailable).catch((e) => onError(String(e)));
@@ -63,6 +68,9 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
   const startDrag = (e: React.PointerEvent, from: number, id: number) => {
     if (e.button !== 0) return;
     if ((e.target as HTMLElement).closest(".strip-actions")) return;
+    // Without capture, WebKit stops delivering pointermove as soon as the
+    // pointer leaves the pressed element.
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     const startY = e.clientY;
     let started = false;
     const insertionAt = (y: number) => {
@@ -84,7 +92,7 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
         started = true;
         suppressClick.current = true;
       }
-      setDrag({ from, over: insertionAt(ev.clientY) });
+      setDrag({ from, over: insertionAt(ev.clientY), x: ev.clientX, y: ev.clientY });
     };
     const onUp = (ev: PointerEvent) => {
       window.removeEventListener("pointermove", onMove);
@@ -271,6 +279,15 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
           </div>
         )}
       </div>
+
+      {drag && (
+        <div
+          className="strip-ghost"
+          style={{ left: drag.x - 90, top: drag.y - 14 }}
+        >
+          {chain[drag.from]?.name}
+        </div>
+      )}
 
       <div className="track-panel-foot">
         <span>Click a slot to edit</span>

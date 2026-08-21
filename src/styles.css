@@ -1028,3 +1028,19 @@ kbd {
 .strip-slot.dragging { opacity: .35; cursor: grabbing; }
 .strip-slot.drop-before { box-shadow: 0 -4px 0 -2px var(--copper); }
 .strip-slot.drop-after { box-shadow: 0 4px 0 -2px var(--copper); }
+
+/* Floating ghost card that follows the pointer while dragging a slot */
+.strip-ghost {
+  position: fixed;
+  z-index: 200;
+  pointer-events: none;
+  width: 180px;
+  padding: 6px 10px;
+  border-radius: var(--r-m);
+  border: 1px solid var(--copper);
+  background: var(--panel-2);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
+  font-size: 12px; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transform: rotate(-1.5deg);
+}
