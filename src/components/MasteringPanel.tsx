@@ -460,7 +460,7 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
       )}
 
       <div className="track-panel-foot">
-        {chain.length > 0 && latency > 0 ? (
+        {chain.length > 0 ? (
           <span
             title={`${latency} samples of plugin lookahead at ${view.audio.sample_rate} Hz — playback is delayed by this much; exports are compensated automatically`}
           >
