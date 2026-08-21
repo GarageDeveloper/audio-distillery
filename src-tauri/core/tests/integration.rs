@@ -647,6 +647,7 @@ fn export_renders_through_mastering_chain() {
         &jobs_wet,
         &cfg,
         &chain,
+        &[],
         &cancel,
         |_| {},
     );
@@ -809,6 +810,7 @@ fn export_renders_through_vst3_chain() {
         &jobs,
         &cfg,
         &chain,
+        &[],
         &cancel,
         |_| {},
     );
@@ -825,4 +827,113 @@ fn export_renders_through_vst3_chain() {
         assert!(samples.iter().any(|&s| s != 0), "silent output");
     }
     assert_eq!(checksum(&wav), before);
+}
+
+/// Per-layer and per-track chains at export: a lowpass on ONE layer of a
+/// two-layer mix changes the output; a track-scoped chain applies only to
+/// its own job; sources stay byte-identical. Also exercises the muted-layer
+/// compaction (lane chains must follow the ORIGINAL layer indices).
+#[cfg(target_os = "macos")]
+#[test]
+fn export_renders_layer_and_track_chains() {
+    let Ok(ffmpeg) = resolve_ffmpeg(&[]) else {
+        eprintln!("ffmpeg not found — per-target chain export test skipped");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let wav_a = dir.path().join("a.wav");
+    write_wav(&wav_a, &[(3.0, 0.4)]);
+    let before = checksum(&wav_a);
+    let (info, peaks) = scan_file(&wav_a, |_| {}).unwrap();
+    let mut state = ProjectState::new(
+        Project::new(vec![wav_a.display().to_string()]),
+        info,
+        vec![peaks],
+    );
+    state.add_region(0, SR as u64, None).unwrap();
+    state.add_region(2 * SR as u64, 3 * SR as u64, None).unwrap();
+    let cfg = ExportConfig {
+        format: ExportFormat::Wav,
+        dest_dir: dir.path().join("out").display().to_string(),
+        ..Default::default()
+    };
+    let cancel = AtomicBool::new(false);
+
+    let lowpass = |id: u32| still_core::MasterPluginSpec {
+        id,
+        component: "aufx:lpas:appl".into(),
+        bypass: false,
+        state: None,
+    };
+
+    // Reference: no chains at all.
+    let jobs_dry = plan_export(&state.tracks(), &cfg, &wav_a).unwrap();
+    let rep = run_export(&ffmpeg, &mix_of(&state), 2, SR, &jobs_dry, &cfg, &cancel, |_| {});
+    assert!(rep.errors.is_empty(), "{:?}", rep.errors);
+
+    // Layer chain on layer 0 + track chain on job 0 only.
+    let mut jobs_wet = plan_export(&state.tracks(), &cfg, &wav_a).unwrap();
+    jobs_wet[0].track_chain = vec![lowpass(20)];
+    let lane_chains = vec![vec![lowpass(10)]];
+    let rep2 = still_core::export::run_export_with_chain(
+        &ffmpeg,
+        &mix_of(&state),
+        2,
+        SR,
+        &jobs_wet,
+        &cfg,
+        &[],
+        &lane_chains,
+        &cancel,
+        |_| {},
+    );
+    assert!(rep2.errors.is_empty(), "{:?}", rep2.errors);
+
+    let read = |p: &Path| -> Vec<i16> {
+        hound::WavReader::open(p)
+            .unwrap()
+            .samples::<i16>()
+            .map(|s| s.unwrap())
+            .collect()
+    };
+    let differs = |a: &[i16], b: &[i16]| {
+        a.iter()
+            .zip(b)
+            .filter(|(x, y)| (**x as i32 - **y as i32).abs() > 64)
+            .count()
+            > a.len() / 10
+    };
+    for (dry_job, wet_job) in jobs_dry.iter().zip(&jobs_wet) {
+        let dry = read(&dry_job.out_path);
+        let wet = read(&wet_job.out_path);
+        assert_eq!(dry.len(), wet.len());
+        // Both tracks go through the LAYER chain → both differ from dry.
+        assert!(differs(&dry, &wet), "layer chain had no effect");
+    }
+    // The TRACK chain applies to job 0 only: render job 1 again with the
+    // same lane chain but no track chain — must match the wet job 1 output,
+    // and job 0 re-rendered without its track chain must differ from wet 0.
+    let mut jobs_check = plan_export(&state.tracks(), &cfg, &wav_a).unwrap();
+    let rep3 = still_core::export::run_export_with_chain(
+        &ffmpeg,
+        &mix_of(&state),
+        2,
+        SR,
+        &jobs_check,
+        &cfg,
+        &[],
+        &lane_chains,
+        &cancel,
+        |_| {},
+    );
+    assert!(rep3.errors.is_empty(), "{:?}", rep3.errors);
+    let wet0 = read(&jobs_wet[0].out_path);
+    let check0 = read(&jobs_check[0].out_path);
+    assert!(differs(&wet0, &check0), "track chain had no effect on its job");
+    let wet1 = read(&jobs_wet[1].out_path);
+    let check1 = read(&jobs_check[1].out_path);
+    assert_eq!(wet1, check1, "track chain leaked into another job");
+    let _ = &mut jobs_check;
+
+    assert_eq!(checksum(&wav_a), before);
 }

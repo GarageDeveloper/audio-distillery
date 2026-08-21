@@ -1097,20 +1097,35 @@ pub async fn export_tracks(
                 clips: scanned.clips.clone(),
             })
             .collect();
-        let chain: Vec<still_core::MasterPluginSpec> = s
+        let specs_of = |cfgs: &[still_core::MasteringPluginCfg]| -> Vec<still_core::MasterPluginSpec> {
+            cfgs.iter()
+                .map(|c| still_core::MasterPluginSpec {
+                    id: c.id,
+                    component: c.component.clone(),
+                    bypass: c.bypass,
+                    state: c.state_b64.as_deref().and_then(still_core::b64::decode),
+                })
+                .collect()
+        };
+        let chain = specs_of(&s.project.mastering_chain);
+        // Per-layer chains, index-aligned with `layers`.
+        let lane_chains: Vec<Vec<still_core::MasterPluginSpec>> = s
             .project
-            .mastering_chain
+            .layers
             .iter()
-            .map(|c| still_core::MasterPluginSpec {
-                id: c.id,
-                component: c.component.clone(),
-                bypass: c.bypass,
-                state: c.state_b64.as_deref().and_then(still_core::b64::decode),
-            })
+            .map(|l| specs_of(&l.inserts))
             .collect();
-        Ok((layers, s.info.channels, s.info.sample_rate, jobs, chain))
+        // Each job renders one region: attach that track's own chain
+        // (jobs and `tracks` are index-aligned by construction).
+        let mut jobs = jobs;
+        for (job, t) in jobs.iter_mut().zip(&tracks) {
+            if let Some(r) = s.project.regions.iter().find(|r| r.id == t.id) {
+                job.track_chain = specs_of(&r.inserts);
+            }
+        }
+        Ok((layers, s.info.channels, s.info.sample_rate, jobs, chain, lane_chains))
     });
-    let (layers, session_channels, sample_rate, jobs, chain) = match prepared {
+    let (layers, session_channels, sample_rate, jobs, chain, lane_chains) = match prepared {
         Ok(x) => x,
         Err(e) => {
             state.export_running.store(false, Ordering::SeqCst);
@@ -1142,6 +1157,7 @@ pub async fn export_tracks(
             &jobs,
             &config,
             &chain,
+            &lane_chains,
             &cancel,
             |p| {
                 let force = p.track_progress == 0.0 || p.track_progress == 1.0;
