@@ -17,6 +17,7 @@ import { Backdrop } from "./components/Backdrop";
 import { MasteringPanel } from "./components/MasteringPanel";
 import { EmptyState } from "./components/EmptyState";
 import { StatusBar } from "./components/StatusBar";
+import { AboutDialog } from "./components/AboutDialog";
 import { usePlayback } from "./hooks/usePlayback";
 import type { Viewport } from "./lib/viewport";
 import { clampViewport } from "./lib/viewport";
@@ -37,6 +38,7 @@ export default function App() {
   const [panelOpen, setPanelOpen] = useState(true);
   const [exportOpen, setExportOpen] = useState(false);
   const [albumOpen, setAlbumOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null);
   const [proposals, setProposals] = useState<RegionSpan[] | null>(null);
   const [dropChoice, setDropChoice] = useState<string[] | null>(null);
@@ -630,7 +632,9 @@ export default function App() {
         )}
       </div>
 
-      <StatusBar view={view} />
+      <StatusBar view={view} onAbout={() => setAboutOpen(true)} />
+
+      {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} />}
 
       {error && (
         <div className="toast toast-error" onClick={() => setError(null)}>

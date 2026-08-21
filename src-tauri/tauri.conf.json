@@ -36,7 +36,8 @@
     ],
     "externalBin": [
       "binaries/ffmpeg"
-    ]
+    ],
+    "copyright": "© 2026 Raphaël Enrici — MIT License"
   },
   "mainBinaryName": "AudioDistillery"
 }
