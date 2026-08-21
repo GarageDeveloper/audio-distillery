@@ -733,3 +733,96 @@ fn export_report_carries_errors_not_panics() {
     assert_eq!(report.files.len(), 0);
     assert!(!report.errors.is_empty());
 }
+
+/// Stage E sign-off for VST3: export TWO tracks through a real VST3 plugin
+/// (Neutron 5 Equalizer — graceful skip when absent). Parallel workers each
+/// instantiate their own instance (serialized by the lifecycle lock), the
+/// output keeps the exact sample length, and the sources stay untouched.
+#[cfg(target_os = "macos")]
+#[test]
+fn export_renders_through_vst3_chain() {
+    let Ok(ffmpeg) = resolve_ffmpeg(&[]) else {
+        eprintln!("ffmpeg not found — VST3 chain export test skipped");
+        return;
+    };
+    // Register ONLY the Neutron bundle via a symlink dir.
+    let neutron = match std::fs::read_dir("/Library/Audio/Plug-Ins/VST3")
+        .ok()
+        .and_then(|d| {
+            d.flatten().map(|e| e.path()).find(|p| {
+                p.file_name()
+                    .map(|n| n.to_string_lossy().contains("Neutron 5 Equalizer"))
+                    .unwrap_or(false)
+            })
+        }) {
+        Some(p) => p,
+        None => {
+            eprintln!("Neutron 5 Equalizer VST3 not installed — test skipped");
+            return;
+        }
+    };
+    let plugdir = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(&neutron, plugdir.path().join(neutron.file_name().unwrap()))
+        .unwrap();
+    still_core::vst3::scan_dirs(&[plugdir.path().to_path_buf()]);
+    let Some(vst3) = still_core::vst3::list_effects()
+        .into_iter()
+        .find(|p| p.name.contains("Equalizer") || p.name.contains("EQ"))
+    else {
+        eprintln!("Neutron VST3 class not found after scan — test skipped");
+        return;
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let wav = dir.path().join("source.wav");
+    write_wav(&wav, &[(2.0, 0.6)]);
+    let before = checksum(&wav);
+    let (info, peaks) = scan_file(&wav, |_| {}).unwrap();
+    let mut state = ProjectState::new(
+        Project::new(vec![wav.display().to_string()]),
+        info,
+        vec![peaks],
+    );
+    // Two tracks so at least two workers instantiate concurrently.
+    state.add_region(0, SR as u64 - 1, None).unwrap();
+    state.add_region(SR as u64, 2 * SR as u64, None).unwrap();
+    let cfg = ExportConfig {
+        format: ExportFormat::Wav,
+        dest_dir: dir.path().join("out").display().to_string(),
+        ..Default::default()
+    };
+    let cancel = AtomicBool::new(false);
+
+    let chain = vec![still_core::MasterPluginSpec {
+        id: 1,
+        component: vst3.id.clone(),
+        bypass: false,
+        state: None,
+    }];
+    let jobs = plan_export(&state.tracks(), &cfg, &wav).unwrap();
+    assert_eq!(jobs.len(), 2);
+    let rep = still_core::export::run_export_with_chain(
+        &ffmpeg,
+        &mix_of(&state),
+        2,
+        SR,
+        &jobs,
+        &cfg,
+        &chain,
+        &cancel,
+        |_| {},
+    );
+    assert!(rep.errors.is_empty(), "{:?}", rep.errors);
+
+    for job in &jobs {
+        let samples: Vec<i16> = hound::WavReader::open(&job.out_path)
+            .unwrap()
+            .samples::<i16>()
+            .map(|s| s.unwrap())
+            .collect();
+        let expect = (job.end_sample - job.start_sample) * 2;
+        assert_eq!(samples.len() as u64, expect, "{:?}", job.out_path);
+        assert!(samples.iter().any(|&s| s != 0), "silent output");
+    }
+    assert_eq!(checksum(&wav), before);
+}

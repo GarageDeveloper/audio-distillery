@@ -16,7 +16,9 @@ pub mod metadata;
 pub mod naming;
 pub mod engine;
 pub mod peaks;
+pub mod plugins;
 pub mod project;
+pub mod vst3;
 pub mod silence;
 
 pub use audio::{
@@ -31,8 +33,8 @@ pub use export::{
 pub use ffmpeg::resolve_ffmpeg;
 pub use metadata::{resolve_tags, write_tags, AlbumMeta, TrackTags};
 pub use peaks::{merged_base_pyramid, merged_query, PeakPyramid, PeakSlice};
-pub use aunit::AuComponentInfo;
 pub use chain_presets::{ChainPreset, ChainPresetInfo};
+pub use plugins::{create_plugin, list_plugins, PluginFormat, PluginInfo};
 pub use engine::{LayerPlay, MasterPluginSpec, PlaybackState, PlayerHandle, VolumeAutomation};
 pub use project::{
     db_to_linear, read_project, sanitize_regions, save_project, ExportConfig, ExportFormat,

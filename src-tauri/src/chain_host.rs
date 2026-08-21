@@ -60,14 +60,13 @@ impl ChainHost {
     ) -> Result<(), String> {
         let component = component.to_string();
         let slot: Slot = on_main(app, move || -> Result<Slot, String> {
-            let mut p =
-                still_core::aunit::AuPlugin::new(&component, sample_rate, channels, playing)
-                    .map_err(|e| e.to_string())?;
+            let mut p = still_core::create_plugin(&component, sample_rate, channels, playing)
+                .map_err(|e| e.to_string())?;
             if let Some(s) = &state {
                 let _ = p.restore_state(s);
             }
             p.set_bypassed(bypass);
-            Ok(Arc::new(Mutex::new(Box::new(p) as Box<dyn BlockProcessor>)))
+            Ok(Arc::new(Mutex::new(p)))
         })??;
         self.slots.lock().unwrap().insert(id, slot);
         Ok(())
@@ -120,6 +119,23 @@ impl ChainHost {
             return Ok(());
         };
         on_main(app, move || slot.lock().unwrap().set_bypassed(bypass))
+    }
+
+    /// Run `f` on the MAIN thread with exclusive access to the plugin
+    /// instance behind `id`. Ok(None) when the id has no live instance.
+    pub fn with_plugin<T: Send + 'static>(
+        &self,
+        app: &AppHandle,
+        id: u32,
+        f: impl FnOnce(&mut Box<dyn BlockProcessor>) -> T + Send + 'static,
+    ) -> Result<Option<T>, String> {
+        let Some(slot) = self.slots.lock().unwrap().get(&id).cloned() else {
+            return Ok(None);
+        };
+        on_main(app, move || {
+            let mut p = slot.lock().unwrap();
+            Some(f(&mut p))
+        })
     }
 
     /// Native handle for the editor window.

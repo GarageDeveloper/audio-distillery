@@ -442,11 +442,11 @@ fn export_one_rendered(
         ));
     }
 
-    // Instantiate THIS worker's own plugin chain from the specs.
+    // Instantiate THIS worker's own plugin chain from the specs (any
+    // format — the factory dispatches on the component id).
     let mut inserts: Vec<Box<dyn crate::engine::render::BlockProcessor>> = Vec::new();
-    #[cfg(target_os = "macos")]
     for spec in chain {
-        let mut p = crate::aunit::AuPlugin::new(
+        let mut p = crate::plugins::create_plugin(
             &spec.component,
             sample_rate,
             channels,
@@ -454,16 +454,10 @@ fn export_one_rendered(
         )
         .map_err(|e| StillError::Ffmpeg(format!("{}: {e}", spec.component)))?;
         if let Some(state) = &spec.state {
-            let _ = p.set_state(state);
+            let _ = p.restore_state(state);
         }
-        p.bypass = spec.bypass;
-        inserts.push(Box::new(p));
-    }
-    #[cfg(not(target_os = "macos"))]
-    if !chain.is_empty() {
-        return Err(StillError::Ffmpeg(
-            "the mastering chain requires macOS (Audio Units)".into(),
-        ));
+        p.set_bypassed(spec.bypass);
+        inserts.push(p);
     }
     let latency: u64 = inserts.iter().map(|p| p.latency_samples() as u64).sum();
 

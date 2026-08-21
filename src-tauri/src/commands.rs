@@ -10,7 +10,7 @@ use tauri::{AppHandle, Emitter, State};
 
 use still_core::project::{ExportConfig, Project};
 use still_core::{
-    AlbumMeta, AuComponentInfo, ExportReport, PeakSlice, PlaybackState, ProjectState,
+    AlbumMeta, ExportReport, PeakSlice, PlaybackState, PluginInfo, ProjectState,
     ProjectView, RegionEdge, RegionSpan, SilenceParams,
 };
 
@@ -644,10 +644,12 @@ fn snapshot_chain_states(app: &AppHandle, state: &State<'_, AppState>, s: &mut P
     }
 }
 
-/// Installed Audio Unit effects (macOS).
+/// Every installed effect plugin (Audio Units + VST3, macOS).
+/// VST3 entries come from the scan cache, refreshed in a background
+/// subprocess at startup (see lib.rs) — never scanned in this process.
 #[tauri::command]
-pub fn list_audio_units() -> CmdResult<Vec<AuComponentInfo>> {
-    Ok(still_core::aunit::list_effects())
+pub fn list_plugins() -> CmdResult<Vec<PluginInfo>> {
+    Ok(still_core::list_plugins())
 }
 
 #[tauri::command]
@@ -823,22 +825,28 @@ pub fn set_mastering_bypass(
 }
 
 /// Open (or re-show) the native editor window of a mastering plugin.
+/// Dispatches on the component id prefix: AU editors go through the
+/// AudioUnit handle, VST3 editors through IPlugView.
 #[tauri::command]
 pub fn open_plugin_editor(
     app: AppHandle,
     state: State<'_, AppState>,
     id: u32,
 ) -> CmdResult<()> {
-    let (unit, name) = with_session(&state, |s| {
-        let name = s
-            .project
+    let (component, name) = with_session(&state, |s| {
+        s.project
             .mastering_chain
             .iter()
             .find(|c| c.id == id)
-            .map(|c| c.name.clone())
-            .ok_or_else(|| "unknown plugin".to_string())?;
-        Ok((state.chain.raw_handle(id), name))
+            .map(|c| (c.component.clone(), c.name.clone()))
+            .ok_or_else(|| "unknown plugin".to_string())
     })?;
+    #[cfg(target_os = "macos")]
+    if still_core::plugins::format_of(&component) == still_core::PluginFormat::Vst3 {
+        return state.editors.open_vst3(&app, id, &state.chain, &name);
+    }
+    let _ = &component;
+    let unit = state.chain.raw_handle(id);
     if unit == 0 {
         return Err("This plugin is not running (did it fail to load?).".into());
     }

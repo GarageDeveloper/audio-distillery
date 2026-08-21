@@ -8,32 +8,17 @@
 //! Plugin state is captured/restored through `kAudioUnitProperty_ClassInfo`
 //! (binary plist), which is what the `.still` project persists.
 
-use serde::{Deserialize, Serialize};
-use ts_rs::TS;
-
-/// One installed effect component, as shown in the plugin browser.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../src/types/")]
-pub struct AuComponentInfo {
-    /// Stable identifier "type:subtype:manufacturer" (fourcc strings).
-    pub id: String,
-    /// Plugin display name (without the manufacturer prefix).
-    pub name: String,
-    /// Manufacturer display name ("Apple", "iZotope, Inc.", …).
-    pub manufacturer: String,
-}
-
 #[cfg(target_os = "macos")]
 pub use macos::{list_effects, AuPlugin};
 
 #[cfg(not(target_os = "macos"))]
-pub fn list_effects() -> Vec<AuComponentInfo> {
+pub fn list_effects() -> Vec<crate::plugins::PluginInfo> {
     Vec::new()
 }
 
 #[cfg(target_os = "macos")]
 mod macos {
-    use super::AuComponentInfo;
+    use crate::plugins::{PluginFormat, PluginInfo};
     use crate::engine::render::BlockProcessor;
     use crate::error::{Result, StillError};
     use coreaudio_sys::*;
@@ -93,7 +78,7 @@ mod macos {
     }
 
     /// Enumerate every installed audio EFFECT unit ('aufx').
-    pub fn list_effects() -> Vec<AuComponentInfo> {
+    pub fn list_effects() -> Vec<PluginInfo> {
         let mut out = Vec::new();
         unsafe {
             let desc = AudioComponentDescription {
@@ -123,7 +108,7 @@ mod macos {
                         Some((m, p)) => (m.to_string(), p.to_string()),
                         None => (String::new(), full_name),
                     };
-                    out.push(AuComponentInfo {
+                    out.push(PluginInfo {
                         id: format!(
                             "{}:{}:{}",
                             fourcc_str(full.componentType),
@@ -132,6 +117,7 @@ mod macos {
                         ),
                         name: short,
                         manufacturer,
+                        format: PluginFormat::Au,
                     });
                     CFRelease(name as *const _);
                 }

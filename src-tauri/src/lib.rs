@@ -5,8 +5,47 @@ mod state;
 
 use state::AppState;
 
+/// Hidden mode: `AudioDistillery --vst3-scan <cache.json>` runs the VST3
+/// scan (which loads every plugin dylib) and exits WITHOUT running static
+/// destructors — plugin dylibs are known to SIGSEGV at normal exit. The app
+/// spawns this on itself so its own process never loads unused plugins.
+fn maybe_run_vst3_scan() {
+    let mut args = std::env::args().skip(1);
+    if args.next().as_deref() != Some("--vst3-scan") {
+        return;
+    }
+    if let Some(cache) = args.next() {
+        still_core::vst3::set_cache_path(cache.into());
+        #[cfg(target_os = "macos")]
+        still_core::vst3::full_scan_blocking();
+    }
+    unsafe { libc::_exit(0) }
+}
+
+/// Refresh the VST3 scan cache in a throwaway subprocess when bundles
+/// changed on disk. Runs in the background at startup; the picker simply
+/// shows the current cache until the refresh lands.
+fn spawn_vst3_rescan_if_stale(cache: std::path::PathBuf) {
+    still_core::vst3::set_cache_path(cache.clone());
+    #[cfg(target_os = "macos")]
+    std::thread::spawn(move || {
+        if !still_core::vst3::cache_is_stale() {
+            return;
+        }
+        let Ok(exe) = std::env::current_exe() else {
+            return;
+        };
+        let _ = std::process::Command::new(exe)
+            .arg("--vst3-scan")
+            .arg(&cache)
+            .status();
+        still_core::vst3::reload_from_cache();
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    maybe_run_vst3_scan();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -42,7 +81,7 @@ pub fn run() {
             commands::set_export_config,
             commands::set_album_meta,
             commands::get_artwork_preview,
-            commands::list_audio_units,
+            commands::list_plugins,
             commands::add_mastering_plugin,
             commands::remove_mastering_plugin,
             commands::move_mastering_plugin,
@@ -64,6 +103,13 @@ pub fn run() {
             commands::player_state,
             commands::get_default_export_dir,
         ])
+        .setup(|app| {
+            use tauri::Manager;
+            if let Ok(dir) = app.path().app_config_dir() {
+                spawn_vst3_rescan_if_stale(dir.join("vst3_scan_cache.json"));
+            }
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running AudioDistillery");
 }

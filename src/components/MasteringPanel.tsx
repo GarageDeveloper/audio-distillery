@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ProjectView } from "../types/ProjectView";
-import type { AuComponentInfo } from "../types/AuComponentInfo";
+import type { PluginInfo } from "../types/PluginInfo";
 import type { ChainPresetInfo } from "../types/ChainPresetInfo";
 import { api } from "../api";
 
@@ -31,7 +31,7 @@ function pushRecent(id: string) {
  * picker: search field, Recent, then manufacturer → plugins drill-down.
  */
 export function MasteringPanel({ view, onError, onViewChange }: Props) {
-  const [available, setAvailable] = useState<AuComponentInfo[]>([]);
+  const [available, setAvailable] = useState<PluginInfo[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [filter, setFilter] = useState("");
   const [maker, setMaker] = useState<string | null>(null);
@@ -49,14 +49,14 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
   } | null>(null);
 
   useEffect(() => {
-    api.listAudioUnits().then(setAvailable).catch((e) => onError(String(e)));
+    api.listPlugins().then(setAvailable).catch((e) => onError(String(e)));
   }, [onError]);
 
   const run = (op: () => Promise<ProjectView>) => {
     op().then(onViewChange).catch((e) => onError(String(e)));
   };
 
-  const add = (a: AuComponentInfo) => {
+  const add = (a: PluginInfo) => {
     pushRecent(a.id);
     setRecent(loadRecent());
     setPickerOpen(false);
@@ -175,6 +175,11 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
     return [...m.entries()].sort((x, y) => x[0].localeCompare(y[0]));
   }, [available]);
 
+  // Same plugin in both formats: sort by name, AU right above VST3.
+  const byNameThenFormat = (a: PluginInfo, b: PluginInfo) =>
+    a.name.toLowerCase().localeCompare(b.name.toLowerCase()) ||
+    (a.format === b.format ? 0 : a.format === "au" ? -1 : 1);
+
   const searchResults = useMemo(() => {
     if (!query) return [];
     return available
@@ -190,7 +195,7 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
     () =>
       recent
         .map((id) => available.find((a) => a.id === id))
-        .filter((a): a is AuComponentInfo => !!a),
+        .filter((a): a is PluginInfo => !!a),
     [recent, available]
   );
 
@@ -309,7 +314,10 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
               className="strip-name"
               title={`${p.name} — click to open the editor, drag to reorder`}
             >
-              {p.name}
+              <span className="strip-name-text">{p.name}</span>
+              <span className="picker-format">
+                {p.format === "vst3" ? "VST3" : "AU"}
+              </span>
             </div>
             <div className="strip-actions">
               <button
@@ -356,7 +364,12 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
                 {searchResults.map((a) => (
                   <button key={a.id} className="picker-item" onClick={() => add(a)}>
                     <span className="picker-name">{a.name}</span>
-                    <span className="picker-maker">{a.manufacturer}</span>
+                    <span className="picker-maker">
+                      {a.manufacturer}
+                      <span className="picker-format">
+                        {a.format === "vst3" ? "VST3" : "AU"}
+                      </span>
+                    </span>
                   </button>
                 ))}
                 {searchResults.length === 0 && <div className="hint">No match.</div>}
@@ -369,12 +382,17 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
                     {recentInfos.map((a) => (
                       <button key={a.id} className="picker-item" onClick={() => add(a)}>
                         <span className="picker-name">{a.name}</span>
-                        <span className="picker-maker">{a.manufacturer}</span>
+                        <span className="picker-maker">
+                          {a.manufacturer}
+                          <span className="picker-format">
+                            {a.format === "vst3" ? "VST3" : "AU"}
+                          </span>
+                        </span>
                       </button>
                     ))}
-                    <div className="picker-section">Audio Units</div>
                   </>
                 )}
+                <div className="picker-section">Plugins</div>
                 {makers.map(([m, count]) => (
                   <button key={m} className="picker-item" onClick={() => setMaker(m)}>
                     <span className="picker-name">{m}</span>
@@ -389,9 +407,13 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
                 </button>
                 {available
                   .filter((a) => (a.manufacturer || "Other") === maker)
+                  .sort(byNameThenFormat)
                   .map((a) => (
                     <button key={a.id} className="picker-item" onClick={() => add(a)}>
                       <span className="picker-name">{a.name}</span>
+                      <span className="picker-format">
+                        {a.format === "vst3" ? "VST3" : "AU"}
+                      </span>
                     </button>
                   ))}
               </div>

@@ -1102,3 +1102,22 @@ kbd {
 }
 .preset-save .text-input:focus { border-color: var(--copper-lo); outline: none; }
 .preset-save .btn { height: 27px; padding: 0 10px; font-size: 12px; flex: none; }
+
+/* Format tag (AU / VST3) in picker rows */
+.picker-format {
+  margin-left: 6px;
+  padding: 1px 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-s);
+  font-size: 9px; font-weight: 700;
+  letter-spacing: .05em;
+  color: var(--text-3);
+}
+
+/* Format badge in strip slots */
+.strip-name { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.strip-name-text {
+  flex: 1; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.strip-name .picker-format { flex: none; }
