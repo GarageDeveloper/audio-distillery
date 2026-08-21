@@ -215,6 +215,7 @@ pub struct MasteringPluginView {
     pub component: String,
     pub name: String,
     pub bypass: bool,
+    pub format: crate::plugins::PluginFormat,
 }
 
 pub fn db_to_linear(db: f32) -> f32 {
@@ -933,6 +934,7 @@ impl ProjectState {
                     component: c.component.clone(),
                     name: c.name.clone(),
                     bypass: c.bypass,
+                    format: crate::plugins::format_of(&c.component),
                 })
                 .collect(),
             suggested_title: self.suggest_title(),

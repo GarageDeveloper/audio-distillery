@@ -1113,3 +1113,11 @@ kbd {
   letter-spacing: .05em;
   color: var(--text-3);
 }
+
+/* Format badge in strip slots */
+.strip-name { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.strip-name-text {
+  flex: 1; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.strip-name .picker-format { flex: none; }

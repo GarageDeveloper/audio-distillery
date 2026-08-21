@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ProjectView } from "../types/ProjectView";
 import type { PluginInfo } from "../types/PluginInfo";
-import type { PluginFormat } from "../types/PluginFormat";
 import type { ChainPresetInfo } from "../types/ChainPresetInfo";
 import { api } from "../api";
 
@@ -35,9 +34,7 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
   const [available, setAvailable] = useState<PluginInfo[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [filter, setFilter] = useState("");
-  const [maker, setMaker] = useState<{ format: PluginFormat; name: string } | null>(
-    null
-  );
+  const [maker, setMaker] = useState<string | null>(null);
   const [recent, setRecent] = useState<string[]>(loadRecent());
   const [presetsOpen, setPresetsOpen] = useState(false);
   const [presets, setPresets] = useState<ChainPresetInfo[]>([]);
@@ -169,28 +166,19 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
     setDrag(null);
   };
 
-  const FORMAT_SECTIONS: { format: PluginFormat; label: string }[] = [
-    { format: "au", label: "Audio Units" },
-    { format: "vst3", label: "VST3" },
-  ];
-
-  const makersOf = (format: PluginFormat) => {
+  const makers = useMemo(() => {
     const m = new Map<string, number>();
     for (const a of available) {
-      if (a.format !== format) continue;
       const key = a.manufacturer || "Other";
       m.set(key, (m.get(key) ?? 0) + 1);
     }
     return [...m.entries()].sort((x, y) => x[0].localeCompare(y[0]));
-  };
-  const makersByFormat = useMemo(
-    () =>
-      FORMAT_SECTIONS.map((s) => ({ ...s, makers: makersOf(s.format) })).filter(
-        (s) => s.makers.length > 0
-      ),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [available]
-  );
+  }, [available]);
+
+  // Same plugin in both formats: sort by name, AU right above VST3.
+  const byNameThenFormat = (a: PluginInfo, b: PluginInfo) =>
+    a.name.toLowerCase().localeCompare(b.name.toLowerCase()) ||
+    (a.format === b.format ? 0 : a.format === "au" ? -1 : 1);
 
   const searchResults = useMemo(() => {
     if (!query) return [];
@@ -326,7 +314,10 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
               className="strip-name"
               title={`${p.name} — click to open the editor, drag to reorder`}
             >
-              {p.name}
+              <span className="strip-name-text">{p.name}</span>
+              <span className="picker-format">
+                {p.format === "vst3" ? "VST3" : "AU"}
+              </span>
             </div>
             <div className="strip-actions">
               <button
@@ -401,36 +392,28 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
                     ))}
                   </>
                 )}
-                {makersByFormat.map((section) => (
-                  <div key={section.format}>
-                    <div className="picker-section">{section.label}</div>
-                    {section.makers.map(([m, count]) => (
-                      <button
-                        key={m}
-                        className="picker-item"
-                        onClick={() => setMaker({ format: section.format, name: m })}
-                      >
-                        <span className="picker-name">{m}</span>
-                        <span className="picker-maker">{count} ›</span>
-                      </button>
-                    ))}
-                  </div>
+                <div className="picker-section">Plugins</div>
+                {makers.map(([m, count]) => (
+                  <button key={m} className="picker-item" onClick={() => setMaker(m)}>
+                    <span className="picker-name">{m}</span>
+                    <span className="picker-maker">{count} ›</span>
+                  </button>
                 ))}
               </div>
             ) : (
               <div className="picker-list">
                 <button className="picker-item picker-back" onClick={() => setMaker(null)}>
-                  ‹ {maker.name}
+                  ‹ {maker}
                 </button>
                 {available
-                  .filter(
-                    (a) =>
-                      a.format === maker.format &&
-                      (a.manufacturer || "Other") === maker.name
-                  )
+                  .filter((a) => (a.manufacturer || "Other") === maker)
+                  .sort(byNameThenFormat)
                   .map((a) => (
                     <button key={a.id} className="picker-item" onClick={() => add(a)}>
                       <span className="picker-name">{a.name}</span>
+                      <span className="picker-format">
+                        {a.format === "vst3" ? "VST3" : "AU"}
+                      </span>
                     </button>
                   ))}
               </div>
