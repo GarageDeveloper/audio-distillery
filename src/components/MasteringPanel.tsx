@@ -11,6 +11,8 @@ function chainKey(chain: { id: number }[], target: ChainTarget): string {
 
 interface Props {
   view: ProjectView;
+  /// Current playhead position (samples) — the Tracks section follows it.
+  playheadSample: number;
   onError: (msg: string) => void;
   onViewChange: (v: ProjectView) => void;
 }
@@ -40,13 +42,10 @@ function targetKey(t: ChainTarget): string {
   return t.kind === "master" ? "master" : `${t.kind}:${t.id}`;
 }
 
-function parseTargetKey(key: string): ChainTarget {
-  if (key === "master") return { kind: "master" };
-  const [kind, id] = key.split(":");
-  return { kind: kind as "layer" | "track", id: Number(id) };
-}
+type Section = "master" | "layers" | "tracks";
+const SECTION_KEY = "still-chain-section";
 
-export function MasteringPanel({ view, onError, onViewChange }: Props) {
+export function MasteringPanel({ view, playheadSample, onError, onViewChange }: Props) {
   const [available, setAvailable] = useState<PluginInfo[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [filter, setFilter] = useState("");
@@ -56,7 +55,13 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
   const [presets, setPresets] = useState<ChainPresetInfo[]>([]);
   const [presetName, setPresetName] = useState("");
   const [latency, setLatency] = useState(0);
-  const [target, setTarget] = useState<ChainTarget>({ kind: "master" });
+  const [section, setSection] = useState<Section>(
+    () => (localStorage.getItem(SECTION_KEY) as Section) || "master"
+  );
+  useEffect(() => {
+    localStorage.setItem(SECTION_KEY, section);
+  }, [section]);
+  const [layerSel, setLayerSel] = useState<number | null>(null);
   // Pointer-based slot dragging (HTML5 DnD is owned by Tauri's file drop).
   const slotsRef = useRef<HTMLDivElement | null>(null);
   const [drag, setDrag] = useState<{
@@ -80,32 +85,47 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
     setPickerOpen(false);
     setFilter("");
     setMaker(null);
-    run(() => api.addChainPlugin(target, a.id, a.name));
+    if (target) run(() => api.addChainPlugin(target, a.id, a.name));
   };
 
-  // Resolve the displayed chain; a deleted layer/track falls back to master.
-  const resolved =
-    target.kind === "master"
+  // The layer shown in the Layers section (falls back to the first one).
+  const layer =
+    view.layers.find((l) => l.id === layerSel) ?? view.layers[0];
+  // The Tracks section follows the track under the playhead.
+  const currentTrack = view.tracks.find(
+    (t) => playheadSample >= t.start_sample && playheadSample < t.end_sample
+  );
+  // Derived target of the visible section; null = Tracks with no track
+  // under the playhead (nothing to edit).
+  const target: ChainTarget | null =
+    section === "master"
+      ? { kind: "master" }
+      : section === "layers"
+        ? layer
+          ? { kind: "layer", id: layer.id }
+          : null
+        : currentTrack
+          ? { kind: "track", id: currentTrack.id }
+          : null;
+  const chain =
+    section === "master"
       ? view.mastering_chain
-      : target.kind === "layer"
-        ? view.layers.find((l) => l.id === target.id)?.inserts
-        : view.tracks.find((t) => t.id === target.id)?.inserts;
-  useEffect(() => {
-    if (!resolved) setTarget({ kind: "master" });
-  }, [resolved]);
-  const chain = resolved ?? view.mastering_chain;
+      : section === "layers"
+        ? layer?.inserts ?? []
+        : currentTrack?.inserts ?? [];
   const query = filter.trim().toLowerCase();
 
-  const chainLen = chainKey(chain, target);
+  const chainLen = target ? chainKey(chain, target) : "none";
   useEffect(() => {
-    if (chain.length === 0) {
+    if (!target || chain.length === 0) {
       setLatency(0);
       return;
     }
-    const refresh = () => api.chainLatency(target).then(setLatency).catch(() => {});
+    const t = target;
+    const refresh = () => api.chainLatency(t).then(setLatency).catch(() => {});
     refresh();
-    const t = setInterval(refresh, 3000);
-    return () => clearInterval(t);
+    const timer = setInterval(refresh, 3000);
+    return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chainLen]);
 
@@ -120,7 +140,7 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
 
   const savePreset = () => {
     const name = presetName.trim();
-    if (!name || chain.length === 0) return;
+    if (!name || chain.length === 0 || !target) return;
     api
       .saveChainPreset(target, name)
       .then((list) => {
@@ -265,37 +285,65 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
         </div>
       </div>
 
-      <div className="target-row">
-        <select
-          className="target-select"
-          value={targetKey(target)}
-          onChange={(e) => setTarget(parseTargetKey(e.target.value))}
-          title="Which chain this panel edits"
-        >
-          <option value="master">
-            {view.mastering_chain.length > 0 ? "● " : ""}Master
-          </option>
-          {view.layers.length > 1 && (
-            <optgroup label="Layers">
-              {view.layers.map((l) => (
-                <option key={l.id} value={`layer:${l.id}`}>
-                  {l.inserts.length > 0 ? "● " : ""}{l.name}
-                </option>
-              ))}
-            </optgroup>
-          )}
-          {view.tracks.length > 0 && (
-            <optgroup label="Tracks">
-              {view.tracks.map((t) => (
-                <option key={t.id} value={`track:${t.id}`}>
-                  {t.inserts.length > 0 ? "● " : ""}
-                  {String(t.number).padStart(2, "0")} — {t.title}
-                </option>
-              ))}
-            </optgroup>
-          )}
-        </select>
+      <div className="chain-tabs">
+        {(
+          [
+            ["master", "Master", view.mastering_chain.length > 0],
+            ["layers", "Layers", view.layers.some((l) => l.inserts.length > 0)],
+            ["tracks", "Tracks", view.tracks.some((t) => t.inserts.length > 0)],
+          ] as [Section, string, boolean][]
+        ).map(([key, label, hasChain]) => (
+          <button
+            key={key}
+            className={`chain-tab ${section === key ? "active" : ""}`}
+            onClick={() => setSection(key)}
+          >
+            {label}
+            {hasChain && <span className="chain-dot" />}
+          </button>
+        ))}
       </div>
+
+      {section === "layers" && (
+        <div className="target-row">
+          {view.layers.length > 1 ? (
+            <select
+              className="target-select"
+              value={layer?.id ?? ""}
+              onChange={(e) => setLayerSel(Number(e.target.value))}
+              title="Which layer's chain this panel edits"
+            >
+              {view.layers.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.inserts.length > 0 ? "● " : ""}
+                  {l.name}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <div className="target-label">{layer?.name ?? "No layer"}</div>
+          )}
+        </div>
+      )}
+
+      {section === "tracks" && (
+        <div className="target-row">
+          <div
+            className="target-label"
+            title="The Tracks section follows the track under the playhead"
+          >
+            {currentTrack ? (
+              <>
+                {currentTrack.inserts.length > 0 ? "● " : ""}
+                {String(currentTrack.number).padStart(2, "0")} —{" "}
+                {currentTrack.title}
+              </>
+            ) : (
+              "No track at the playhead"
+            )}
+          </div>
+        </div>
+      )}
 
       {presetsOpen && (
         <div className="presets-menu">
@@ -313,7 +361,7 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
                     className="preset-load"
                     onClick={() => {
                       setPresetsOpen(false);
-                      run(() => api.loadChainPreset(target, p.name));
+                      if (target) run(() => api.loadChainPreset(target, p.name));
                     }}
                   >
                     <span className="picker-name">{p.name}</span>
@@ -362,6 +410,16 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
         </div>
       )}
 
+      {!target && (
+        <div className="strip-slots">
+          <div className="hint">
+            Start playback or move the playhead inside a track to edit its
+            chain.
+          </div>
+        </div>
+      )}
+
+      {target && (
       <div className="strip-slots" ref={slotsRef}>
         {chain.map((p, i) => (
           <div
@@ -506,6 +564,8 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
           </div>
         )}
       </div>
+
+      )}
 
       {drag && (
         <div

@@ -645,7 +645,12 @@ export default function App() {
         )}
 
         {view && (
-          <MasteringPanel view={view} onError={showError} onViewChange={setView} />
+          <MasteringPanel
+            view={view}
+            playheadSample={playheadSample}
+            onError={showError}
+            onViewChange={setView}
+          />
         )}
       </div>
 
