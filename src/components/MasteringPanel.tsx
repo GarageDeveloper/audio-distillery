@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ProjectView } from "../types/ProjectView";
-import type { AuComponentInfo } from "../types/AuComponentInfo";
+import type { PluginInfo } from "../types/PluginInfo";
+import type { PluginFormat } from "../types/PluginFormat";
 import type { ChainPresetInfo } from "../types/ChainPresetInfo";
 import { api } from "../api";
 
@@ -31,10 +32,12 @@ function pushRecent(id: string) {
  * picker: search field, Recent, then manufacturer → plugins drill-down.
  */
 export function MasteringPanel({ view, onError, onViewChange }: Props) {
-  const [available, setAvailable] = useState<AuComponentInfo[]>([]);
+  const [available, setAvailable] = useState<PluginInfo[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [filter, setFilter] = useState("");
-  const [maker, setMaker] = useState<string | null>(null);
+  const [maker, setMaker] = useState<{ format: PluginFormat; name: string } | null>(
+    null
+  );
   const [recent, setRecent] = useState<string[]>(loadRecent());
   const [presetsOpen, setPresetsOpen] = useState(false);
   const [presets, setPresets] = useState<ChainPresetInfo[]>([]);
@@ -49,14 +52,14 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
   } | null>(null);
 
   useEffect(() => {
-    api.listAudioUnits().then(setAvailable).catch((e) => onError(String(e)));
+    api.listPlugins().then(setAvailable).catch((e) => onError(String(e)));
   }, [onError]);
 
   const run = (op: () => Promise<ProjectView>) => {
     op().then(onViewChange).catch((e) => onError(String(e)));
   };
 
-  const add = (a: AuComponentInfo) => {
+  const add = (a: PluginInfo) => {
     pushRecent(a.id);
     setRecent(loadRecent());
     setPickerOpen(false);
@@ -166,14 +169,28 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
     setDrag(null);
   };
 
-  const makers = useMemo(() => {
+  const FORMAT_SECTIONS: { format: PluginFormat; label: string }[] = [
+    { format: "au", label: "Audio Units" },
+    { format: "vst3", label: "VST3" },
+  ];
+
+  const makersOf = (format: PluginFormat) => {
     const m = new Map<string, number>();
     for (const a of available) {
+      if (a.format !== format) continue;
       const key = a.manufacturer || "Other";
       m.set(key, (m.get(key) ?? 0) + 1);
     }
     return [...m.entries()].sort((x, y) => x[0].localeCompare(y[0]));
-  }, [available]);
+  };
+  const makersByFormat = useMemo(
+    () =>
+      FORMAT_SECTIONS.map((s) => ({ ...s, makers: makersOf(s.format) })).filter(
+        (s) => s.makers.length > 0
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [available]
+  );
 
   const searchResults = useMemo(() => {
     if (!query) return [];
@@ -190,7 +207,7 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
     () =>
       recent
         .map((id) => available.find((a) => a.id === id))
-        .filter((a): a is AuComponentInfo => !!a),
+        .filter((a): a is PluginInfo => !!a),
     [recent, available]
   );
 
@@ -356,7 +373,12 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
                 {searchResults.map((a) => (
                   <button key={a.id} className="picker-item" onClick={() => add(a)}>
                     <span className="picker-name">{a.name}</span>
-                    <span className="picker-maker">{a.manufacturer}</span>
+                    <span className="picker-maker">
+                      {a.manufacturer}
+                      <span className="picker-format">
+                        {a.format === "vst3" ? "VST3" : "AU"}
+                      </span>
+                    </span>
                   </button>
                 ))}
                 {searchResults.length === 0 && <div className="hint">No match.</div>}
@@ -369,26 +391,43 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
                     {recentInfos.map((a) => (
                       <button key={a.id} className="picker-item" onClick={() => add(a)}>
                         <span className="picker-name">{a.name}</span>
-                        <span className="picker-maker">{a.manufacturer}</span>
+                        <span className="picker-maker">
+                          {a.manufacturer}
+                          <span className="picker-format">
+                            {a.format === "vst3" ? "VST3" : "AU"}
+                          </span>
+                        </span>
                       </button>
                     ))}
-                    <div className="picker-section">Audio Units</div>
                   </>
                 )}
-                {makers.map(([m, count]) => (
-                  <button key={m} className="picker-item" onClick={() => setMaker(m)}>
-                    <span className="picker-name">{m}</span>
-                    <span className="picker-maker">{count} ›</span>
-                  </button>
+                {makersByFormat.map((section) => (
+                  <div key={section.format}>
+                    <div className="picker-section">{section.label}</div>
+                    {section.makers.map(([m, count]) => (
+                      <button
+                        key={m}
+                        className="picker-item"
+                        onClick={() => setMaker({ format: section.format, name: m })}
+                      >
+                        <span className="picker-name">{m}</span>
+                        <span className="picker-maker">{count} ›</span>
+                      </button>
+                    ))}
+                  </div>
                 ))}
               </div>
             ) : (
               <div className="picker-list">
                 <button className="picker-item picker-back" onClick={() => setMaker(null)}>
-                  ‹ {maker}
+                  ‹ {maker.name}
                 </button>
                 {available
-                  .filter((a) => (a.manufacturer || "Other") === maker)
+                  .filter(
+                    (a) =>
+                      a.format === maker.format &&
+                      (a.manufacturer || "Other") === maker.name
+                  )
                   .map((a) => (
                     <button key={a.id} className="picker-item" onClick={() => add(a)}>
                       <span className="picker-name">{a.name}</span>

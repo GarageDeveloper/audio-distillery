@@ -10,7 +10,7 @@ use tauri::{AppHandle, Emitter, State};
 
 use still_core::project::{ExportConfig, Project};
 use still_core::{
-    AlbumMeta, AuComponentInfo, ExportReport, PeakSlice, PlaybackState, ProjectState,
+    AlbumMeta, ExportReport, PeakSlice, PlaybackState, PluginInfo, ProjectState,
     ProjectView, RegionEdge, RegionSpan, SilenceParams,
 };
 
@@ -644,10 +644,12 @@ fn snapshot_chain_states(app: &AppHandle, state: &State<'_, AppState>, s: &mut P
     }
 }
 
-/// Installed Audio Unit effects (macOS).
+/// Every installed effect plugin (Audio Units + VST3, macOS).
+/// VST3 entries come from the scan cache, refreshed in a background
+/// subprocess at startup (see lib.rs) — never scanned in this process.
 #[tauri::command]
-pub fn list_audio_units() -> CmdResult<Vec<AuComponentInfo>> {
-    Ok(still_core::aunit::list_effects())
+pub fn list_plugins() -> CmdResult<Vec<PluginInfo>> {
+    Ok(still_core::list_plugins())
 }
 
 #[tauri::command]

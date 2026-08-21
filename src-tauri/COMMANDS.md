@@ -136,7 +136,7 @@ always track order, regardless of finish order.
 
 | Command | Parameters | Returns | Errors |
 |---|---|---|---|
-| `list_audio_units` | — | `AuComponentInfo[]` (installed 'aufx' effects; empty off-macOS) | — |
+| `list_plugins` | — | `PluginInfo[]` (installed AU 'aufx' + VST3 effects, `format` field; empty off-macOS; first call scans VST3 dirs, then disk-cached) | — |
 | `add_mastering_plugin` | `component: string` ("aufx:xxxx:yyyy"), `name: string` | `ProjectView` | plugin not installed / failed to instantiate |
 | `remove_mastering_plugin` | `id: number` | `ProjectView` | — |
 | `move_mastering_plugin` | `id: number`, `delta: number` | `ProjectView` | — |
