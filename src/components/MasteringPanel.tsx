@@ -199,14 +199,16 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
             onPointerUp={onSlotPointerUp}
             onPointerCancel={onSlotPointerCancel}
           >
-            {/* The editor-open "click" is synthesized in startDrag's pointerup
-                (pointer capture keeps real click events from firing). */}
-            <button
+            {/* Deliberately NOT a <button>: WebKit's native form-control
+                tracking swallows pointermove during a press on a button,
+                which killed dragging everywhere except the card's edges.
+                The editor-open "click" is synthesized on pointerup. */}
+            <div
               className="strip-name"
               title={`${p.name} — click to open the editor, drag to reorder`}
             >
               {p.name}
-            </button>
+            </div>
             <div className="strip-actions">
               <button
                 className={`layer-mute ${p.bypass ? "on" : ""}`}
