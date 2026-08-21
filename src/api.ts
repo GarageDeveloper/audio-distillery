@@ -89,6 +89,7 @@ export const api = {
   setMasteringBypass: (id: number, bypass: boolean) =>
     invoke<ProjectView>("set_mastering_bypass", { id, bypass }),
   openPluginEditor: (id: number) => invoke<void>("open_plugin_editor", { id }),
+  reloadMasteringChain: () => invoke<ProjectView>("reload_mastering_chain"),
   undo: () => invoke<ProjectView>("undo"),
   redo: () => invoke<ProjectView>("redo"),
   detectSilences: (params: SilenceParams) =>

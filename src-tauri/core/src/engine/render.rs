@@ -30,6 +30,35 @@ pub trait BlockProcessor: Send {
     fn raw_handle(&self) -> usize {
         0
     }
+    /// Restore a previously saved state blob; false = unsupported/failed.
+    fn restore_state(&mut self, _state: &[u8]) -> bool {
+        false
+    }
+}
+
+/// Insert proxy sharing a processor between the MAIN thread (lifecycle:
+/// creation, state, disposal — where AU plugins expect to live) and the
+/// render thread (processing only). Render uses try_lock and passes the
+/// dry signal for the rare blocks where a lifecycle operation holds the
+/// lock — never blocking the audio path.
+pub struct SharedInsert {
+    pub inner: std::sync::Arc<std::sync::Mutex<Box<dyn BlockProcessor>>>,
+}
+
+impl BlockProcessor for SharedInsert {
+    fn process(&mut self, buffer: &mut [f32], channels: usize, sample_rate: u32) {
+        if let Ok(mut p) = self.inner.try_lock() {
+            p.process(buffer, channels, sample_rate);
+        }
+    }
+    fn latency_samples(&self) -> u32 {
+        self.inner.try_lock().map(|p| p.latency_samples()).unwrap_or(0)
+    }
+    fn reset(&mut self) {
+        if let Ok(mut p) = self.inner.try_lock() {
+            p.reset();
+        }
+    }
 }
 
 pub const BLOCK_FRAMES: usize = 512;

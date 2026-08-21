@@ -904,3 +904,6 @@ kbd {
 .plugin-item:hover { background: var(--copper-dim); color: var(--copper-hi); }
 
 .chain-edit { height: 24px; padding: 0 10px; font-size: 12px; }
+
+.chain-head { display: flex; align-items: center; justify-content: space-between; }
+.chain-head .btn { height: 24px; padding: 0 10px; font-size: 12px; }

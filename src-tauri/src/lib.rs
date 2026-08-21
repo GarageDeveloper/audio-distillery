@@ -1,3 +1,4 @@
+mod chain_host;
 mod commands;
 mod editor;
 mod state;
@@ -47,6 +48,7 @@ pub fn run() {
             commands::move_mastering_plugin,
             commands::set_mastering_bypass,
             commands::open_plugin_editor,
+            commands::reload_mastering_chain,
             commands::undo,
             commands::redo,
             commands::detect_silences,

@@ -48,7 +48,18 @@ export function MasteringDialog({ view, onClose, onError, onViewChange }: Props)
         </div>
 
         <div className="field">
-          <label>Chain ({chain.length})</label>
+          <div className="chain-head">
+            <label>Chain ({chain.length})</label>
+            {chain.length > 0 && (
+              <button
+                className="btn"
+                title="Re-instantiate every plugin with its current settings (recovers a plugin whose processing silently died)"
+                onClick={() => run(() => api.reloadMasteringChain())}
+              >
+                Reload
+              </button>
+            )}
+          </div>
           {chain.length === 0 && (
             <div className="hint">No plugins yet — pick one below to start the chain.</div>
           )}

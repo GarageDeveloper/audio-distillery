@@ -41,6 +41,7 @@ mod macos {
     extern "C" {
         fn objc_autoreleasePoolPush() -> *mut std::os::raw::c_void;
         fn objc_autoreleasePoolPop(pool: *mut std::os::raw::c_void);
+        fn mach_absolute_time() -> u64;
     }
 
     /// RAII autorelease pool: plugin render code allocates ObjC objects on
@@ -409,6 +410,34 @@ mod macos {
                     ),
                     "set render callback",
                 )?;
+                // Identify the host (name + version): plugins consult this
+                // and unidentified hosts can hit untested fallback paths.
+                {
+                    let name = CFStringCreateWithCString(
+                        kCFAllocatorDefault,
+                        c"AudioDistillery".as_ptr(),
+                        kCFStringEncodingUTF8,
+                    );
+                    let host_id = AUHostIdentifier {
+                        hostName: name,
+                        hostVersion: AUNumVersion {
+                            majorRev: 0,
+                            minorAndBugRev: 2,
+                            stage: 0x80, // final
+                            nonRelRev: 0,
+                        },
+                    };
+                    let _ = AudioUnitSetProperty(
+                        plugin.unit,
+                        kAudioUnitProperty_AUHostIdentifier,
+                        kAudioUnitScope_Global,
+                        0,
+                        &host_id as *const _ as *const _,
+                        std::mem::size_of::<AUHostIdentifier>() as u32,
+                    );
+                    CFRelease(name as *const _);
+                }
+
                 // Host transport callbacks: plugin UIs (spectrum analyzers,
                 // meters) poll these to know the host is rolling.
                 let host_cb = HostCallbackInfo {
@@ -608,11 +637,13 @@ mod macos {
                 let mut flags: AudioUnitRenderActionFlags = 0;
                 let ts = AudioTimeStamp {
                     mSampleTime: self.rendered as f64,
-                    mHostTime: 0,
-                    mRateScalar: 0.0,
+                    mHostTime: mach_absolute_time(),
+                    mRateScalar: 1.0,
                     mWordClockTime: 0,
                     mSMPTETime: std::mem::zeroed(),
-                    mFlags: kAudioTimeStampSampleTimeValid,
+                    mFlags: kAudioTimeStampSampleTimeValid
+                        | kAudioTimeStampHostTimeValid
+                        | kAudioTimeStampRateScalarValid,
                     mReserved: 0,
                 };
                 // Build the output AudioBufferList over our planar buffers.
@@ -656,6 +687,32 @@ mod macos {
                 .sample_pos
                 .store(self.rendered, Ordering::Relaxed);
             if au_debug() && (self.rendered / frames as u64) % 200 == 0 {
+                unsafe {
+                    let mut bypass: u32 = 0;
+                    let mut sz = 4u32;
+                    let st_b = AudioUnitGetProperty(
+                        self.unit,
+                        kAudioUnitProperty_BypassEffect,
+                        kAudioUnitScope_Global,
+                        0,
+                        &mut bypass as *mut _ as *mut _,
+                        &mut sz,
+                    );
+                    let mut last_err: OSStatus = 0;
+                    let mut sz2 = 4u32;
+                    let _ = AudioUnitGetProperty(
+                        self.unit,
+                        kAudioUnitProperty_LastRenderError,
+                        kAudioUnitScope_Global,
+                        0,
+                        &mut last_err as *mut _ as *mut _,
+                        &mut sz2,
+                    );
+                    eprintln!(
+                        "[au-debug] state: BypassEffect={bypass} (st={st_b}) latency={:.4}s lastRenderError={last_err}",
+                        self.latency_seconds()
+                    );
+                }
                 let out_sum: f32 = self
                     .out_planar
                     .iter()
@@ -703,11 +760,92 @@ mod macos {
         fn raw_handle(&self) -> usize {
             self.unit as usize
         }
+
+        fn restore_state(&mut self, state: &[u8]) -> bool {
+            self.set_state(state).is_ok()
+        }
     }
 
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        /// Scriptable repro attempt for the iZotope preset bug, WITHOUT the
+        /// plugin UI: host Neutron 5 EQ through the raw v2 API, verify it
+        /// processes, switch to a factory preset via the OFFICIAL AU API
+        /// (kAudioUnitProperty_PresentPreset), and check whether processing
+        /// survives. Skips silently when Neutron is not installed.
+        #[test]
+        fn neutron_factory_preset_switch() {
+            let Ok(mut p) = AuPlugin::new(
+                "aufx:ZNE5:iZtp",
+                44_100,
+                2,
+                Arc::new(AtomicBool::new(true)),
+            ) else {
+                eprintln!("Neutron 5 EQ not installed — repro test skipped");
+                return;
+            };
+            let frames = 512;
+            let sine = |i: usize| (i as f32 * 440.0 * std::f32::consts::TAU / 44_100.0).sin() * 0.5;
+            let mut process_rms = |p: &mut AuPlugin| -> f32 {
+                let mut acc = 0.0f32;
+                for block in 0..40 {
+                    let mut buf: Vec<f32> = (0..frames)
+                        .flat_map(|i| {
+                            let v = sine(block * frames + i);
+                            [v, v]
+                        })
+                        .collect();
+                    p.process(&mut buf, 2, 44_100);
+                    if block >= 30 {
+                        acc += buf.iter().map(|v| v * v).sum::<f32>() / buf.len() as f32;
+                    }
+                }
+                (acc / 10.0).sqrt()
+            };
+
+            let dry_rms = 0.5f32 / 2f32.sqrt();
+            let default_rms = process_rms(&mut p);
+            eprintln!("[repro] default state rms={default_rms:.4} (dry~{dry_rms:.4})");
+
+            // Enumerate factory presets.
+            unsafe {
+                let mut presets: CFArrayRef = null();
+                let mut sz = std::mem::size_of::<CFArrayRef>() as u32;
+                let st = AudioUnitGetProperty(
+                    p.unit,
+                    kAudioUnitProperty_FactoryPresets,
+                    kAudioUnitScope_Global,
+                    0,
+                    &mut presets as *mut _ as *mut _,
+                    &mut sz,
+                );
+                if st != 0 || presets.is_null() {
+                    eprintln!("[repro] no factory presets exposed (OSStatus {st}) — cannot script the switch");
+                    return;
+                }
+                let count = CFArrayGetCount(presets);
+                eprintln!("[repro] {count} factory presets");
+                for idx in 0..count.min(3) {
+                    let preset = CFArrayGetValueAtIndex(presets, idx) as *const AUPreset;
+                    let st = AudioUnitSetProperty(
+                        p.unit,
+                        kAudioUnitProperty_PresentPreset,
+                        kAudioUnitScope_Global,
+                        0,
+                        preset as *const _,
+                        std::mem::size_of::<AUPreset>() as u32,
+                    );
+                    let rms = process_rms(&mut p);
+                    let passthrough = (rms - dry_rms).abs() < 1e-4;
+                    eprintln!(
+                        "[repro] preset {idx}: set status={st} rms={rms:.4} passthrough={passthrough}"
+                    );
+                }
+                CFRelease(presets as *const _);
+            }
+        }
 
         #[test]
         fn lists_apple_effects() {

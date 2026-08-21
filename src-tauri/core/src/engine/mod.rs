@@ -83,10 +83,10 @@ impl VolumeAutomation {
 }
 
 enum Cmd {
-    SetMasterChain(Vec<MasterPluginSpec>, Sender<Vec<String>>),
-    SetPluginBypass(u32, bool),
-    GetPluginHandle(u32, Sender<usize>),
-    GetChainStates(Sender<ChainStateSnapshot>),
+    /// Install ready-made master inserts (built on the MAIN thread). The
+    /// ack lets the caller drop its old Arc handles only after the engine
+    /// released its own — so plugin disposal happens on the caller's thread.
+    SetMasterInserts(Vec<Box<dyn render::BlockProcessor>>, Sender<()>),
     Load {
         layers: Vec<LayerPlay>,
         total_seconds: f64,
@@ -186,35 +186,22 @@ impl PlayerHandle {
         self.send(Cmd::SetAutomation(automation))
     }
 
-    /// Replace the master-bus mastering chain. Returns per-plugin errors
-    /// (empty = every plugin instantiated fine).
-    pub fn set_master_chain(&self, specs: Vec<MasterPluginSpec>) -> Result<Vec<String>> {
+    /// Install the master-insert chain (proxies built on the main thread;
+    /// the engine only processes). Waits for the engine to release its old
+    /// inserts so their disposal runs on the CALLER's thread.
+    pub fn set_master_inserts(
+        &self,
+        inserts: Vec<Box<dyn render::BlockProcessor>>,
+    ) -> Result<()> {
         let (tx, rx) = std::sync::mpsc::channel();
-        self.send(Cmd::SetMasterChain(specs, tx))?;
+        self.send(Cmd::SetMasterInserts(inserts, tx))?;
         rx.recv_timeout(Duration::from_secs(10))
             .map_err(|_| StillError::Playback("engine did not answer".into()))
     }
 
-    /// Live bypass toggle (no chain rebuild, keeps plugin state).
-    pub fn set_plugin_bypass(&self, id: u32, bypassed: bool) -> Result<()> {
-        self.send(Cmd::SetPluginBypass(id, bypassed))
-    }
-
-    /// Native handle (AudioUnit pointer) of a chain plugin, for its editor
-    /// window. 0 when the plugin is unknown or failed to instantiate.
-    pub fn plugin_handle(&self, id: u32) -> Result<usize> {
-        let (tx, rx) = std::sync::mpsc::channel();
-        self.send(Cmd::GetPluginHandle(id, tx))?;
-        rx.recv_timeout(Duration::from_secs(5))
-            .map_err(|_| StillError::Playback("engine did not answer".into()))
-    }
-
-    /// Capture the live state blobs of the chain plugins (for project save).
-    pub fn get_chain_states(&self) -> Result<ChainStateSnapshot> {
-        let (tx, rx) = std::sync::mpsc::channel();
-        self.send(Cmd::GetChainStates(tx))?;
-        rx.recv_timeout(Duration::from_secs(10))
-            .map_err(|_| StillError::Playback("engine did not answer".into()))
+    /// The engine's playing flag, shared with plugin transport callbacks.
+    pub fn playing_flag(&self) -> Arc<AtomicBool> {
+        self.shared.playing_flag.clone()
     }
 
     pub fn play(&self) -> Result<()> {
@@ -267,9 +254,8 @@ fn to_items(playlist: &Playlist, sample_rate: u32) -> Vec<PlayItem> {
 
 fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
     let mut renderer: Option<Renderer> = None;
-    // Chain wanted by the control side; applied to the renderer on load and
-    // whenever it changes (kept here so a reload re-instantiates it).
-    let mut chain_specs: Vec<MasterPluginSpec> = Vec::new();
+    // Inserts survive a session reload (they're main-thread-owned proxies).
+    let mut pending_inserts: Vec<Box<dyn render::BlockProcessor>> = Vec::new();
     let mut producer: Option<rtrb::Producer<f32>> = None;
     let mut _stream: Option<cpal::Stream> = None;
     let mut device_channels = 2usize;
@@ -327,46 +313,19 @@ fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
                 }
                 shared.loaded.store(true, Ordering::Relaxed);
                 if let Some(r) = &mut renderer {
-                    let _ = apply_chain(r, &chain_specs, &shared);
+                    r.master_inserts = std::mem::take(&mut pending_inserts);
                 }
             }
-            Ok(Cmd::SetMasterChain(specs, reply)) => {
-                chain_specs = specs;
-                let errors = match &mut renderer {
-                    Some(r) => apply_chain(r, &chain_specs, &shared),
-                    None => Vec::new(), // applied at next load
-                };
-                let _ = reply.send(errors);
-            }
-            Ok(Cmd::SetPluginBypass(id, bypassed)) => {
-                if let Some(pos) = chain_specs.iter().position(|s| s.id == id) {
-                    chain_specs[pos].bypass = bypassed;
-                    if let Some(r) = &mut renderer {
-                        if r.master_inserts.len() == chain_specs.len() {
-                            r.master_inserts[pos].set_bypassed(bypassed);
-                        }
+            Ok(Cmd::SetMasterInserts(inserts, reply)) => {
+                match &mut renderer {
+                    Some(r) => {
+                        // Old proxies dropped BEFORE the ack so the caller
+                        // (main thread) owns the last Arc at disposal time.
+                        r.master_inserts = inserts;
                     }
+                    None => pending_inserts = inserts,
                 }
-            }
-            Ok(Cmd::GetPluginHandle(id, reply)) => {
-                let handle = chain_specs
-                    .iter()
-                    .position(|s| s.id == id)
-                    .and_then(|pos| {
-                        renderer.as_ref().and_then(|r| {
-                            (r.master_inserts.len() == chain_specs.len())
-                                .then(|| r.master_inserts[pos].raw_handle())
-                        })
-                    })
-                    .unwrap_or(0);
-                let _ = reply.send(handle);
-            }
-            Ok(Cmd::GetChainStates(reply)) => {
-                let snapshot = match &renderer {
-                    Some(r) => snapshot_chain(r, &chain_specs),
-                    None => chain_specs.iter().map(|s| (s.id, s.state.clone())).collect(),
-                };
-                let _ = reply.send(snapshot);
+                let _ = reply.send(());
             }
             Ok(Cmd::SetAutomation(a)) => {
                 if let Some(r) = &mut renderer {
@@ -456,69 +415,6 @@ fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
             _ => {}
         }
     }
-}
-
-/// (Re)build the master insert chain on the renderer from the specs.
-#[cfg(target_os = "macos")]
-fn apply_chain(
-    r: &mut Renderer,
-    specs: &[MasterPluginSpec],
-    shared: &Arc<Shared>,
-) -> Vec<String> {
-    use crate::aunit::AuPlugin;
-    let mut errors = Vec::new();
-    let mut inserts: Vec<Box<dyn render::BlockProcessor>> = Vec::new();
-    for spec in specs {
-        match AuPlugin::new(
-            &spec.component,
-            r.sample_rate,
-            r.channels,
-            shared_playing_flag(shared),
-        ) {
-            Ok(mut p) => {
-                if let Some(state) = &spec.state {
-                    if let Err(e) = p.set_state(state) {
-                        errors.push(format!("{}: {e}", spec.component));
-                    }
-                }
-                p.bypass = spec.bypass;
-                inserts.push(Box::new(p));
-            }
-            Err(e) => errors.push(format!("{}: {e}", spec.component)),
-        }
-    }
-    r.master_inserts = inserts;
-    errors
-}
-
-/// The engine's playing flag, cloneable for plugin transport callbacks.
-fn shared_playing_flag(shared: &Arc<Shared>) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
-    shared.playing_flag.clone()
-}
-
-#[cfg(not(target_os = "macos"))]
-fn apply_chain(_r: &mut Renderer, specs: &[MasterPluginSpec], _shared: &Arc<Shared>) -> Vec<String> {
-    if specs.is_empty() {
-        Vec::new()
-    } else {
-        vec!["Audio Unit hosting is only available on macOS".into()]
-    }
-}
-
-/// Capture the live plugin states. Instances were built in spec order,
-/// skipping failed ones; a failed plugin keeps its previously saved state.
-fn snapshot_chain(r: &Renderer, specs: &[MasterPluginSpec]) -> ChainStateSnapshot {
-    let mut out = Vec::new();
-    let live = r.master_inserts.len() == specs.len();
-    for (i, spec) in specs.iter().enumerate() {
-        let state = if live {
-            r.master_inserts[i].save_state().or_else(|| spec.state.clone())
-        } else {
-            spec.state.clone()
-        };
-        out.push((spec.id, state));
-    }
-    out
 }
 
 /// Reposition the renderer and mark all in-flight ring frames as stale.
