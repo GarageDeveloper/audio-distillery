@@ -1121,3 +1121,38 @@ kbd {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .strip-name .picker-format { flex: none; }
+
+/* ---------- About dialog ---------- */
+.about-btn {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-3);
+  padding: 2px 6px;
+  border-radius: var(--r-s);
+}
+.about-btn:hover { color: var(--copper); background: var(--panel-2); }
+.about-modal { max-width: 480px; }
+.about-section { margin-top: 14px; }
+.about-title {
+  font-size: 10px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .12em;
+  color: var(--text-3);
+  margin-bottom: 4px;
+}
+.about-section p, .about-section li {
+  font-size: 12px; line-height: 1.55; color: var(--text-2);
+}
+.about-section ul { padding-left: 16px; display: flex; flex-direction: column; gap: 6px; }
+.about-link {
+  display: inline;
+  color: var(--copper);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font-size: inherit;
+}
+.about-link:hover { color: var(--copper-lo); }
+.about-modal .modal-foot { margin-top: 16px; }
+
+/* Wordmark doubles as the About trigger */
+button.wordmark { cursor: pointer; border-radius: var(--r-s); padding: 2px 6px; }
+button.wordmark:hover { background: var(--panel-2); }

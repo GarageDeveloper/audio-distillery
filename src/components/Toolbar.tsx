@@ -12,6 +12,7 @@ const THEMES: { key: Theme; label: string }[] = [
 ];
 
 interface Props {
+  onAbout: () => void;
   view: ProjectView | null;
   playing: boolean;
   positionSeconds: number;
@@ -64,12 +65,16 @@ export function Toolbar(p: Props) {
 
   return (
     <div className="toolbar">
-      <span className="wordmark">
+      <button
+        className="wordmark"
+        title="About AudioDistillery (version, licenses)"
+        onClick={p.onAbout}
+      >
         <svg className="drop" width="12" height="16" viewBox="0 0 12 16" fill="currentColor">
           <path d="M6 0C6 4 0 7.5 0 11a6 6 0 0 0 12 0C12 7.5 6 4 6 0z" />
         </svg>
         Still
-      </span>
+      </button>
       <span className="sep" />
       <button className="btn" onClick={p.onOpen} title="Open an audio file or project (⌘O)">
         Open

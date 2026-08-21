@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "AudioDistillery — non-destructive audio splitting workshop"
 authors = ["Raphaël Enrici"]
 edition = "2021"
+license = "MIT"
 
 [workspace]
 members = ["core"]

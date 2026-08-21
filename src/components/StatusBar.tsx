@@ -2,9 +2,10 @@ import type { ProjectView } from "../types/ProjectView";
 
 interface Props {
   view: ProjectView | null;
+  onAbout: () => void;
 }
 
-export function StatusBar({ view }: Props) {
+export function StatusBar({ view, onAbout }: Props) {
   return (
     <div className="status-bar">
       <div className="hints">
@@ -28,6 +29,13 @@ export function StatusBar({ view }: Props) {
           <kbd>⌫</kbd> Delete track
         </span>
       </div>
+      <button
+        className="about-btn"
+        title="About AudioDistillery (version, licenses)"
+        onClick={onAbout}
+      >
+        AudioDistillery
+      </button>
       {view && (
         <span className="fileinfo">
           {view.audio.format} · {(view.audio.sample_rate / 1000).toLocaleString("en-US", { maximumFractionDigits: 1 })}{" "}

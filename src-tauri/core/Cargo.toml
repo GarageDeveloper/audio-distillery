@@ -3,6 +3,7 @@ name = "still-core"
 version = "0.1.0"
 description = "AudioDistillery core — pure business logic, no Tauri dependency"
 edition = "2021"
+license = "MIT"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
