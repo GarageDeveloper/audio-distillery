@@ -137,15 +137,23 @@ always track order, regardless of finish order.
 | Command | Parameters | Returns | Errors |
 |---|---|---|---|
 | `list_plugins` | — | `PluginInfo[]` (installed AU 'aufx' + VST3 effects, `format` field; empty off-macOS; first call scans VST3 dirs, then disk-cached) | — |
-| `add_mastering_plugin` | `component: string` ("aufx:xxxx:yyyy"), `name: string` | `ProjectView` | plugin not installed / failed to instantiate |
-| `remove_mastering_plugin` | `id: number` | `ProjectView` | — |
-| `move_mastering_plugin` | `id: number`, `delta: number` | `ProjectView` | — |
-| `set_mastering_bypass` | `id: number`, `bypass: boolean` | `ProjectView` (LIVE: no rebuild, plugin keeps its state) | — |
-| `chain_latency` | — | `number` (summed LIVE chain latency, samples at session rate; display only — export self-compensates) | — |
-| `save_chain_preset` | `name: string` | `ChainPresetInfo[]` (refreshed list; same name overwrites) | empty chain / empty name |
+| `add_chain_plugin` | `target: ChainTarget`, `component: string`, `name: string` | `ProjectView` | target gone / plugin not installed / failed to instantiate |
+| `remove_chain_plugin` | `id: number` (global across every chain) | `ProjectView` | — |
+| `move_chain_plugin` | `id: number`, `delta: number` (within its own chain) | `ProjectView` | — |
+| `set_chain_bypass` | `id: number`, `bypass: boolean` | `ProjectView` (LIVE: no rebuild, plugin keeps its state) | — |
+| `reload_chains` | — | `ProjectView` (EVERY chain: snapshot live states, dispose, recreate) | — |
+| `chain_latency` | `target: ChainTarget` | `number` (summed LIVE latency of that chain, samples; display only — export self-compensates) | — |
+| `save_chain_preset` | `target: ChainTarget`, `name: string` | `ChainPresetInfo[]` (refreshed list; same name overwrites) | empty chain / empty name |
 | `list_chain_presets` | — | `ChainPresetInfo[]` (sorted by name) | — |
-| `load_chain_preset` | `name: string` | `ProjectView` (chain REPLACED, fresh ids, instances recreated) | preset not found / plugin failed to instantiate (previous chain restored) |
+| `load_chain_preset` | `target: ChainTarget`, `name: string` | `ProjectView` (target's chain REPLACED, fresh ids, instances recreated) | preset not found / plugin failed to instantiate (previous chain restored) |
 | `delete_chain_preset` | `name: string` | `ChainPresetInfo[]` (refreshed list) | — |
+
+`ChainTarget` = `{kind:"master"}` | `{kind:"layer", id}` | `{kind:"track", id}`.
+Layer chains run PRE-FADER on their layer, always. Track chains run on the
+master bus, BEFORE the global mastering chain, only inside the track's
+span (gated per 512-frame block; the chain is reset when entering the
+span). Signal flow: decode → layer inserts → gain automation → sum →
+active track chain → mastering chain.
 
 Chain presets are named recipes (components, bypass flags, plugin states)
 stored outside any project, one JSON per preset in

@@ -10,6 +10,7 @@ import type { SilenceParams } from "./types/SilenceParams";
 import type { AlbumMeta } from "./types/AlbumMeta";
 import type { PluginInfo } from "./types/PluginInfo";
 import type { ChainPresetInfo } from "./types/ChainPresetInfo";
+import type { ChainTarget } from "./types/ChainTarget";
 import type { RegionSpan } from "./types/RegionSpan";
 import type { RegionEdge } from "./types/RegionEdge";
 
@@ -81,22 +82,23 @@ export const api = {
     invoke<ProjectView>("set_album_meta", { meta }),
   getArtworkPreview: () => invoke<string | null>("get_artwork_preview"),
   listPlugins: () => invoke<PluginInfo[]>("list_plugins"),
-  addMasteringPlugin: (component: string, name: string) =>
-    invoke<ProjectView>("add_mastering_plugin", { component, name }),
-  removeMasteringPlugin: (id: number) =>
-    invoke<ProjectView>("remove_mastering_plugin", { id }),
-  moveMasteringPlugin: (id: number, delta: number) =>
-    invoke<ProjectView>("move_mastering_plugin", { id, delta }),
-  setMasteringBypass: (id: number, bypass: boolean) =>
-    invoke<ProjectView>("set_mastering_bypass", { id, bypass }),
+  addChainPlugin: (target: ChainTarget, component: string, name: string) =>
+    invoke<ProjectView>("add_chain_plugin", { target, component, name }),
+  removeChainPlugin: (id: number) =>
+    invoke<ProjectView>("remove_chain_plugin", { id }),
+  moveChainPlugin: (id: number, delta: number) =>
+    invoke<ProjectView>("move_chain_plugin", { id, delta }),
+  setChainBypass: (id: number, bypass: boolean) =>
+    invoke<ProjectView>("set_chain_bypass", { id, bypass }),
   openPluginEditor: (id: number) => invoke<void>("open_plugin_editor", { id }),
-  reloadMasteringChain: () => invoke<ProjectView>("reload_mastering_chain"),
-  chainLatency: () => invoke<number>("chain_latency"),
-  saveChainPreset: (name: string) =>
-    invoke<ChainPresetInfo[]>("save_chain_preset", { name }),
+  reloadChains: () => invoke<ProjectView>("reload_chains"),
+  chainLatency: (target: ChainTarget) =>
+    invoke<number>("chain_latency", { target }),
+  saveChainPreset: (target: ChainTarget, name: string) =>
+    invoke<ChainPresetInfo[]>("save_chain_preset", { target, name }),
   listChainPresets: () => invoke<ChainPresetInfo[]>("list_chain_presets"),
-  loadChainPreset: (name: string) =>
-    invoke<ProjectView>("load_chain_preset", { name }),
+  loadChainPreset: (target: ChainTarget, name: string) =>
+    invoke<ProjectView>("load_chain_preset", { target, name }),
   deleteChainPreset: (name: string) =>
     invoke<ChainPresetInfo[]>("delete_chain_preset", { name }),
   undo: () => invoke<ProjectView>("undo"),

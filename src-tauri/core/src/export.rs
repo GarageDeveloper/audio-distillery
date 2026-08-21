@@ -472,7 +472,7 @@ fn export_one_rendered(
         channels,
         job.end_sample + latency,
     );
-    renderer.master_inserts = inserts;
+    renderer.master_sections = vec![crate::engine::render::InsertSection::new(None, inserts)];
     renderer.seek(job.start_sample);
 
     // ffmpeg encodes raw f32le PCM from stdin.

@@ -81,11 +81,39 @@ pub struct LayerLane {
     scratch: Vec<f32>,
 }
 
+/// One insert chain on the master bus. `span: None` = always active (the
+/// global mastering chain); `Some((start, end))` = a track's chain, active
+/// only while the playhead is inside the span (gated per block, reset when
+/// (re)entering so the chain starts clean at the track boundary).
+pub struct InsertSection {
+    pub span: Option<(u64, u64)>,
+    pub inserts: Vec<Box<dyn BlockProcessor>>,
+    was_active: bool,
+}
+
+impl InsertSection {
+    pub fn new(span: Option<(u64, u64)>, inserts: Vec<Box<dyn BlockProcessor>>) -> Self {
+        Self {
+            span,
+            inserts,
+            was_active: false,
+        }
+    }
+
+    fn active_at(&self, pos: u64) -> bool {
+        match self.span {
+            None => true,
+            Some((start, end)) => pos >= start && pos < end,
+        }
+    }
+}
+
 /// Owns everything needed to render the session mix block by block.
 pub struct Renderer {
     pub lanes: Vec<LayerLane>,
-    /// Master insert chain (empty in phase A; mastering chain in phase B).
-    pub master_inserts: Vec<Box<dyn BlockProcessor>>,
+    /// Master-bus insert sections, in processing order: the active tracks'
+    /// chains first, then the always-on mastering chain.
+    pub master_sections: Vec<InsertSection>,
     pub automation: VolumeAutomation,
     pub sample_rate: u32,
     pub channels: usize,
@@ -114,7 +142,7 @@ impl Renderer {
             .collect();
         Self {
             lanes,
-            master_inserts: Vec::new(),
+            master_sections: Vec::new(),
             automation,
             sample_rate,
             channels,
@@ -131,8 +159,11 @@ impl Renderer {
                 p.reset();
             }
         }
-        for p in &mut self.master_inserts {
-            p.reset();
+        for section in &mut self.master_sections {
+            for p in &mut section.inserts {
+                p.reset();
+            }
+            section.was_active = false;
         }
         self.pos = target;
     }
@@ -150,8 +181,13 @@ impl Renderer {
         let ch = self.channels;
         let out = &mut out[..frames * ch];
         out.fill(0.0);
-        for p in &mut self.master_inserts {
-            p.process(out, ch, self.sample_rate);
+        let pos = self.pos;
+        for section in &mut self.master_sections {
+            if section.active_at(pos) {
+                for p in &mut section.inserts {
+                    p.process(out, ch, self.sample_rate);
+                }
+            }
         }
         frames
     }
@@ -197,8 +233,21 @@ impl Renderer {
             lane.smoothed.current = target;
         }
 
-        for p in &mut self.master_inserts {
-            p.process(out, ch, self.sample_rate);
+        let pos = self.pos;
+        for section in &mut self.master_sections {
+            let active = section.active_at(pos);
+            if active && !section.was_active {
+                // Entering the span: the chain starts clean.
+                for p in &mut section.inserts {
+                    p.reset();
+                }
+            }
+            if active {
+                for p in &mut section.inserts {
+                    p.process(out, ch, self.sample_rate);
+                }
+            }
+            section.was_active = active;
         }
         self.pos += frames as u64;
         frames
@@ -328,7 +377,8 @@ mod tests {
         let n = SR as u64;
         let d = LayerDecoder::new(vec![PlayItem::File { path: a, samples: n }], 1);
         let mut r = Renderer::new(vec![d], automation(vec![1.0], vec![]), SR, 1, n);
-        r.master_inserts.push(Box::new(Half));
+        r.master_sections
+            .push(InsertSection::new(None, vec![Box::new(Half)]));
         let mut out = vec![0.0f32; BLOCK_FRAMES];
         r.render_block(&mut out, BLOCK_FRAMES);
         r.render_block(&mut out, BLOCK_FRAMES);
@@ -354,5 +404,114 @@ mod tests {
         }
         assert_eq!(rendered, n);
         assert!(r.finished());
+    }
+
+    /// Fake insert counting process/reset calls and tagging the signal.
+    struct Probe {
+        processed: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        resets: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        add: f32,
+    }
+    impl BlockProcessor for Probe {
+        fn process(&mut self, buffer: &mut [f32], _ch: usize, _sr: u32) {
+            self.processed
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            for s in buffer.iter_mut() {
+                *s += self.add;
+            }
+        }
+        fn reset(&mut self) {
+            self.resets
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    fn probe(add: f32) -> (
+        Box<dyn BlockProcessor>,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        let processed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let resets = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        (
+            Box::new(Probe {
+                processed: processed.clone(),
+                resets: resets.clone(),
+                add,
+            }),
+            processed,
+            resets,
+        )
+    }
+
+    /// A spanned section processes only inside its span, resets when
+    /// entering it, and an unspanned section runs everywhere.
+    #[test]
+    fn sections_gate_by_span_and_reset_on_entry() {
+        use std::sync::atomic::Ordering;
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.wav");
+        write_wav(&a, 1.0, 0.0, 1); // silence: only the probes' `add` shows
+        let n = SR as u64;
+        let d = LayerDecoder::new(vec![PlayItem::File { path: a.clone(), samples: n }], 1);
+        let mut r = Renderer::new(vec![d], automation(vec![1.0], vec![]), SR, 1, n);
+
+        let span = (BLOCK_FRAMES as u64 * 2, BLOCK_FRAMES as u64 * 4);
+        let (track_probe, track_proc, track_resets) = probe(0.25);
+        let (master_probe, master_proc, _) = probe(0.0);
+        r.master_sections.push(InsertSection::new(Some(span), vec![track_probe]));
+        r.master_sections.push(InsertSection::new(None, vec![master_probe]));
+
+        let mut out = vec![0.0f32; BLOCK_FRAMES];
+        let mut per_block = Vec::new();
+        for _ in 0..6 {
+            out.fill(0.0);
+            r.render_block(&mut out, BLOCK_FRAMES);
+            per_block.push(out[0]);
+        }
+        // Blocks 0-1 before the span, 2-3 inside, 4-5 after.
+        assert!(per_block[0].abs() < 1e-6 && per_block[1].abs() < 1e-6);
+        assert!((per_block[2] - 0.25).abs() < 1e-6 && (per_block[3] - 0.25).abs() < 1e-6);
+        assert!(per_block[4].abs() < 1e-6 && per_block[5].abs() < 1e-6);
+        assert_eq!(track_proc.load(Ordering::Relaxed), 2);
+        assert_eq!(track_resets.load(Ordering::Relaxed), 1, "reset on span entry");
+        assert_eq!(master_proc.load(Ordering::Relaxed), 6, "master always runs");
+
+        // Seek back before the span: re-entering must reset again.
+        r.seek(0);
+        for _ in 0..3 {
+            out.fill(0.0);
+            r.render_block(&mut out, BLOCK_FRAMES);
+        }
+        assert_eq!(track_resets.load(Ordering::Relaxed), 3, "seek + re-entry");
+    }
+
+    /// Per-lane inserts run pre-fader on their own lane only.
+    #[test]
+    fn lane_inserts_touch_only_their_layer() {
+        use std::sync::atomic::Ordering;
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.wav");
+        let b = dir.path().join("b.wav");
+        write_wav(&a, 0.5, 0.0, 1);
+        write_wav(&b, 0.5, 0.0, 1);
+        let n = (0.5 * SR as f32) as u64;
+        let da = LayerDecoder::new(vec![PlayItem::File { path: a, samples: n }], 1);
+        let db = LayerDecoder::new(vec![PlayItem::File { path: b, samples: n }], 1);
+        // Layer 0 gain 1.0, layer 1 muted (0.0).
+        let mut r = Renderer::new(vec![da, db], automation(vec![1.0, 0.0], vec![]), SR, 1, n);
+        let (p0, c0, _) = probe(0.5);
+        let (p1, c1, _) = probe(1.0);
+        r.lanes[0].inserts = vec![p0];
+        r.lanes[1].inserts = vec![p1];
+        let mut out = vec![0.0f32; BLOCK_FRAMES];
+        // Block 0 ramps the initial 1.0 smoothed volume down; block 1 is
+        // settled: lane 1 muted post-insert, its +1.0 never reaches the mix.
+        r.render_block(&mut out, BLOCK_FRAMES);
+        out.fill(0.0);
+        r.render_block(&mut out, BLOCK_FRAMES);
+        assert!((out[0] - 0.5).abs() < 1e-6, "{}", out[0]);
+        assert_eq!(c0.load(Ordering::Relaxed), 2);
+        assert_eq!(c1.load(Ordering::Relaxed), 2, "muted lanes keep pumping");
     }
 }

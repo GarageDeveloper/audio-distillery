@@ -83,10 +83,18 @@ impl VolumeAutomation {
 }
 
 enum Cmd {
-    /// Install ready-made master inserts (built on the MAIN thread). The
-    /// ack lets the caller drop its old Arc handles only after the engine
-    /// released its own — so plugin disposal happens on the caller's thread.
-    SetMasterInserts(Vec<Box<dyn render::BlockProcessor>>, Sender<()>),
+    /// Install ready-made master-bus insert sections (built on the MAIN
+    /// thread): `(span, chain)` pairs — `None` span = always active
+    /// (mastering chain), `Some` = a track's chain gated to its region.
+    /// The ack lets the caller drop its old Arc handles only after the
+    /// engine released its own — disposal happens on the caller's thread.
+    SetMasterInserts(
+        Vec<(Option<(u64, u64)>, Vec<Box<dyn render::BlockProcessor>>)>,
+        Sender<()>,
+    ),
+    /// Install per-lane insert chains, index-aligned with the session's
+    /// layer order. Same ack protocol as SetMasterInserts.
+    SetLaneInserts(Vec<Vec<Box<dyn render::BlockProcessor>>>, Sender<()>),
     Load {
         layers: Vec<LayerPlay>,
         total_seconds: f64,
@@ -186,15 +194,30 @@ impl PlayerHandle {
         self.send(Cmd::SetAutomation(automation))
     }
 
-    /// Install the master-insert chain (proxies built on the main thread;
-    /// the engine only processes). Waits for the engine to release its old
-    /// inserts so their disposal runs on the CALLER's thread.
+    /// Install the master-bus insert sections (proxies built on the main
+    /// thread; the engine only processes). `None` span = always active;
+    /// `Some((start, end))` = active only inside that sample span. Waits
+    /// for the engine to release its old inserts so their disposal runs on
+    /// the CALLER's thread.
     pub fn set_master_inserts(
         &self,
-        inserts: Vec<Box<dyn render::BlockProcessor>>,
+        sections: Vec<(Option<(u64, u64)>, Vec<Box<dyn render::BlockProcessor>>)>,
     ) -> Result<()> {
         let (tx, rx) = std::sync::mpsc::channel();
-        self.send(Cmd::SetMasterInserts(inserts, tx))?;
+        self.send(Cmd::SetMasterInserts(sections, tx))?;
+        rx.recv_timeout(Duration::from_secs(10))
+            .map_err(|_| StillError::Playback("engine did not answer".into()))
+    }
+
+    /// Install the per-layer insert chains, index-aligned with the layer
+    /// order used by `load_session`. Same disposal protocol as
+    /// `set_master_inserts`.
+    pub fn set_lane_inserts(
+        &self,
+        lanes: Vec<Vec<Box<dyn render::BlockProcessor>>>,
+    ) -> Result<()> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.send(Cmd::SetLaneInserts(lanes, tx))?;
         rx.recv_timeout(Duration::from_secs(10))
             .map_err(|_| StillError::Playback("engine did not answer".into()))
     }
@@ -252,10 +275,23 @@ fn to_items(playlist: &Playlist, sample_rate: u32) -> Vec<PlayItem> {
         .collect()
 }
 
+/// Assign per-lane chains, index-aligned; missing entries clear the lane.
+fn install_lanes(r: &mut Renderer, mut lanes: Vec<Vec<Box<dyn render::BlockProcessor>>>) {
+    for (i, lane) in r.lanes.iter_mut().enumerate() {
+        lane.inserts = if i < lanes.len() {
+            std::mem::take(&mut lanes[i])
+        } else {
+            Vec::new()
+        };
+    }
+}
+
 fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
     let mut renderer: Option<Renderer> = None;
     // Inserts survive a session reload (they're main-thread-owned proxies).
-    let mut pending_inserts: Vec<Box<dyn render::BlockProcessor>> = Vec::new();
+    let mut pending_sections: Vec<(Option<(u64, u64)>, Vec<Box<dyn render::BlockProcessor>>)> =
+        Vec::new();
+    let mut pending_lanes: Vec<Vec<Box<dyn render::BlockProcessor>>> = Vec::new();
     let mut producer: Option<rtrb::Producer<f32>> = None;
     let mut _stream: Option<cpal::Stream> = None;
     let mut device_channels = 2usize;
@@ -313,17 +349,31 @@ fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
                 }
                 shared.loaded.store(true, Ordering::Relaxed);
                 if let Some(r) = &mut renderer {
-                    r.master_inserts = std::mem::take(&mut pending_inserts);
+                    r.master_sections = std::mem::take(&mut pending_sections)
+                        .into_iter()
+                        .map(|(span, inserts)| render::InsertSection::new(span, inserts))
+                        .collect();
+                    install_lanes(r, std::mem::take(&mut pending_lanes));
                 }
             }
-            Ok(Cmd::SetMasterInserts(inserts, reply)) => {
+            Ok(Cmd::SetMasterInserts(sections, reply)) => {
                 match &mut renderer {
                     Some(r) => {
                         // Old proxies dropped BEFORE the ack so the caller
                         // (main thread) owns the last Arc at disposal time.
-                        r.master_inserts = inserts;
+                        r.master_sections = sections
+                            .into_iter()
+                            .map(|(span, inserts)| render::InsertSection::new(span, inserts))
+                            .collect();
                     }
-                    None => pending_inserts = inserts,
+                    None => pending_sections = sections,
+                }
+                let _ = reply.send(());
+            }
+            Ok(Cmd::SetLaneInserts(lanes, reply)) => {
+                match &mut renderer {
+                    Some(r) => install_lanes(r, lanes),
+                    None => pending_lanes = lanes,
                 }
                 let _ = reply.send(());
             }

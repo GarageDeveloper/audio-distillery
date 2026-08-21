@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter, State};
 
+use still_core::engine::render::BlockProcessor;
 use still_core::project::{ExportConfig, Project};
 use still_core::{
     AlbumMeta, ExportReport, PeakSlice, PlaybackState, PluginInfo, ProjectState,
@@ -321,6 +322,7 @@ pub async fn add_layers(
                 muted: false,
                 solo: false,
                 collapsed: false,
+                inserts: Vec::new(),
             });
         }
         Ok((groups, new_layers))
@@ -432,8 +434,13 @@ pub fn set_track_layer_gain(
 }
 
 #[tauri::command]
-pub fn remove_layer(state: State<'_, AppState>, id: u32) -> CmdResult<ProjectView> {
+pub fn remove_layer(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: u32,
+) -> CmdResult<ProjectView> {
     with_session(&state, |s| {
+        let before: Vec<u32> = s.all_chain_cfgs().map(|c| c.id).collect();
         s.remove_layer(id).map_err(err)?;
         let _ = state.player.load_session(
             playlists_of(&s.info),
@@ -442,6 +449,7 @@ pub fn remove_layer(state: State<'_, AppState>, id: u32) -> CmdResult<ProjectVie
             s.info.sample_rate,
             s.info.channels.max(1) as usize,
         );
+        resync_chains_after_edit(&app, &state, s, &before);
         Ok(s.view())
     })
 }
@@ -567,15 +575,22 @@ pub fn move_region_edge(
         let pos = snapped(s, position);
         s.move_edge(id, edge, pos).map_err(err)?;
         sync_playback(&state, s);
+        let _ = sync_engine_inserts(&state, s);
         Ok(s.view())
     })
 }
 
 #[tauri::command]
-pub fn remove_region(state: State<'_, AppState>, id: u32) -> CmdResult<ProjectView> {
+pub fn remove_region(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: u32,
+) -> CmdResult<ProjectView> {
     with_session(&state, |s| {
+        let before: Vec<u32> = s.all_chain_cfgs().map(|c| c.id).collect();
         s.remove_region(id).map_err(err)?;
         sync_playback(&state, s);
+        resync_chains_after_edit(&app, &state, s, &before);
         Ok(s.view())
     })
 }
@@ -603,10 +618,11 @@ fn rebuild_chain(
     if force_recreate {
         // The engine must release its proxies before disposal.
         state.player.set_master_inserts(Vec::new()).map_err(err)?;
+        state.player.set_lane_inserts(Vec::new()).map_err(err)?;
         state.chain.clear(app);
     }
     let mut errors: Vec<String> = Vec::new();
-    for cfg in &s.project.mastering_chain {
+    for cfg in s.all_chain_cfgs() {
         if !state.chain.contains(cfg.id) {
             let blob = cfg.state_b64.as_deref().and_then(still_core::b64::decode);
             if let Err(e) = state.chain.create(
@@ -623,22 +639,79 @@ fn rebuild_chain(
             }
         }
     }
-    let ids: Vec<u32> = s.project.mastering_chain.iter().map(|c| c.id).collect();
-    state
-        .player
-        .set_master_inserts(state.chain.inserts_for(&ids))
-        .map_err(err)?;
-    state.chain.retain_only(app, &ids);
+    sync_engine_inserts(state, s)?;
+    // Dispose orphans — the union across EVERY chain (a master edit must
+    // never dispose a layer's or a track's live plugins).
+    let union: Vec<u32> = s.all_chain_cfgs().map(|c| c.id).collect();
+    state.chain.retain_only(app, &union);
     if let Some(e) = errors.first() {
-        return Err(format!("Mastering chain: {e}"));
+        return Err(format!("Plugin chain: {e}"));
     }
     Ok(())
 }
 
-/// Persist the LIVE plugin states (knob tweaks) into the project recipe.
+/// Push the current insert topology to the engine WITHOUT touching plugin
+/// lifecycles or editor windows: per-lane chains (layer order) and the
+/// master-bus sections — each track's chain gated to its region span, then
+/// the always-on mastering chain. Also called after region edits so the
+/// spans follow the track boundaries.
+fn sync_engine_inserts(state: &State<'_, AppState>, s: &ProjectState) -> CmdResult<()> {
+    let mut sections: Vec<(Option<(u64, u64)>, Vec<Box<dyn BlockProcessor>>)> = Vec::new();
+    let mut regions: Vec<&still_core::project::Region> = s
+        .project
+        .regions
+        .iter()
+        .filter(|r| !r.inserts.is_empty())
+        .collect();
+    regions.sort_by_key(|r| r.start);
+    for r in regions {
+        let ids: Vec<u32> = r.inserts.iter().map(|c| c.id).collect();
+        sections.push((Some((r.start, r.end)), state.chain.inserts_for(&ids)));
+    }
+    let master_ids: Vec<u32> = s.project.mastering_chain.iter().map(|c| c.id).collect();
+    sections.push((None, state.chain.inserts_for(&master_ids)));
+    state.player.set_master_inserts(sections).map_err(err)?;
+
+    let lanes: Vec<Vec<Box<dyn BlockProcessor>>> = s
+        .project
+        .layers
+        .iter()
+        .map(|l| {
+            let ids: Vec<u32> = l.inserts.iter().map(|c| c.id).collect();
+            state.chain.inserts_for(&ids)
+        })
+        .collect();
+    state.player.set_lane_inserts(lanes).map_err(err)
+}
+
+
+/// After an edit that may have created/removed whole chains (undo, redo,
+/// region/layer removal): rebuild when the plugin-id universe changed
+/// (instances to create/dispose), otherwise just re-push spans/lanes.
+fn resync_chains_after_edit(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    s: &mut ProjectState,
+    before_ids: &[u32],
+) {
+    let after: Vec<u32> = s.all_chain_cfgs().map(|c| c.id).collect();
+    if after != before_ids {
+        let _ = rebuild_chain(app, state, s, false);
+    } else {
+        let _ = sync_engine_inserts(state, s);
+    }
+}
+
+/// Persist the LIVE plugin states (knob tweaks) into the project recipe —
+/// every chain, every target.
 fn snapshot_chain_states(app: &AppHandle, state: &State<'_, AppState>, s: &mut ProjectState) {
-    for cfg in &mut s.project.mastering_chain {
-        if let Some(blob) = state.chain.save_state(app, cfg.id) {
+    let ids: Vec<u32> = s.all_chain_cfgs().map(|c| c.id).collect();
+    let blobs: Vec<Option<Vec<u8>>> = ids
+        .iter()
+        .map(|id| state.chain.save_state(app, *id))
+        .collect();
+    for (cfg, blob) in s.all_chain_cfgs_mut().zip(blobs) {
+        if let Some(blob) = blob {
             cfg.state_b64 = Some(still_core::b64::encode(&blob));
         }
     }
@@ -652,18 +725,21 @@ pub fn list_plugins() -> CmdResult<Vec<PluginInfo>> {
     Ok(still_core::list_plugins())
 }
 
+/// Add a plugin at the end of `target`'s chain (master, one layer, or one
+/// track). Rolls the entry back if instantiation fails.
 #[tauri::command]
-pub fn add_mastering_plugin(
+pub fn add_chain_plugin(
     app: AppHandle,
     state: State<'_, AppState>,
+    target: still_core::ChainTarget,
     component: String,
     name: String,
 ) -> CmdResult<ProjectView> {
     with_session(&state, |s| {
         let id = s.project.next_plugin_id;
         s.project.next_plugin_id += 1;
-        s.project
-            .mastering_chain
+        s.chain_mut(target)
+            .ok_or_else(|| "this layer or track no longer exists".to_string())?
             .push(still_core::MasteringPluginCfg {
                 id,
                 component,
@@ -673,7 +749,9 @@ pub fn add_mastering_plugin(
             });
         if let Err(e) = rebuild_chain(&app, &state, s, false) {
             // Instantiation failed: withdraw the entry.
-            s.project.mastering_chain.retain(|c| c.id != id);
+            if let Some(chain) = s.chain_mut(target) {
+                chain.retain(|c| c.id != id);
+            }
             let _ = rebuild_chain(&app, &state, s, false);
             return Err(e);
         }
@@ -681,45 +759,50 @@ pub fn add_mastering_plugin(
     })
 }
 
+/// Remove a plugin from whichever chain owns it (ids are global).
 #[tauri::command]
-pub fn remove_mastering_plugin(
+pub fn remove_chain_plugin(
     app: AppHandle,
     state: State<'_, AppState>,
     id: u32,
 ) -> CmdResult<ProjectView> {
     with_session(&state, |s| {
         snapshot_chain_states(&app, &state, s);
-        s.project.mastering_chain.retain(|c| c.id != id);
-        rebuild_chain(&app, &state, s, false)?;
-        Ok(s.view())
-    })
-}
-
-/// Move a plugin up (-1) or down (+1) in the chain.
-#[tauri::command]
-pub fn move_mastering_plugin(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    id: u32,
-    delta: i32,
-) -> CmdResult<ProjectView> {
-    with_session(&state, |s| {
-        let chain = &mut s.project.mastering_chain;
-        if let Some(pos) = chain.iter().position(|c| c.id == id) {
-            let new_pos =
-                (pos as i64 + delta as i64).clamp(0, chain.len() as i64 - 1) as usize;
-            let item = chain.remove(pos);
-            chain.insert(new_pos, item);
+        if let Some(chain) = s.chain_containing_mut(id) {
+            chain.retain(|c| c.id != id);
         }
         rebuild_chain(&app, &state, s, false)?;
         Ok(s.view())
     })
 }
 
-/// Full chain reload: snapshot the LIVE states, dispose every instance and
-/// re-create them (recovery for wrappers whose DSP silently dies).
+/// Move a plugin by `delta` within its own chain.
 #[tauri::command]
-pub fn reload_mastering_chain(
+pub fn move_chain_plugin(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: u32,
+    delta: i32,
+) -> CmdResult<ProjectView> {
+    with_session(&state, |s| {
+        if let Some(chain) = s.chain_containing_mut(id) {
+            if let Some(pos) = chain.iter().position(|c| c.id == id) {
+                let new_pos =
+                    (pos as i64 + delta as i64).clamp(0, chain.len() as i64 - 1) as usize;
+                let item = chain.remove(pos);
+                chain.insert(new_pos, item);
+            }
+        }
+        rebuild_chain(&app, &state, s, false)?;
+        Ok(s.view())
+    })
+}
+
+/// Full reload of EVERY chain: snapshot the LIVE states, dispose all
+/// instances and re-create them (recovery for wrappers whose DSP silently
+/// dies).
+#[tauri::command]
+pub fn reload_chains(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<ProjectView> {
@@ -740,18 +823,22 @@ fn presets_dir(app: &AppHandle) -> CmdResult<PathBuf> {
         .map_err(|e| e.to_string())
 }
 
-/// Save the CURRENT chain (live states included) as a named preset.
+/// Save `target`'s CURRENT chain (live states included) as a named preset.
 /// Same name = overwrite. Returns the refreshed preset list.
 #[tauri::command]
 pub fn save_chain_preset(
     app: AppHandle,
     state: State<'_, AppState>,
+    target: still_core::ChainTarget,
     name: String,
 ) -> CmdResult<Vec<still_core::ChainPresetInfo>> {
     let dir = presets_dir(&app)?;
     with_session(&state, |s| {
         snapshot_chain_states(&app, &state, s);
-        let preset = still_core::ChainPreset::from_chain(&name, &s.project.mastering_chain);
+        let chain = s
+            .chain(target)
+            .ok_or_else(|| "this layer or track no longer exists".to_string())?;
+        let preset = still_core::ChainPreset::from_chain(&name, chain);
         still_core::chain_presets::save_preset(&dir, &preset).map_err(err)
     })
 }
@@ -761,35 +848,40 @@ pub fn list_chain_presets(app: AppHandle) -> CmdResult<Vec<still_core::ChainPres
     still_core::chain_presets::list_presets(&presets_dir(&app)?).map_err(err)
 }
 
-/// Replace the current chain with a preset's plugins (fresh project ids,
+/// Replace `target`'s chain with a preset's plugins (fresh project ids,
 /// instances recreated). Rolls back to the previous chain if any plugin
 /// fails to instantiate.
 #[tauri::command]
 pub fn load_chain_preset(
     app: AppHandle,
     state: State<'_, AppState>,
+    target: still_core::ChainTarget,
     name: String,
 ) -> CmdResult<ProjectView> {
     let dir = presets_dir(&app)?;
     with_session(&state, |s| {
         let preset = still_core::chain_presets::load_preset(&dir, &name).map_err(err)?;
-        let previous = std::mem::take(&mut s.project.mastering_chain);
         let previous_next_id = s.project.next_plugin_id;
+        let mut fresh = Vec::with_capacity(preset.plugins.len());
         for p in preset.plugins {
             let id = s.project.next_plugin_id;
             s.project.next_plugin_id += 1;
-            s.project
-                .mastering_chain
-                .push(still_core::MasteringPluginCfg {
-                    id,
-                    component: p.component,
-                    name: p.name,
-                    bypass: p.bypass,
-                    state_b64: p.state_b64,
-                });
+            fresh.push(still_core::MasteringPluginCfg {
+                id,
+                component: p.component,
+                name: p.name,
+                bypass: p.bypass,
+                state_b64: p.state_b64,
+            });
         }
+        let chain = s
+            .chain_mut(target)
+            .ok_or_else(|| "this layer or track no longer exists".to_string())?;
+        let previous = std::mem::replace(chain, fresh);
         if let Err(e) = rebuild_chain(&app, &state, s, true) {
-            s.project.mastering_chain = previous;
+            if let Some(chain) = s.chain_mut(target) {
+                *chain = previous;
+            }
             s.project.next_plugin_id = previous_next_id;
             let _ = rebuild_chain(&app, &state, s, true);
             return Err(e);
@@ -807,26 +899,36 @@ pub fn delete_chain_preset(
     still_core::chain_presets::delete_preset(&presets_dir(&app)?, &name).map_err(err)
 }
 
-/// Total reported latency of the LIVE mastering chain, in samples at the
+/// Total reported latency of `target`'s LIVE chain, in samples at the
 /// session rate. Display only — export compensates on its own.
 #[tauri::command]
-pub fn chain_latency(state: State<'_, AppState>) -> CmdResult<u64> {
+pub fn chain_latency(
+    state: State<'_, AppState>,
+    target: still_core::ChainTarget,
+) -> CmdResult<u64> {
     with_session(&state, |s| {
-        let ids: Vec<u32> = s.project.mastering_chain.iter().map(|c| c.id).collect();
+        let ids: Vec<u32> = s
+            .chain(target)
+            .map(|c| c.iter().map(|p| p.id).collect())
+            .unwrap_or_default();
         Ok(state.chain.total_latency(&ids))
     })
 }
 
-/// Live bypass — the plugin instance keeps its state.
+/// Live bypass — the plugin instance keeps its state. Works on any chain
+/// (plugin ids are global).
 #[tauri::command]
-pub fn set_mastering_bypass(
+pub fn set_chain_bypass(
     app: AppHandle,
     state: State<'_, AppState>,
     id: u32,
     bypass: bool,
 ) -> CmdResult<ProjectView> {
     with_session(&state, |s| {
-        if let Some(cfg) = s.project.mastering_chain.iter_mut().find(|c| c.id == id) {
+        if let Some(cfg) = s
+            .all_chain_cfgs_mut()
+            .find(|c| c.id == id)
+        {
             cfg.bypass = bypass;
         }
         state.chain.set_bypass(&app, id, bypass)?;
@@ -844,9 +946,7 @@ pub fn open_plugin_editor(
     id: u32,
 ) -> CmdResult<()> {
     let (component, name) = with_session(&state, |s| {
-        s.project
-            .mastering_chain
-            .iter()
+        s.all_chain_cfgs()
             .find(|c| c.id == id)
             .map(|c| (c.component.clone(), c.name.clone()))
             .ok_or_else(|| "unknown plugin".to_string())
@@ -921,19 +1021,23 @@ pub fn set_export_config(
 }
 
 #[tauri::command]
-pub fn undo(state: State<'_, AppState>) -> CmdResult<ProjectView> {
+pub fn undo(app: AppHandle, state: State<'_, AppState>) -> CmdResult<ProjectView> {
     with_session(&state, |s| {
+        let before: Vec<u32> = s.all_chain_cfgs().map(|c| c.id).collect();
         s.undo();
         sync_playback(&state, s);
+        resync_chains_after_edit(&app, &state, s, &before);
         Ok(s.view())
     })
 }
 
 #[tauri::command]
-pub fn redo(state: State<'_, AppState>) -> CmdResult<ProjectView> {
+pub fn redo(app: AppHandle, state: State<'_, AppState>) -> CmdResult<ProjectView> {
     with_session(&state, |s| {
+        let before: Vec<u32> = s.all_chain_cfgs().map(|c| c.id).collect();
         s.redo();
         sync_playback(&state, s);
+        resync_chains_after_edit(&app, &state, s, &before);
         Ok(s.view())
     })
 }

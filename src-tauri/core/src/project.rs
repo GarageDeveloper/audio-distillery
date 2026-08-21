@@ -891,6 +891,27 @@ impl ProjectState {
             .chain(self.project.regions.iter_mut().flat_map(|r| r.inserts.iter_mut()))
     }
 
+    /// The chain that owns plugin `id` (ids are globally unique across
+    /// master, layers and tracks).
+    pub fn chain_containing_mut(&mut self, plugin_id: u32) -> Option<&mut Vec<MasteringPluginCfg>> {
+        if self.project.mastering_chain.iter().any(|c| c.id == plugin_id) {
+            return Some(&mut self.project.mastering_chain);
+        }
+        if let Some(l) = self
+            .project
+            .layers
+            .iter_mut()
+            .find(|l| l.inserts.iter().any(|c| c.id == plugin_id))
+        {
+            return Some(&mut l.inserts);
+        }
+        self.project
+            .regions
+            .iter_mut()
+            .find(|r| r.inserts.iter().any(|c| c.id == plugin_id))
+            .map(|r| &mut r.inserts)
+    }
+
     /// Set (or clear, with `None`) a per-track gain override for one layer.
     /// Undoable like any region edit; returns the clamped value applied.
     pub fn set_track_layer_gain(
