@@ -4,6 +4,10 @@ import type { PluginInfo } from "../types/PluginInfo";
 import type { ChainPresetInfo } from "../types/ChainPresetInfo";
 import { api } from "../api";
 
+function chainKey(view: ProjectView): string {
+  return view.mastering_chain.map((p) => p.id).join(",");
+}
+
 interface Props {
   view: ProjectView;
   onError: (msg: string) => void;
@@ -39,6 +43,7 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
   const [presetsOpen, setPresetsOpen] = useState(false);
   const [presets, setPresets] = useState<ChainPresetInfo[]>([]);
   const [presetName, setPresetName] = useState("");
+  const [latency, setLatency] = useState(0);
   // Pointer-based slot dragging (HTML5 DnD is owned by Tauri's file drop).
   const slotsRef = useRef<HTMLDivElement | null>(null);
   const [drag, setDrag] = useState<{
@@ -51,6 +56,18 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
   useEffect(() => {
     api.listPlugins().then(setAvailable).catch((e) => onError(String(e)));
   }, [onError]);
+
+  const chainLen = chainKey(view);
+  useEffect(() => {
+    if (chainLen === "") {
+      setLatency(0);
+      return;
+    }
+    const refresh = () => api.chainLatency().then(setLatency).catch(() => {});
+    refresh();
+    const t = setInterval(refresh, 3000);
+    return () => clearInterval(t);
+  }, [chainLen]);
 
   const run = (op: () => Promise<ProjectView>) => {
     op().then(onViewChange).catch((e) => onError(String(e)));
@@ -443,7 +460,19 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
       )}
 
       <div className="track-panel-foot">
-        <span>Click a slot to edit</span>
+        {chain.length > 0 && latency > 0 ? (
+          <span
+            title={`${latency} samples of plugin lookahead at ${view.audio.sample_rate} Hz — playback is delayed by this much; exports are compensated automatically`}
+          >
+            Latency{" "}
+            {((latency / Math.max(1, view.audio.sample_rate)) * 1000).toLocaleString("en-US", {
+              maximumFractionDigits: 1,
+            })}{" "}
+            ms
+          </span>
+        ) : (
+          <span>Click a slot to edit</span>
+        )}
         <span>{chain.length} plugin{chain.length !== 1 ? "s" : ""}</span>
       </div>
     </aside>

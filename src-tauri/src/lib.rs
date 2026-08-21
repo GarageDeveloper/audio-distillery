@@ -88,6 +88,7 @@ pub fn run() {
             commands::set_mastering_bypass,
             commands::open_plugin_editor,
             commands::reload_mastering_chain,
+            commands::chain_latency,
             commands::save_chain_preset,
             commands::list_chain_presets,
             commands::load_chain_preset,

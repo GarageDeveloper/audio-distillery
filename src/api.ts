@@ -91,6 +91,7 @@ export const api = {
     invoke<ProjectView>("set_mastering_bypass", { id, bypass }),
   openPluginEditor: (id: number) => invoke<void>("open_plugin_editor", { id }),
   reloadMasteringChain: () => invoke<ProjectView>("reload_mastering_chain"),
+  chainLatency: () => invoke<number>("chain_latency"),
   saveChainPreset: (name: string) =>
     invoke<ChainPresetInfo[]>("save_chain_preset", { name }),
   listChainPresets: () => invoke<ChainPresetInfo[]>("list_chain_presets"),
