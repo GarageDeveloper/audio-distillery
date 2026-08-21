@@ -182,3 +182,45 @@ void still_close_au_editor(void *ctxPtr) {
   ctx.window = nil;
   // ARC releases ctx here (transfer).
 }
+
+// ---------- Generic plugin window (used by the VST3 editor host) ----------
+// Same container-NSView discipline as the AU path: the plugin view is
+// attached INSIDE win.contentView, never AS it.
+
+void *still_open_plugin_window(const char *title, int width, int height) {
+  if (width < 200)
+    width = 560;
+  if (height < 120)
+    height = 420;
+  NSWindow *win = [[NSWindow alloc]
+      initWithContentRect:NSMakeRect(0, 0, width, height)
+                styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
+                           NSWindowStyleMaskMiniaturizable)
+                  backing:NSBackingStoreBuffered
+                    defer:NO];
+  win.title = [NSString stringWithUTF8String:title];
+  win.releasedWhenClosed = NO;
+  win.contentView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, height)];
+  [win center];
+  return (__bridge_retained void *)win;
+}
+
+void *still_plugin_window_container(void *winPtr) {
+  NSWindow *win = (__bridge NSWindow *)winPtr;
+  return (__bridge void *)win.contentView;
+}
+
+void still_show_plugin_window(void *winPtr) {
+  NSWindow *win = (__bridge NSWindow *)winPtr;
+  [win makeKeyAndOrderFront:nil];
+}
+
+void still_resize_plugin_window(void *winPtr, int width, int height) {
+  NSWindow *win = (__bridge NSWindow *)winPtr;
+  [win setContentSize:NSMakeSize(width, height)];
+}
+
+void still_close_plugin_window(void *winPtr) {
+  NSWindow *win = (__bridge_transfer NSWindow *)winPtr;
+  [win close];
+}

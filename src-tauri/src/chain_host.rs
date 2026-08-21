@@ -121,6 +121,23 @@ impl ChainHost {
         on_main(app, move || slot.lock().unwrap().set_bypassed(bypass))
     }
 
+    /// Run `f` on the MAIN thread with exclusive access to the plugin
+    /// instance behind `id`. Ok(None) when the id has no live instance.
+    pub fn with_plugin<T: Send + 'static>(
+        &self,
+        app: &AppHandle,
+        id: u32,
+        f: impl FnOnce(&mut Box<dyn BlockProcessor>) -> T + Send + 'static,
+    ) -> Result<Option<T>, String> {
+        let Some(slot) = self.slots.lock().unwrap().get(&id).cloned() else {
+            return Ok(None);
+        };
+        on_main(app, move || {
+            let mut p = slot.lock().unwrap();
+            Some(f(&mut p))
+        })
+    }
+
     /// Native handle for the editor window.
     pub fn raw_handle(&self, id: u32) -> usize {
         self.slots

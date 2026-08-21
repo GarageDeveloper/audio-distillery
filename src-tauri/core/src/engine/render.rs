@@ -34,6 +34,10 @@ pub trait BlockProcessor: Send {
     fn restore_state(&mut self, _state: &[u8]) -> bool {
         false
     }
+    /// Downcast hook for format-specific host features (native editors).
+    fn as_any(&mut self) -> Option<&mut dyn std::any::Any> {
+        None
+    }
 }
 
 /// Insert proxy sharing a processor between the MAIN thread (lifecycle:

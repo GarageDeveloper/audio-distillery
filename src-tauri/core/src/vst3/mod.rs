@@ -49,7 +49,7 @@ mod scan;
 mod stream;
 
 #[cfg(target_os = "macos")]
-pub use plugin::Vst3Plugin;
+pub use plugin::{Vst3Editor, Vst3Plugin};
 #[cfg(target_os = "macos")]
 pub use scan::{
     cache_is_stale, ensure_scanned, full_scan_blocking, list_effects, reload_from_cache,

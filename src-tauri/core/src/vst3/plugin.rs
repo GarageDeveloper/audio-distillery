@@ -26,7 +26,7 @@ use vst3::Steinberg::Vst::{
     IParameterChanges, MediaTypes_::kAudio, ProcessData, ProcessModes_::kRealtime, ProcessSetup,
     SpeakerArrangement, SymbolicSampleSizes_::kSample32, ProcessContext,
 };
-use vst3::Steinberg::{kResultOk, FUnknown, IPluginBaseTrait, TUID};
+use vst3::Steinberg::{kResultOk, IPluginBaseTrait, TUID};
 use vst3::{ComPtr, ComWrapper, Interface};
 
 use crate::engine::render::BlockProcessor;
@@ -393,6 +393,52 @@ impl Vst3Plugin {
         ok
     }
 
+    /// Create the plugin's native editor view (NOT yet attached). Main
+    /// thread only. The caller sizes a window from `size()`, then calls
+    /// `attach` with the container NSView.
+    pub fn create_editor(&mut self) -> Result<Vst3Editor> {
+        use vst3::Steinberg::IPlugViewTrait;
+        use vst3::Steinberg::Vst::ViewType::kEditor;
+        let ctrl = self.controller.as_ref().ok_or_else(|| {
+            StillError::Playback("This plugin has no controller (no editor).".into())
+        })?;
+        let raw = unsafe { ((*(*ctrl.as_ptr()).vtbl).createView)(ctrl.as_ptr(), kEditor) };
+        let view = unsafe { ComPtr::from_raw(raw) }.ok_or_else(|| {
+            StillError::Playback("This plugin did not provide an editor view.".into())
+        })?;
+        unsafe {
+            if view.isPlatformTypeSupported(vst3::Steinberg::kPlatformTypeNSView) != kResultOk {
+                return Err(StillError::Playback(
+                    "This plugin's editor does not support macOS windows.".into(),
+                ));
+            }
+        }
+        let mut rect = vst3::Steinberg::ViewRect {
+            left: 0,
+            top: 0,
+            right: 560,
+            bottom: 420,
+        };
+        unsafe {
+            view.getSize(&mut rect);
+        }
+        let frame = ComWrapper::new(super::host::PlugFrame::new());
+        unsafe {
+            let fptr = frame
+                .as_com_ref::<vst3::Steinberg::IPlugFrame>()
+                .map(|r| r.as_ptr())
+                .unwrap_or(std::ptr::null_mut());
+            view.setFrame(fptr);
+        }
+        Ok(Vst3Editor {
+            view,
+            frame,
+            width: (rect.right - rect.left).max(200),
+            height: (rect.bottom - rect.top).max(120),
+            attached: false,
+        })
+    }
+
     /// React to restartComponent flags from the controller thread.
     fn drain_restart_flags(&mut self) {
         let flags = self.restart_flags.swap(0, Ordering::AcqRel);
@@ -518,6 +564,81 @@ impl BlockProcessor for Vst3Plugin {
 
     fn restore_state(&mut self, state: &[u8]) -> bool {
         self.set_state(state)
+    }
+
+    fn as_any(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
+    }
+}
+
+/// A live native editor view. ALL methods are main-thread only; the value
+/// is Send so the app layer can store it in its registry between
+/// main-thread hops.
+pub struct Vst3Editor {
+    view: ComPtr<vst3::Steinberg::IPlugView>,
+    frame: ComWrapper<super::host::PlugFrame>,
+    width: i32,
+    height: i32,
+    attached: bool,
+}
+
+unsafe impl Send for Vst3Editor {}
+
+impl Vst3Editor {
+    /// Preferred size reported by the plugin before attachment.
+    pub fn size(&self) -> (i32, i32) {
+        (self.width, self.height)
+    }
+
+    /// Attach the view to a container NSView (main thread).
+    pub fn attach(&mut self, ns_view: *mut c_void) -> Result<()> {
+        use vst3::Steinberg::IPlugViewTrait;
+        if self.attached {
+            return Ok(());
+        }
+        let res = unsafe { self.view.attached(ns_view, vst3::Steinberg::kPlatformTypeNSView) };
+        if res != kResultOk {
+            return Err(StillError::Playback(format!(
+                "VST3 editor attach failed ({res})"
+            )));
+        }
+        self.attached = true;
+        Ok(())
+    }
+
+    /// Plugin-requested resize waiting to be applied (drained by the app's
+    /// main-thread pump).
+    pub fn take_pending_resize(&self) -> Option<(i32, i32)> {
+        self.frame.take_pending_resize()
+    }
+
+    /// Tell the view its new size after the window was resized.
+    pub fn on_size(&mut self, width: i32, height: i32) {
+        use vst3::Steinberg::IPlugViewTrait;
+        let mut rect = vst3::Steinberg::ViewRect {
+            left: 0,
+            top: 0,
+            right: width,
+            bottom: height,
+        };
+        unsafe {
+            self.view.onSize(&mut rect);
+        }
+        self.width = width;
+        self.height = height;
+    }
+}
+
+impl Drop for Vst3Editor {
+    /// Teardown protocol: setFrame(null) → removed() → release (ComPtr).
+    fn drop(&mut self) {
+        use vst3::Steinberg::IPlugViewTrait;
+        unsafe {
+            self.view.setFrame(std::ptr::null_mut());
+            if self.attached {
+                self.view.removed();
+            }
+        }
     }
 }
 

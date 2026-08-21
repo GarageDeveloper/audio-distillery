@@ -35,7 +35,6 @@ pub struct Vst3Module {
     /// Retained CFBundle handed to bundleEntry; released never (module leaks).
     _bundle: CFBundleRef,
     factory: ComPtr<IPluginFactory>,
-    pub path: PathBuf,
 }
 
 // The factory pointer is only ever used behind the module cache mutex or on
@@ -129,7 +128,6 @@ fn load(bundle: &Path) -> Result<Vst3Module> {
         _lib: lib,
         _bundle: cf_bundle,
         factory,
-        path: bundle.to_path_buf(),
     })
 }
 

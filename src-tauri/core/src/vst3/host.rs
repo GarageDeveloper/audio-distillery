@@ -13,7 +13,7 @@ use vst3::Steinberg::Vst::{
 };
 use vst3::Steinberg::{
     int32, int64, kInvalidArgument, kNotImplemented, kResultFalse, kResultOk, tresult, uint32,
-    FUnknown, TUID,
+    FUnknown, IPlugFrame, IPlugFrameTrait, IPlugView, ViewRect, TUID,
 };
 use vst3::{Class, ComPtr, ComWrapper, Interface};
 
@@ -296,6 +296,40 @@ impl IParameterChangesTrait for NoParameterChanges {
     }
     unsafe fn addParameterData(&self, _id: *const ParamID, _index: *mut int32) -> *mut IParamValueQueue {
         std::ptr::null_mut()
+    }
+}
+
+/// IPlugFrame whose resizeView NEVER resizes synchronously: the requested
+/// size lands in a mailbox that the app's main-thread pump drains (resize
+/// the NSWindow, then call IPlugView::onSize). A synchronous resize from
+/// inside the plugin's own callback is a reentrancy deadlock.
+pub struct PlugFrame {
+    pending: Mutex<Option<(i32, i32)>>,
+}
+
+impl PlugFrame {
+    pub fn new() -> Self {
+        Self {
+            pending: Mutex::new(None),
+        }
+    }
+
+    pub fn take_pending_resize(&self) -> Option<(i32, i32)> {
+        self.pending.lock().unwrap().take()
+    }
+}
+
+impl Class for PlugFrame {
+    type Interfaces = (IPlugFrame,);
+}
+
+impl IPlugFrameTrait for PlugFrame {
+    unsafe fn resizeView(&self, _view: *mut IPlugView, new_size: *mut ViewRect) -> tresult {
+        let Some(r) = new_size.as_ref() else {
+            return kInvalidArgument;
+        };
+        *self.pending.lock().unwrap() = Some((r.right - r.left, r.bottom - r.top));
+        kResultOk
     }
 }
 
