@@ -31,7 +31,6 @@ interface Props {
   onDetectSilences: () => void;
   onExport: () => void;
   onAlbum: () => void;
-  onMastering: () => void;
   onTogglePanel: () => void;
   onToggleSnap: () => void;
 }
@@ -191,13 +190,6 @@ export function Toolbar(p: Props) {
               title="Album metadata (tags written to exported files)"
             >
               Album…
-            </button>
-            <button
-              className={`btn ${p.view.mastering_chain.length > 0 ? "active" : ""}`}
-              onClick={p.onMastering}
-              title="Show / hide the mastering chain panel (AU plugins on the master bus, live)"
-            >
-              Mastering
             </button>
             <button
               className="btn btn-primary"

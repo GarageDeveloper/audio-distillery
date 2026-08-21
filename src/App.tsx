@@ -37,12 +37,6 @@ export default function App() {
   const [panelOpen, setPanelOpen] = useState(true);
   const [exportOpen, setExportOpen] = useState(false);
   const [albumOpen, setAlbumOpen] = useState(false);
-  const [masteringOpen, setMasteringOpen] = useState(
-    () => localStorage.getItem("still-mastering-open") === "1"
-  );
-  useEffect(() => {
-    localStorage.setItem("still-mastering-open", masteringOpen ? "1" : "0");
-  }, [masteringOpen]);
   const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null);
   const [proposals, setProposals] = useState<RegionSpan[] | null>(null);
   const [dropChoice, setDropChoice] = useState<string[] | null>(null);
@@ -440,7 +434,6 @@ export default function App() {
         onDetectSilences={() => void detectSilences()}
         onExport={() => setExportOpen(true)}
         onAlbum={() => setAlbumOpen(true)}
-        onMastering={() => setMasteringOpen((o) => !o)}
         onTogglePanel={() => setPanelOpen((p) => !p)}
         onToggleSnap={() => view && void apply(() => api.setSnapToZero(!view.snap_to_zero))}
       />
@@ -632,7 +625,7 @@ export default function App() {
           />
         )}
 
-        {view && masteringOpen && (
+        {view && (
           <MasteringPanel view={view} onError={showError} onViewChange={setView} />
         )}
       </div>
