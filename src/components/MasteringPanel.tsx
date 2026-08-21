@@ -94,6 +94,10 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
   const onSlotPointerDown = (e: React.PointerEvent, from: number, id: number) => {
     if (e.button !== 0) return;
     if ((e.target as HTMLElement).closest(".strip-actions")) return;
+    // Suppress the compatibility mouse events: WebKit's native press
+    // tracking (text hit-testing) otherwise swallows every pointermove
+    // when the press starts over the name's text.
+    e.preventDefault();
     gesture.current = {
       from,
       id,
