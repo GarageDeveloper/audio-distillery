@@ -415,6 +415,7 @@ export default function App() {
   return (
     <div className="app">
       <Toolbar
+        onAbout={() => setAboutOpen(true)}
         view={view}
         playing={playback.playing}
         positionSeconds={playback.positionSeconds}

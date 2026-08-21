@@ -1152,3 +1152,7 @@ kbd {
 }
 .about-link:hover { color: var(--copper-lo); }
 .about-modal .modal-foot { margin-top: 16px; }
+
+/* Wordmark doubles as the About trigger */
+button.wordmark { cursor: pointer; border-radius: var(--r-s); padding: 2px 6px; }
+button.wordmark:hover { background: var(--panel-2); }
