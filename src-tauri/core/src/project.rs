@@ -9,7 +9,7 @@ use crate::error::{Result, StillError};
 use crate::metadata::AlbumMeta;
 use crate::peaks::PeakPyramid;
 
-pub const PROJECT_VERSION: u32 = 6;
+pub const PROJECT_VERSION: u32 = 7;
 pub const MIN_GAIN_DB: f32 = -60.0;
 pub const MAX_GAIN_DB: f32 = 12.0;
 /// A track region may never be shorter than this.
@@ -44,6 +44,10 @@ pub struct Region {
     /// Per-track layer solo overrides (true = soloed for this track).
     #[serde(default)]
     pub solo_overrides: HashMap<String, bool>,
+    /// Insert chain of THIS track: master-bus position, before the global
+    /// mastering chain, active only inside the region's span.
+    #[serde(default)]
+    pub inserts: Vec<MasteringPluginCfg>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -126,6 +130,9 @@ pub struct Layer {
     /// Collapsed to a thin strip in the "Layers" waveform view.
     #[serde(default)]
     pub collapsed: bool,
+    /// Insert chain of THIS layer (pre-fader, always active).
+    #[serde(default)]
+    pub inserts: Vec<MasteringPluginCfg>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -163,6 +170,7 @@ impl Project {
                 muted: false,
                 solo: false,
                 collapsed: false,
+                inserts: Vec::new(),
             })
             .collect();
         let next_layer_id = layers.len() as u32 + 1;
@@ -205,6 +213,31 @@ pub struct MasteringPluginCfg {
     /// Base64 binary plist of the plugin state (ClassInfo).
     #[serde(default)]
     pub state_b64: Option<String>,
+}
+
+/// Map persisted chain cfgs to their display views.
+fn chain_views(chain: &[MasteringPluginCfg]) -> Vec<MasteringPluginView> {
+    chain
+        .iter()
+        .map(|c| MasteringPluginView {
+            id: c.id,
+            component: c.component.clone(),
+            name: c.name.clone(),
+            bypass: c.bypass,
+            format: crate::plugins::format_of(&c.component),
+        })
+        .collect()
+}
+
+/// A plugin chain's owner: the master bus, one layer (pre-fader, always
+/// active) or one track (master-bus position, active inside its span).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+#[ts(export, export_to = "../../../src/types/")]
+pub enum ChainTarget {
+    Master,
+    Layer { id: u32 },
+    Track { id: u32 },
 }
 
 /// Display state of one mastering-chain plugin.
@@ -250,6 +283,8 @@ pub struct TrackInfo {
     /// mutes and solos with the track's overrides applied). Index-aligned
     /// with the layer list; this is exactly what export and playback use.
     pub layer_volumes: Vec<f32>,
+    /// This track's insert chain (master-bus position, active in its span).
+    pub inserts: Vec<MasteringPluginView>,
 }
 
 /// Display state of one mix layer.
@@ -265,6 +300,8 @@ pub struct LayerView {
     pub muted: bool,
     pub solo: bool,
     pub collapsed: bool,
+    /// This layer's insert chain (pre-fader, always active).
+    pub inserts: Vec<MasteringPluginView>,
 }
 
 /// Display snapshot sent to the frontend after every mutation.
@@ -650,6 +687,7 @@ impl ProjectState {
             gain_overrides: HashMap::new(),
             mute_overrides: HashMap::new(),
             solo_overrides: HashMap::new(),
+            inserts: Vec::new(),
         });
         Ok(id)
     }
@@ -671,6 +709,7 @@ impl ProjectState {
                     gain_overrides: HashMap::new(),
                     mute_overrides: HashMap::new(),
                     solo_overrides: HashMap::new(),
+                    inserts: Vec::new(),
                 });
                 added += 1;
             }
@@ -795,6 +834,84 @@ impl ProjectState {
         Ok(())
     }
 
+    /// The insert chain owned by `target`, or None when the layer/track id
+    /// no longer exists.
+    pub fn chain(&self, target: ChainTarget) -> Option<&Vec<MasteringPluginCfg>> {
+        match target {
+            ChainTarget::Master => Some(&self.project.mastering_chain),
+            ChainTarget::Layer { id } => self
+                .project
+                .layers
+                .iter()
+                .find(|l| l.id == id)
+                .map(|l| &l.inserts),
+            ChainTarget::Track { id } => self
+                .project
+                .regions
+                .iter()
+                .find(|r| r.id == id)
+                .map(|r| &r.inserts),
+        }
+    }
+
+    pub fn chain_mut(&mut self, target: ChainTarget) -> Option<&mut Vec<MasteringPluginCfg>> {
+        match target {
+            ChainTarget::Master => Some(&mut self.project.mastering_chain),
+            ChainTarget::Layer { id } => self
+                .project
+                .layers
+                .iter_mut()
+                .find(|l| l.id == id)
+                .map(|l| &mut l.inserts),
+            ChainTarget::Track { id } => self
+                .project
+                .regions
+                .iter_mut()
+                .find(|r| r.id == id)
+                .map(|r| &mut r.inserts),
+        }
+    }
+
+    /// Every chain cfg of the project (master, then layers, then tracks) —
+    /// the id universe rebuilds and retains must be computed over.
+    pub fn all_chain_cfgs(&self) -> impl Iterator<Item = &MasteringPluginCfg> {
+        self.project
+            .mastering_chain
+            .iter()
+            .chain(self.project.layers.iter().flat_map(|l| l.inserts.iter()))
+            .chain(self.project.regions.iter().flat_map(|r| r.inserts.iter()))
+    }
+
+    /// Mutable variant of [`all_chain_cfgs`] (state snapshots).
+    pub fn all_chain_cfgs_mut(&mut self) -> impl Iterator<Item = &mut MasteringPluginCfg> {
+        self.project
+            .mastering_chain
+            .iter_mut()
+            .chain(self.project.layers.iter_mut().flat_map(|l| l.inserts.iter_mut()))
+            .chain(self.project.regions.iter_mut().flat_map(|r| r.inserts.iter_mut()))
+    }
+
+    /// The chain that owns plugin `id` (ids are globally unique across
+    /// master, layers and tracks).
+    pub fn chain_containing_mut(&mut self, plugin_id: u32) -> Option<&mut Vec<MasteringPluginCfg>> {
+        if self.project.mastering_chain.iter().any(|c| c.id == plugin_id) {
+            return Some(&mut self.project.mastering_chain);
+        }
+        if let Some(l) = self
+            .project
+            .layers
+            .iter_mut()
+            .find(|l| l.inserts.iter().any(|c| c.id == plugin_id))
+        {
+            return Some(&mut l.inserts);
+        }
+        self.project
+            .regions
+            .iter_mut()
+            .find(|r| r.inserts.iter().any(|c| c.id == plugin_id))
+            .map(|r| &mut r.inserts)
+    }
+
     /// Set (or clear, with `None`) a per-track gain override for one layer.
     /// Undoable like any region edit; returns the clamped value applied.
     pub fn set_track_layer_gain(
@@ -882,6 +999,7 @@ impl ProjectState {
                 mute_overrides: r.mute_overrides.clone(),
                 solo_overrides: r.solo_overrides.clone(),
                 layer_volumes: self.effective_volumes(Some(r)),
+                inserts: chain_views(&r.inserts),
             })
             .collect()
     }
@@ -911,6 +1029,7 @@ impl ProjectState {
                     muted: l.muted,
                     solo: l.solo,
                     collapsed: l.collapsed,
+                    inserts: chain_views(&l.inserts),
                 }
             })
             .collect();
@@ -925,18 +1044,7 @@ impl ProjectState {
                 .as_ref()
                 .map(|p| p.display().to_string()),
             album_meta: self.project.album_meta.clone(),
-            mastering_chain: self
-                .project
-                .mastering_chain
-                .iter()
-                .map(|c| MasteringPluginView {
-                    id: c.id,
-                    component: c.component.clone(),
-                    name: c.name.clone(),
-                    bypass: c.bypass,
-                    format: crate::plugins::format_of(&c.component),
-                })
-                .collect(),
+            mastering_chain: chain_views(&self.project.mastering_chain),
             suggested_title: self.suggest_title(),
             can_undo: !self.undo.is_empty(),
             can_redo: !self.redo.is_empty(),
@@ -1053,6 +1161,7 @@ fn migrate_v1(legacy: LegacyProjectV1) -> Project {
             gain_overrides: HashMap::new(),
             mute_overrides: HashMap::new(),
             solo_overrides: HashMap::new(),
+            inserts: Vec::new(),
         });
     }
     let next_region_id = regions.len() as u32 + 1;
@@ -1104,6 +1213,7 @@ fn migrate_v4(legacy: LegacyProjectV4) -> Project {
                 muted: l.muted,
                 solo: l.solo,
                 collapsed: l.collapsed,
+                inserts: Vec::new(),
             })
             .collect(),
         regions: legacy.regions,
@@ -1149,9 +1259,10 @@ pub fn read_project(path: &Path) -> Result<Project> {
             .map_err(|e| StillError::InvalidProject(e.to_string()))?;
         return Ok(migrate_v4(legacy));
     }
-    // v5 → v6 only added `album_meta`, which is #[serde(default)]: parse as
-    // current and bump the version.
-    if version == 5 {
+    // v5 → v6 added `album_meta`; v6 → v7 added the per-layer and
+    // per-track `inserts` — all #[serde(default)]: parse as current and
+    // bump the version.
+    if version == 5 || version == 6 {
         let mut p: Project = serde_json::from_str(&data)
             .map_err(|e| StillError::InvalidProject(e.to_string()))?;
         p.version = PROJECT_VERSION;
@@ -1510,9 +1621,43 @@ mod tests {
     #[test]
     fn sanitize_drops_degenerate_regions() {
         let mut p = Project::new(vec!["/tmp/x.wav".into()]);
-        p.regions.push(Region { id: 1, start: 0, end: 10 * SEC, title: None, gain_overrides: HashMap::new(), mute_overrides: HashMap::new(), solo_overrides: HashMap::new() });
-        p.regions.push(Region { id: 2, start: 200 * SEC, end: 300 * SEC, title: None, gain_overrides: HashMap::new(), mute_overrides: HashMap::new(), solo_overrides: HashMap::new() });
+        p.regions.push(Region { id: 1, start: 0, end: 10 * SEC, title: None, gain_overrides: HashMap::new(), mute_overrides: HashMap::new(), solo_overrides: HashMap::new(), inserts: Vec::new() });
+        p.regions.push(Region { id: 2, start: 200 * SEC, end: 300 * SEC, title: None, gain_overrides: HashMap::new(), mute_overrides: HashMap::new(), solo_overrides: HashMap::new(), inserts: Vec::new() });
         sanitize_regions(&mut p, 120 * SEC, SR);
         assert_eq!(p.regions.len(), 1);
+    }
+
+    /// A v6 project (no per-layer/per-track inserts) opens as v7 with empty
+    /// chains everywhere, keeping its master chain intact.
+    #[test]
+    fn migrates_v6_to_v7() {
+        let mut p = Project::new(vec!["/tmp/x.wav".into()]);
+        p.regions.push(Region { id: 1, start: 0, end: 10 * SEC, title: None, gain_overrides: HashMap::new(), mute_overrides: HashMap::new(), solo_overrides: HashMap::new(), inserts: Vec::new() });
+        p.mastering_chain.push(MasteringPluginCfg {
+            id: 1,
+            component: "aufx:lpas:appl".into(),
+            name: "Lowpass".into(),
+            bypass: false,
+            state_b64: None,
+        });
+        p.version = 6;
+        // Serialize then strip the fields v6 didn't have.
+        let mut v: serde_json::Value = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+        for l in v["layers"].as_array_mut().unwrap() {
+            l.as_object_mut().unwrap().remove("inserts");
+        }
+        for r in v["regions"].as_array_mut().unwrap() {
+            r.as_object_mut().unwrap().remove("inserts");
+        }
+        let dir = std::env::temp_dir().join(format!("still-migrate-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("v6.still");
+        std::fs::write(&path, serde_json::to_string(&v).unwrap()).unwrap();
+        let loaded = read_project(&path).unwrap();
+        assert_eq!(loaded.version, PROJECT_VERSION);
+        assert_eq!(loaded.mastering_chain.len(), 1);
+        assert!(loaded.layers.iter().all(|l| l.inserts.is_empty()));
+        assert!(loaded.regions.iter().all(|r| r.inserts.is_empty()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

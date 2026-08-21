@@ -38,6 +38,9 @@ pub struct ExportJob {
     /// Resolved linear volume per layer for THIS track (gains, mutes and
     /// solos, session-wide or overridden — straight from TrackInfo).
     pub layer_volumes: Vec<f32>,
+    /// This track's own insert chain (master-bus position, active for the
+    /// whole job). Filled by the caller AFTER planning (states snapshotted).
+    pub track_chain: Vec<MasterPluginSpec>,
     /// Tags to write into the finished file (None = tagging disabled).
     pub tags: Option<TrackTags>,
     /// Validated cover image shared by all jobs.
@@ -167,6 +170,7 @@ pub fn plan_export_with_meta(
             end_sample: t.end_sample,
             out_path: candidate,
             layer_volumes: t.layer_volumes.clone(),
+            track_chain: Vec::new(),
             tags: if is_empty_meta(meta) {
                 None
             } else {
@@ -246,16 +250,20 @@ pub fn run_export(
         jobs,
         cfg,
         &[],
+        &[],
         cancel,
         on_progress,
     )
 }
 
-/// Like [`run_export`], rendering each track through the MASTERING CHAIN
-/// when one is given: the engine's own Renderer produces the processed PCM
-/// (each worker instantiates its own plugin chain from the specs, with the
-/// live states snapshotted by the caller), which is piped to ffmpeg for
-/// encoding only. An empty chain keeps the pure-ffmpeg graph path.
+/// Like [`run_export`], rendering each track through the plugin chains
+/// when any is given: the engine's own Renderer produces the processed PCM
+/// (each worker instantiates its own plugin instances from the specs, with
+/// the live states snapshotted by the caller), which is piped to ffmpeg for
+/// encoding only. `lane_chains` is index-aligned with `layers` (pre-fader,
+/// per layer); each job may carry its own `track_chain`, processed before
+/// the master `chain`. With no chains anywhere the pure-ffmpeg graph path
+/// is kept.
 #[allow(clippy::too_many_arguments)]
 pub fn run_export_with_chain(
     ffmpeg: &Path,
@@ -265,6 +273,7 @@ pub fn run_export_with_chain(
     jobs: &[ExportJob],
     cfg: &ExportConfig,
     chain: &[MasterPluginSpec],
+    lane_chains: &[Vec<MasterPluginSpec>],
     cancel: &AtomicBool,
     on_progress: impl Fn(ExportProgress) + Send + Sync,
 ) -> ExportReport {
@@ -313,7 +322,10 @@ pub fn run_export_with_chain(
                 }
                 let job = &jobs[i];
                 emit(i, 0.0);
-                let result = if chain.is_empty() {
+                let needs_render = !chain.is_empty()
+                    || !job.track_chain.is_empty()
+                    || lane_chains.iter().any(|c| !c.is_empty());
+                let result = if !needs_render {
                     export_one(
                         ffmpeg,
                         layers,
@@ -333,6 +345,7 @@ pub fn run_export_with_chain(
                         job,
                         cfg,
                         chain,
+                        lane_chains,
                         cancel,
                         |p| emit(i, p),
                     )
@@ -401,17 +414,23 @@ fn export_one_rendered(
     job: &ExportJob,
     cfg: &ExportConfig,
     chain: &[MasterPluginSpec],
+    lane_chains: &[Vec<MasterPluginSpec>],
     cancel: &AtomicBool,
     mut on_progress: impl FnMut(f32),
 ) -> Result<()> {
     let channels = (session_channels.max(1) as usize).min(2);
 
     // Full-timeline playlists per layer; the decoder seek positions us at
-    // the region start sample-accurately.
+    // the region start sample-accurately. Muted layers are dropped, which
+    // BREAKS the layer-index ↔ lane-index correspondence — `kept` records
+    // each surviving lane's ORIGINAL layer index (lane chains follow it).
+    let kept: Vec<usize> = (0..layers.len())
+        .filter(|i| job.layer_volumes.get(*i).copied().unwrap_or(1.0) > 0.0)
+        .collect();
     let decoders: Vec<LayerDecoder> = layers
         .iter()
         .enumerate()
-        .filter(|(i, _)| job.layer_volumes.get(*i).copied().unwrap_or(1.0) > 0.0)
+        .filter(|(i, _)| kept.contains(i))
         .map(|(_, l)| {
             let mut items = Vec::new();
             let mut cursor = 0u64;
@@ -442,23 +461,33 @@ fn export_one_rendered(
         ));
     }
 
-    // Instantiate THIS worker's own plugin chain from the specs (any
+    // Instantiate THIS worker's own plugin instances from the specs (any
     // format — the factory dispatches on the component id).
-    let mut inserts: Vec<Box<dyn crate::engine::render::BlockProcessor>> = Vec::new();
-    for spec in chain {
-        let mut p = crate::plugins::create_plugin(
-            &spec.component,
-            sample_rate,
-            channels,
-            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
-        )
-        .map_err(|e| StillError::Ffmpeg(format!("{}: {e}", spec.component)))?;
-        if let Some(state) = &spec.state {
-            let _ = p.restore_state(state);
+    let instantiate = |specs: &[MasterPluginSpec]| -> Result<Vec<Box<dyn crate::engine::render::BlockProcessor>>> {
+        let mut out = Vec::with_capacity(specs.len());
+        for spec in specs {
+            let mut p = crate::plugins::create_plugin(
+                &spec.component,
+                sample_rate,
+                channels,
+                std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            )
+            .map_err(|e| StillError::Ffmpeg(format!("{}: {e}", spec.component)))?;
+            if let Some(state) = &spec.state {
+                let _ = p.restore_state(state);
+            }
+            p.set_bypassed(spec.bypass);
+            out.push(p);
         }
-        p.set_bypassed(spec.bypass);
-        inserts.push(p);
-    }
+        Ok(out)
+    };
+    // Master bus for this job: the track's own chain (active the whole
+    // job), then the global mastering chain — same order as playback.
+    let mut inserts = instantiate(&job.track_chain)?;
+    inserts.extend(instantiate(chain)?);
+    // Latency compensation covers the master bus (track + mastering).
+    // Lane-chain latency is NOT compensated (same inter-layer skew as
+    // playback; typical layer inserts are zero-latency).
     let latency: u64 = inserts.iter().map(|p| p.latency_samples() as u64).sum();
 
     let track_len = job.end_sample.saturating_sub(job.start_sample);
@@ -472,7 +501,14 @@ fn export_one_rendered(
         channels,
         job.end_sample + latency,
     );
-    renderer.master_inserts = inserts;
+    renderer.master_sections = vec![crate::engine::render::InsertSection::new(None, inserts)];
+    for (lane_idx, orig_idx) in kept.iter().enumerate() {
+        if let Some(specs) = lane_chains.get(*orig_idx) {
+            if !specs.is_empty() {
+                renderer.lanes[lane_idx].inserts = instantiate(specs)?;
+            }
+        }
+    }
     renderer.seek(job.start_sample);
 
     // ffmpeg encodes raw f32le PCM from stdin.
@@ -772,6 +808,7 @@ mod tests {
             mute_overrides: HashMap::new(),
             solo_overrides: HashMap::new(),
             layer_volumes: vec![1.0],
+            inserts: Vec::new(),
         }
     }
 

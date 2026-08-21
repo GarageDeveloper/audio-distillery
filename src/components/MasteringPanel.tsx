@@ -2,14 +2,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ProjectView } from "../types/ProjectView";
 import type { PluginInfo } from "../types/PluginInfo";
 import type { ChainPresetInfo } from "../types/ChainPresetInfo";
+import type { ChainTarget } from "../types/ChainTarget";
 import { api } from "../api";
 
-function chainKey(view: ProjectView): string {
-  return view.mastering_chain.map((p) => p.id).join(",");
+function chainKey(chain: { id: number }[], target: ChainTarget): string {
+  return `${targetKey(target)}|${chain.map((p) => p.id).join(",")}`;
 }
 
 interface Props {
   view: ProjectView;
+  /// Current playhead position (samples) — the Tracks section follows it.
+  playheadSample: number;
   onError: (msg: string) => void;
   onViewChange: (v: ProjectView) => void;
 }
@@ -34,7 +37,15 @@ function pushRecent(id: string) {
  * (click a slot = open its editor), plus a Logic-inspired hierarchical
  * picker: search field, Recent, then manufacturer → plugins drill-down.
  */
-export function MasteringPanel({ view, onError, onViewChange }: Props) {
+/// Stable string key for a target (select values, effect deps).
+function targetKey(t: ChainTarget): string {
+  return t.kind === "master" ? "master" : `${t.kind}:${t.id}`;
+}
+
+type Section = "master" | "layers" | "tracks";
+const SECTION_KEY = "still-chain-section";
+
+export function MasteringPanel({ view, playheadSample, onError, onViewChange }: Props) {
   const [available, setAvailable] = useState<PluginInfo[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [filter, setFilter] = useState("");
@@ -44,6 +55,13 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
   const [presets, setPresets] = useState<ChainPresetInfo[]>([]);
   const [presetName, setPresetName] = useState("");
   const [latency, setLatency] = useState(0);
+  const [section, setSection] = useState<Section>(
+    () => (localStorage.getItem(SECTION_KEY) as Section) || "master"
+  );
+  useEffect(() => {
+    localStorage.setItem(SECTION_KEY, section);
+  }, [section]);
+  const [layerSel, setLayerSel] = useState<number | null>(null);
   // Pointer-based slot dragging (HTML5 DnD is owned by Tauri's file drop).
   const slotsRef = useRef<HTMLDivElement | null>(null);
   const [drag, setDrag] = useState<{
@@ -57,18 +75,6 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
     api.listPlugins().then(setAvailable).catch((e) => onError(String(e)));
   }, [onError]);
 
-  const chainLen = chainKey(view);
-  useEffect(() => {
-    if (chainLen === "") {
-      setLatency(0);
-      return;
-    }
-    const refresh = () => api.chainLatency().then(setLatency).catch(() => {});
-    refresh();
-    const t = setInterval(refresh, 3000);
-    return () => clearInterval(t);
-  }, [chainLen]);
-
   const run = (op: () => Promise<ProjectView>) => {
     op().then(onViewChange).catch((e) => onError(String(e)));
   };
@@ -79,11 +85,50 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
     setPickerOpen(false);
     setFilter("");
     setMaker(null);
-    run(() => api.addMasteringPlugin(a.id, a.name));
+    if (target) run(() => api.addChainPlugin(target, a.id, a.name));
   };
 
-  const chain = view.mastering_chain;
+  // The layer shown in the Layers section (falls back to the first one).
+  const layer =
+    view.layers.find((l) => l.id === layerSel) ?? view.layers[0];
+  // The Tracks section follows the track under the playhead.
+  const currentTrack = view.tracks.find(
+    (t) => playheadSample >= t.start_sample && playheadSample < t.end_sample
+  );
+  // Derived target of the visible section; null = Tracks with no track
+  // under the playhead (nothing to edit).
+  const target: ChainTarget | null =
+    section === "master"
+      ? { kind: "master" }
+      : section === "layers"
+        ? layer
+          ? { kind: "layer", id: layer.id }
+          : null
+        : currentTrack
+          ? { kind: "track", id: currentTrack.id }
+          : null;
+  const chain =
+    section === "master"
+      ? view.mastering_chain
+      : section === "layers"
+        ? layer?.inserts ?? []
+        : currentTrack?.inserts ?? [];
   const query = filter.trim().toLowerCase();
+
+  const chainLen = target ? chainKey(chain, target) : "none";
+  useEffect(() => {
+    if (!target || chain.length === 0) {
+      setLatency(0);
+      return;
+    }
+    const t = target;
+    const refresh = () => api.chainLatency(t).then(setLatency).catch(() => {});
+    refresh();
+    const timer = setInterval(refresh, 3000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chainLen]);
+
 
   const togglePresets = () => {
     const opening = !presetsOpen;
@@ -95,9 +140,9 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
 
   const savePreset = () => {
     const name = presetName.trim();
-    if (!name || chain.length === 0) return;
+    if (!name || chain.length === 0 || !target) return;
     api
-      .saveChainPreset(name)
+      .saveChainPreset(target, name)
       .then((list) => {
         setPresets(list);
         setPresetName("");
@@ -172,7 +217,7 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
     if (g.started) {
       const over = insertionAt(e.clientY, g.from);
       const to = over > g.from ? over - 1 : over;
-      if (to !== g.from) run(() => api.moveMasteringPlugin(g.id, to - g.from));
+      if (to !== g.from) run(() => api.moveChainPlugin(g.id, to - g.from));
     } else if (g.clickedName) {
       api.openPluginEditor(g.id).catch((err) => onError(String(err)));
     }
@@ -219,7 +264,7 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
   return (
     <aside className="mastering-panel">
       <div className="track-panel-head">
-        <span className="label">Mastering</span>
+        <span className="label">Chains</span>
         <div className="strip-head-actions">
           <button
             className={`disc-sep-btn ${presetsOpen ? "active" : ""}`}
@@ -232,13 +277,73 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
             <button
               className="disc-sep-btn reload-btn"
               title="Re-instantiate every plugin with its current settings"
-              onClick={() => run(() => api.reloadMasteringChain())}
+              onClick={() => run(() => api.reloadChains())}
             >
               ⟳
             </button>
           )}
         </div>
       </div>
+
+      <div className="chain-tabs">
+        {(
+          [
+            ["master", "Master", view.mastering_chain.length > 0],
+            ["layers", "Layers", view.layers.some((l) => l.inserts.length > 0)],
+            ["tracks", "Tracks", view.tracks.some((t) => t.inserts.length > 0)],
+          ] as [Section, string, boolean][]
+        ).map(([key, label, hasChain]) => (
+          <button
+            key={key}
+            className={`chain-tab ${section === key ? "active" : ""}`}
+            onClick={() => setSection(key)}
+          >
+            {label}
+            {hasChain && <span className="chain-dot" />}
+          </button>
+        ))}
+      </div>
+
+      {section === "layers" && (
+        <div className="target-row">
+          {view.layers.length > 1 ? (
+            <select
+              className="target-select"
+              value={layer?.id ?? ""}
+              onChange={(e) => setLayerSel(Number(e.target.value))}
+              title="Which layer's chain this panel edits"
+            >
+              {view.layers.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.inserts.length > 0 ? "● " : ""}
+                  {l.name}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <div className="target-label">{layer?.name ?? "No layer"}</div>
+          )}
+        </div>
+      )}
+
+      {section === "tracks" && (
+        <div className="target-row">
+          <div
+            className="target-label"
+            title="The Tracks section follows the track under the playhead"
+          >
+            {currentTrack ? (
+              <>
+                {currentTrack.inserts.length > 0 ? "● " : ""}
+                {String(currentTrack.number).padStart(2, "0")} —{" "}
+                {currentTrack.title}
+              </>
+            ) : (
+              "No track at the playhead"
+            )}
+          </div>
+        </div>
+      )}
 
       {presetsOpen && (
         <div className="presets-menu">
@@ -256,7 +361,7 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
                     className="preset-load"
                     onClick={() => {
                       setPresetsOpen(false);
-                      run(() => api.loadChainPreset(p.name));
+                      if (target) run(() => api.loadChainPreset(target, p.name));
                     }}
                   >
                     <span className="picker-name">{p.name}</span>
@@ -305,6 +410,16 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
         </div>
       )}
 
+      {!target && (
+        <div className="strip-slots">
+          <div className="hint">
+            Start playback or move the playhead inside a track to edit its
+            chain.
+          </div>
+        </div>
+      )}
+
+      {target && (
       <div className="strip-slots" ref={slotsRef}>
         {chain.map((p, i) => (
           <div
@@ -340,14 +455,14 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
               <button
                 className={`layer-mute ${p.bypass ? "on" : ""}`}
                 title={p.bypass ? "Re-enable" : "Bypass"}
-                onClick={() => run(() => api.setMasteringBypass(p.id, !p.bypass))}
+                onClick={() => run(() => api.setChainBypass(p.id, !p.bypass))}
               >
                 B
               </button>
               <button
                 className="del strip-del"
                 title="Remove"
-                onClick={() => run(() => api.removeMasteringPlugin(p.id))}
+                onClick={() => run(() => api.removeChainPlugin(p.id))}
               >
                 ✕
               </button>
@@ -449,6 +564,8 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
           </div>
         )}
       </div>
+
+      )}
 
       {drag && (
         <div
