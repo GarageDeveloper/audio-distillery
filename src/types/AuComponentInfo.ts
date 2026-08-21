@@ -7,4 +7,12 @@ export type AuComponentInfo = {
 /**
  * Stable identifier "type:subtype:manufacturer" (fourcc strings).
  */
-id: string, name: string, };
+id: string, 
+/**
+ * Plugin display name (without the manufacturer prefix).
+ */
+name: string, 
+/**
+ * Manufacturer display name ("Apple", "iZotope, Inc.", …).
+ */
+manufacturer: string, };

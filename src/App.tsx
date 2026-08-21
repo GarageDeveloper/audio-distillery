@@ -14,7 +14,7 @@ import { TrackList } from "./components/TrackList";
 import { ExportDialog } from "./components/ExportDialog";
 import { AlbumMetaForm } from "./components/AlbumMetaForm";
 import { Backdrop } from "./components/Backdrop";
-import { MasteringDialog } from "./components/MasteringDialog";
+import { MasteringPanel } from "./components/MasteringPanel";
 import { EmptyState } from "./components/EmptyState";
 import { StatusBar } from "./components/StatusBar";
 import { usePlayback } from "./hooks/usePlayback";
@@ -37,7 +37,12 @@ export default function App() {
   const [panelOpen, setPanelOpen] = useState(true);
   const [exportOpen, setExportOpen] = useState(false);
   const [albumOpen, setAlbumOpen] = useState(false);
-  const [masteringOpen, setMasteringOpen] = useState(false);
+  const [masteringOpen, setMasteringOpen] = useState(
+    () => localStorage.getItem("still-mastering-open") === "1"
+  );
+  useEffect(() => {
+    localStorage.setItem("still-mastering-open", masteringOpen ? "1" : "0");
+  }, [masteringOpen]);
   const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null);
   const [proposals, setProposals] = useState<RegionSpan[] | null>(null);
   const [dropChoice, setDropChoice] = useState<string[] | null>(null);
@@ -435,7 +440,7 @@ export default function App() {
         onDetectSilences={() => void detectSilences()}
         onExport={() => setExportOpen(true)}
         onAlbum={() => setAlbumOpen(true)}
-        onMastering={() => setMasteringOpen(true)}
+        onMastering={() => setMasteringOpen((o) => !o)}
         onTogglePanel={() => setPanelOpen((p) => !p)}
         onToggleSnap={() => view && void apply(() => api.setSnapToZero(!view.snap_to_zero))}
       />
@@ -626,6 +631,10 @@ export default function App() {
             }
           />
         )}
+
+        {view && masteringOpen && (
+          <MasteringPanel view={view} onError={showError} onViewChange={setView} />
+        )}
       </div>
 
       <StatusBar view={view} />
@@ -634,15 +643,6 @@ export default function App() {
         <div className="toast toast-error" onClick={() => setError(null)}>
           {error}
         </div>
-      )}
-
-      {masteringOpen && view && (
-        <MasteringDialog
-          view={view}
-          onClose={() => setMasteringOpen(false)}
-          onError={showError}
-          onViewChange={setView}
-        />
       )}
 
       {albumOpen && view && (

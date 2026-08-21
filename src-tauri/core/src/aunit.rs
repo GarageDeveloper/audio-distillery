@@ -17,7 +17,10 @@ use ts_rs::TS;
 pub struct AuComponentInfo {
     /// Stable identifier "type:subtype:manufacturer" (fourcc strings).
     pub id: String,
+    /// Plugin display name (without the manufacturer prefix).
     pub name: String,
+    /// Manufacturer display name ("Apple", "iZotope, Inc.", …).
+    pub manufacturer: String,
 }
 
 #[cfg(target_os = "macos")]
@@ -114,6 +117,12 @@ mod macos {
                     && AudioComponentCopyName(comp, &mut name as *mut _ as *mut _) == 0
                     && !name.is_null()
                 {
+                    // AudioComponentCopyName yields "Manufacturer: Plugin".
+                    let full_name = cfstring_to_string(name);
+                    let (manufacturer, short) = match full_name.split_once(": ") {
+                        Some((m, p)) => (m.to_string(), p.to_string()),
+                        None => (String::new(), full_name),
+                    };
                     out.push(AuComponentInfo {
                         id: format!(
                             "{}:{}:{}",
@@ -121,7 +130,8 @@ mod macos {
                             fourcc_str(full.componentSubType),
                             fourcc_str(full.componentManufacturer)
                         ),
-                        name: cfstring_to_string(name),
+                        name: short,
+                        manufacturer,
                     });
                     CFRelease(name as *const _);
                 }

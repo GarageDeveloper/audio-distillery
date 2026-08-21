@@ -195,9 +195,9 @@ export function Toolbar(p: Props) {
             <button
               className={`btn ${p.view.mastering_chain.length > 0 ? "active" : ""}`}
               onClick={p.onMastering}
-              title="Mastering chain (AU plugins on the master bus, live)"
+              title="Show / hide the mastering chain panel (AU plugins on the master bus, live)"
             >
-              Mastering…
+              Mastering
             </button>
             <button
               className="btn btn-primary"
