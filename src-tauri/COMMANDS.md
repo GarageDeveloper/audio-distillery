@@ -152,12 +152,16 @@ stored outside any project, one JSON per preset in
 first, so what you hear is what gets saved.
 
 The chain lives on the master bus of the realtime engine (after the layer
-sum) and processes playback live. Structural changes (add/remove/reorder)
-first snapshot the live plugin states, then rebuild the chain, so knob
-tweaks survive. `save_project` snapshots the states into the `.still`
-(`kAudioUnitProperty_ClassInfo` binary plist, base64) and loading a project
-re-instantiates the chain with them. Export does NOT render through the
-chain yet (phase C).
+sum) and processes playback live, and export renders through it. Both
+plugin formats ride the same `component` string: "aufx:xxxx:yyyy" (AU) or
+"vst3:<32 hex class id>" (VST3) — every chain command is format-agnostic.
+Structural changes (add/remove/reorder) first snapshot the live plugin
+states, then rebuild the chain, so knob tweaks survive. `save_project`
+snapshots the states into the `.still` as an opaque base64 blob (AU:
+ClassInfo binary plist; VST3: "SV31" container packing the component +
+controller chunks) and loading a project re-instantiates the chain with
+them. `open_plugin_editor` opens the native editor window of either
+format (AU CocoaUI/generic view; VST3 IPlugView).
 
 ## Playback
 
