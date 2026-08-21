@@ -37,8 +37,8 @@ pub use chain_presets::{ChainPreset, ChainPresetInfo};
 pub use plugins::{create_plugin, list_plugins, PluginFormat, PluginInfo};
 pub use engine::{LayerPlay, MasterPluginSpec, PlaybackState, PlayerHandle, VolumeAutomation};
 pub use project::{
-    db_to_linear, read_project, sanitize_regions, save_project, ExportConfig, ExportFormat,
-    Layer, LayerView, MasteringPluginCfg, MasteringPluginView, Project, ProjectState,
-    ProjectView, RegionEdge, RegionSpan, SourceRef, TrackInfo,
+    db_to_linear, read_project, sanitize_regions, save_project, ChainTarget, ExportConfig,
+    ExportFormat, Layer, LayerView, MasteringPluginCfg, MasteringPluginView, Project,
+    ProjectState, ProjectView, RegionEdge, RegionSpan, SourceRef, TrackInfo,
 };
 pub use silence::{detect_track_regions, SilenceParams};

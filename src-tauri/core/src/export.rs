@@ -772,6 +772,7 @@ mod tests {
             mute_overrides: HashMap::new(),
             solo_overrides: HashMap::new(),
             layer_volumes: vec![1.0],
+            inserts: Vec::new(),
         }
     }
 
