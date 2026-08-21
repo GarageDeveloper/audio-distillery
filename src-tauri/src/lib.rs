@@ -5,10 +5,11 @@ mod state;
 
 use state::AppState;
 
-/// Hidden mode: `AudioDistillery --vst3-scan <cache.json>` runs the VST3
-/// scan (which loads every plugin dylib) and exits WITHOUT running static
-/// destructors — plugin dylibs are known to SIGSEGV at normal exit. The app
-/// spawns this on itself so its own process never loads unused plugins.
+/// Hidden mode: `AudioDistillery --vst3-scan <cache.json> [extra dirs…]`
+/// runs the VST3 scan (which loads every plugin dylib) and exits WITHOUT
+/// running static destructors — plugin dylibs are known to SIGSEGV at
+/// normal exit. The app spawns this on itself so its own process never
+/// loads unused plugins.
 fn maybe_run_vst3_scan() {
     let mut args = std::env::args().skip(1);
     if args.next().as_deref() != Some("--vst3-scan") {
@@ -16,31 +17,59 @@ fn maybe_run_vst3_scan() {
     }
     if let Some(cache) = args.next() {
         still_core::vst3::set_cache_path(cache.into());
+        still_core::vst3::set_extra_dirs(args.map(Into::into).collect());
         #[cfg(target_os = "macos")]
         still_core::vst3::full_scan_blocking();
     }
     unsafe { libc::_exit(0) }
 }
 
+/// Persisted list of user-configured extra VST3 scan directories.
+pub(crate) fn scan_paths_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    use tauri::Manager;
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|d| d.join("vst3_scan_paths.json"))
+}
+
+pub(crate) fn load_scan_paths(app: &tauri::AppHandle) -> Vec<String> {
+    scan_paths_file(app)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// Run the scan subprocess (which _exits before plugin static destructors
+/// can crash) and reload the in-process registry from the refreshed cache.
+pub(crate) fn run_scan_subprocess(cache: &std::path::Path, extra: &[String]) {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let _ = std::process::Command::new(exe)
+        .arg("--vst3-scan")
+        .arg(cache)
+        .args(extra)
+        .status();
+    still_core::vst3::reload_from_cache();
+}
+
 /// Refresh the VST3 scan cache in a throwaway subprocess when bundles
 /// changed on disk. Runs in the background at startup; the picker simply
 /// shows the current cache until the refresh lands.
-fn spawn_vst3_rescan_if_stale(cache: std::path::PathBuf) {
+fn spawn_vst3_rescan_if_stale(app: &tauri::AppHandle, cache: std::path::PathBuf) {
     still_core::vst3::set_cache_path(cache.clone());
+    let extra = load_scan_paths(app);
+    still_core::vst3::set_extra_dirs(extra.iter().map(Into::into).collect());
     #[cfg(target_os = "macos")]
     std::thread::spawn(move || {
         if !still_core::vst3::cache_is_stale() {
             return;
         }
-        let Ok(exe) = std::env::current_exe() else {
-            return;
-        };
-        let _ = std::process::Command::new(exe)
-            .arg("--vst3-scan")
-            .arg(&cache)
-            .status();
-        still_core::vst3::reload_from_cache();
+        run_scan_subprocess(&cache, &extra);
     });
+    #[cfg(not(target_os = "macos"))]
+    let _ = extra;
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -82,6 +111,8 @@ pub fn run() {
             commands::set_album_meta,
             commands::get_artwork_preview,
             commands::list_plugins,
+            commands::get_vst3_scan_paths,
+            commands::set_vst3_scan_paths,
             commands::add_chain_plugin,
             commands::remove_chain_plugin,
             commands::move_chain_plugin,
@@ -107,7 +138,7 @@ pub fn run() {
         .setup(|app| {
             use tauri::Manager;
             if let Ok(dir) = app.path().app_config_dir() {
-                spawn_vst3_rescan_if_stale(dir.join("vst3_scan_cache.json"));
+                spawn_vst3_rescan_if_stale(app.app_handle(), dir.join("vst3_scan_cache.json"));
             }
             Ok(())
         })

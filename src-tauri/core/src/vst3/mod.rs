@@ -53,7 +53,7 @@ pub use plugin::{Vst3Editor, Vst3Plugin};
 #[cfg(target_os = "macos")]
 pub use scan::{
     cache_is_stale, ensure_scanned, full_scan_blocking, list_effects, reload_from_cache,
-    scan_dirs, set_cache_path,
+    scan_dirs, set_cache_path, set_extra_dirs,
 };
 
 #[cfg(not(target_os = "macos"))]
@@ -62,6 +62,8 @@ pub fn list_effects() -> Vec<crate::plugins::PluginInfo> {
 }
 #[cfg(not(target_os = "macos"))]
 pub fn set_cache_path(_path: std::path::PathBuf) {}
+#[cfg(not(target_os = "macos"))]
+pub fn set_extra_dirs(_dirs: Vec<std::path::PathBuf>) {}
 #[cfg(not(target_os = "macos"))]
 pub fn cache_is_stale() -> bool {
     false

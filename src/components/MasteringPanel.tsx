@@ -4,6 +4,7 @@ import type { PluginInfo } from "../types/PluginInfo";
 import type { ChainPresetInfo } from "../types/ChainPresetInfo";
 import type { ChainTarget } from "../types/ChainTarget";
 import { api } from "../api";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
 function chainKey(chain: { id: number }[], target: ChainTarget): string {
   return `${targetKey(target)}|${chain.map((p) => p.id).join(",")}`;
@@ -55,6 +56,9 @@ export function MasteringPanel({ view, playheadSample, onError, onViewChange }: 
   const [presets, setPresets] = useState<ChainPresetInfo[]>([]);
   const [presetName, setPresetName] = useState("");
   const [latency, setLatency] = useState(0);
+  const [scanPathsOpen, setScanPathsOpen] = useState(false);
+  const [scanPaths, setScanPaths] = useState<string[]>([]);
+  const [rescanBusy, setRescanBusy] = useState(false);
   const [section, setSection] = useState<Section>(
     () => (localStorage.getItem(SECTION_KEY) as Section) || "master"
   );
@@ -107,6 +111,21 @@ export function MasteringPanel({ view, playheadSample, onError, onViewChange }: 
         : currentTrack
           ? { kind: "track", id: currentTrack.id }
           : null;
+  const openScanPaths = () => {
+    api.getVst3ScanPaths().then(setScanPaths).catch(() => setScanPaths([]));
+    setScanPathsOpen(true);
+  };
+
+  const applyScanPaths = (paths: string[]) => {
+    setScanPaths(paths);
+    setRescanBusy(true);
+    api
+      .setVst3ScanPaths(paths)
+      .then(setAvailable)
+      .catch((e) => onError(String(e)))
+      .finally(() => setRescanBusy(false));
+  };
+
   const chain =
     section === "master"
       ? view.mastering_chain
@@ -551,6 +570,15 @@ export function MasteringPanel({ view, playheadSample, onError, onViewChange }: 
               </div>
             )}
 
+            <div className="picker-foot">
+              <button
+                className="picker-folders"
+                title="Extra folders scanned for VST3 plugins (beyond the standard locations)"
+                onClick={openScanPaths}
+              >
+                VST3 folders…
+              </button>
+            </div>
             <button
               className="btn picker-cancel"
               onClick={() => {
@@ -573,6 +601,53 @@ export function MasteringPanel({ view, playheadSample, onError, onViewChange }: 
           style={{ left: drag.x - 90, top: drag.y - 14 }}
         >
           {chain[drag.from]?.name}
+        </div>
+      )}
+
+      {scanPathsOpen && (
+        <div className="presets-menu scan-paths">
+          <div className="picker-section">Extra VST3 folders</div>
+          {scanPaths.length === 0 ? (
+            <div className="hint">
+              Only the standard locations are scanned. Add a folder to scan
+              plugins kept elsewhere.
+            </div>
+          ) : (
+            <div className="preset-list">
+              {scanPaths.map((p) => (
+                <div key={p} className="preset-item" title={p}>
+                  <span className="scan-path">{p}</span>
+                  <button
+                    className="del preset-del"
+                    title="Remove this folder"
+                    onClick={() => applyScanPaths(scanPaths.filter((x) => x !== p))}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="preset-save">
+            <button
+              className="btn"
+              disabled={rescanBusy}
+              onClick={() => {
+                openDialog({ directory: true, multiple: false })
+                  .then((dir) => {
+                    if (typeof dir === "string" && !scanPaths.includes(dir)) {
+                      applyScanPaths([...scanPaths, dir]);
+                    }
+                  })
+                  .catch(() => {});
+              }}
+            >
+              {rescanBusy ? "Scanning…" : "+ Add folder"}
+            </button>
+            <button className="btn" onClick={() => setScanPathsOpen(false)}>
+              Done
+            </button>
+          </div>
         </div>
       )}
 
