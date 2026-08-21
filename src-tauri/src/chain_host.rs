@@ -60,14 +60,13 @@ impl ChainHost {
     ) -> Result<(), String> {
         let component = component.to_string();
         let slot: Slot = on_main(app, move || -> Result<Slot, String> {
-            let mut p =
-                still_core::aunit::AuPlugin::new(&component, sample_rate, channels, playing)
-                    .map_err(|e| e.to_string())?;
+            let mut p = still_core::create_plugin(&component, sample_rate, channels, playing)
+                .map_err(|e| e.to_string())?;
             if let Some(s) = &state {
                 let _ = p.restore_state(s);
             }
             p.set_bypassed(bypass);
-            Ok(Arc::new(Mutex::new(Box::new(p) as Box<dyn BlockProcessor>)))
+            Ok(Arc::new(Mutex::new(p)))
         })??;
         self.slots.lock().unwrap().insert(id, slot);
         Ok(())
