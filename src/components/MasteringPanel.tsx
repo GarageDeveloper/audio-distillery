@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ProjectView } from "../types/ProjectView";
 import type { AuComponentInfo } from "../types/AuComponentInfo";
 import { api } from "../api";
@@ -35,6 +35,10 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
   const [filter, setFilter] = useState("");
   const [maker, setMaker] = useState<string | null>(null);
   const [recent, setRecent] = useState<string[]>(loadRecent());
+  // Pointer-based slot dragging (HTML5 DnD is owned by Tauri's file drop).
+  const slotsRef = useRef<HTMLDivElement | null>(null);
+  const suppressClick = useRef(false);
+  const [drag, setDrag] = useState<{ from: number; over: number } | null>(null);
 
   useEffect(() => {
     api.listAudioUnits().then(setAvailable).catch((e) => onError(String(e)));
@@ -55,6 +59,50 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
 
   const chain = view.mastering_chain;
   const query = filter.trim().toLowerCase();
+
+  const startDrag = (e: React.PointerEvent, from: number, id: number) => {
+    if (e.button !== 0) return;
+    if ((e.target as HTMLElement).closest(".strip-actions")) return;
+    const startY = e.clientY;
+    let started = false;
+    const insertionAt = (y: number) => {
+      const els = slotsRef.current?.querySelectorAll<HTMLElement>(".strip-slot");
+      if (!els) return from;
+      let over = els.length;
+      for (let i = 0; i < els.length; i++) {
+        const r = els[i].getBoundingClientRect();
+        if (y < r.top + r.height / 2) {
+          over = i;
+          break;
+        }
+      }
+      return over;
+    };
+    const onMove = (ev: PointerEvent) => {
+      if (!started) {
+        if (Math.abs(ev.clientY - startY) < 5) return;
+        started = true;
+        suppressClick.current = true;
+      }
+      setDrag({ from, over: insertionAt(ev.clientY) });
+    };
+    const onUp = (ev: PointerEvent) => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      setDrag(null);
+      if (started && ev.type !== "pointercancel") {
+        const over = insertionAt(ev.clientY);
+        const to = over > from ? over - 1 : over;
+        if (to !== from) run(() => api.moveMasteringPlugin(id, to - from));
+      }
+      // Let the in-flight click event fire (and be swallowed) first.
+      setTimeout(() => (suppressClick.current = false), 0);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  };
 
   const makers = useMemo(() => {
     const m = new Map<string, number>();
@@ -99,33 +147,32 @@ export function MasteringPanel({ view, onError, onViewChange }: Props) {
         )}
       </div>
 
-      <div className="strip-slots">
+      <div className="strip-slots" ref={slotsRef}>
         {chain.map((p, i) => (
-          <div key={p.id} className={`strip-slot ${p.bypass ? "bypassed" : ""}`}>
+          <div
+            key={p.id}
+            className={[
+              "strip-slot",
+              p.bypass ? "bypassed" : "",
+              drag?.from === i ? "dragging" : "",
+              drag && drag.over === i && drag.from !== i ? "drop-before" : "",
+              drag && drag.over === chain.length && i === chain.length - 1 && drag.from !== i
+                ? "drop-after"
+                : "",
+            ].join(" ")}
+            onPointerDown={(e) => startDrag(e, i, p.id)}
+          >
             <button
               className="strip-name"
-              title={`${p.name} — click to open the editor`}
-              onClick={() => api.openPluginEditor(p.id).catch((e) => onError(String(e)))}
+              title={`${p.name} — click to open the editor, drag to reorder`}
+              onClick={() => {
+                if (suppressClick.current) return;
+                api.openPluginEditor(p.id).catch((e) => onError(String(e)));
+              }}
             >
               {p.name}
             </button>
             <div className="strip-actions">
-              <button
-                className="disc-sep-btn"
-                disabled={i === 0}
-                title="Move earlier"
-                onClick={() => run(() => api.moveMasteringPlugin(p.id, -1))}
-              >
-                ↑
-              </button>
-              <button
-                className="disc-sep-btn"
-                disabled={i === chain.length - 1}
-                title="Move later"
-                onClick={() => run(() => api.moveMasteringPlugin(p.id, 1))}
-              >
-                ↓
-              </button>
               <button
                 className={`layer-mute ${p.bypass ? "on" : ""}`}
                 title={p.bypass ? "Re-enable" : "Bypass"}

@@ -1022,3 +1022,9 @@ kbd {
 }
 .picker-list .hint { padding: 6px 8px; font-size: 12px; color: var(--text-3); }
 .picker-cancel { align-self: flex-end; height: 24px; padding: 0 10px; font-size: 12px; }
+
+/* Slot drag-reorder */
+.strip-slot { cursor: grab; }
+.strip-slot.dragging { opacity: .35; cursor: grabbing; }
+.strip-slot.drop-before { box-shadow: 0 -4px 0 -2px var(--copper); }
+.strip-slot.drop-after { box-shadow: 0 4px 0 -2px var(--copper); }
