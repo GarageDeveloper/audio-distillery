@@ -699,7 +699,7 @@ mod tests {
         let tmp = tempfile::tempdir().ok()?;
         let link = tmp.path().join(bundle.file_name()?);
         std::os::unix::fs::symlink(&bundle, &link).ok()?;
-        super::super::scan::scan_dirs_for_tests(&[tmp.path().to_path_buf()]);
+        super::super::scan::scan_dirs(&[tmp.path().to_path_buf()]);
         let id = super::super::scan::list_effects()
             .into_iter()
             .find(|p| p.name.contains("Equalizer") || p.name.contains("EQ"))?

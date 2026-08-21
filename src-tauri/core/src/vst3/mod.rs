@@ -53,7 +53,7 @@ pub use plugin::{Vst3Editor, Vst3Plugin};
 #[cfg(target_os = "macos")]
 pub use scan::{
     cache_is_stale, ensure_scanned, full_scan_blocking, list_effects, reload_from_cache,
-    set_cache_path,
+    scan_dirs, set_cache_path,
 };
 
 #[cfg(not(target_os = "macos"))]

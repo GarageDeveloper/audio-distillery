@@ -333,10 +333,9 @@ pub fn full_scan_blocking() {
 }
 
 /// Scan ONLY the given directories, loading their bundles in-process.
-/// Test helper: lets a test register a single real bundle without
-/// touching the machine-wide plugin folders.
-#[cfg(test)]
-pub(crate) fn scan_dirs_for_tests(dirs: &[PathBuf]) {
+/// Meant for tests (register one real bundle without touching the
+/// machine-wide folders) and future user-defined scan paths.
+pub fn scan_dirs(dirs: &[PathBuf]) {
     let mut guard = STATE.lock().unwrap();
     let state = guard.get_or_insert_with(Default::default);
     rescan(state, dirs);
