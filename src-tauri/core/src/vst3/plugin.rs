@@ -100,6 +100,18 @@ fn cid_to_tuid(cid: &[u8; 16]) -> TUID {
     std::array::from_fn(|i| cid[i] as std::ffi::c_char)
 }
 
+/// Concurrent instantiation/disposal from the same module SIGSEGVs with
+/// real plugins (observed: two Neutron instances racing in createInstance).
+/// One process-wide lifecycle lock serializes new() and drop(); processing
+/// stays fully parallel.
+static LIFECYCLE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn lifecycle_guard() -> std::sync::MutexGuard<'static, ()> {
+    LIFECYCLE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 impl Vst3Plugin {
     pub fn new(
         component_id: &str,
@@ -117,6 +129,7 @@ impl Vst3Plugin {
                     .into(),
             )
         })?;
+        let _lifecycle = lifecycle_guard();
         let module = super::module::module_for(&bundle)?;
         let factory = module.factory();
 
@@ -321,6 +334,65 @@ impl Vst3Plugin {
         self.out_ptrs = self.out_bufs.iter_mut().map(|b| b.as_mut_ptr()).collect();
     }
 
+    /// Capture component + controller states into one packed blob.
+    pub fn get_state(&self) -> Option<Vec<u8>> {
+        use vst3::Steinberg::IBStream;
+        let comp = {
+            let stream = ComWrapper::new(super::stream::MemoryStream::new());
+            let ptr = stream.to_com_ptr::<IBStream>()?;
+            if unsafe { self.component.getState(ptr.as_ptr()) } != kResultOk {
+                return None;
+            }
+            drop(ptr);
+            stream.take_data()
+        };
+        let ctrl = self
+            .controller
+            .as_ref()
+            .and_then(|c| {
+                let stream = ComWrapper::new(super::stream::MemoryStream::new());
+                let ptr = stream.to_com_ptr::<IBStream>()?;
+                (unsafe { c.getState(ptr.as_ptr()) } == kResultOk).then(|| {
+                    drop(ptr);
+                    stream.take_data()
+                })
+            })
+            .unwrap_or_default();
+        Some(super::stream::pack_state(&comp, &ctrl))
+    }
+
+    /// Restore a packed blob. VST3 protocol: component.setState, THEN
+    /// controller.setComponentState (with the COMPONENT chunk), then the
+    /// controller's own setState.
+    pub fn set_state(&mut self, blob: &[u8]) -> bool {
+        use vst3::Steinberg::IBStream;
+        let Some((comp, ctrl)) = super::stream::unpack_state(blob) else {
+            return false;
+        };
+        let ok = unsafe {
+            let stream = ComWrapper::new(super::stream::MemoryStream::with_data(&comp));
+            let Some(ptr) = stream.to_com_ptr::<IBStream>() else {
+                return false;
+            };
+            self.component.setState(ptr.as_ptr()) == kResultOk
+        };
+        if let Some(c) = &self.controller {
+            unsafe {
+                let stream = ComWrapper::new(super::stream::MemoryStream::with_data(&comp));
+                if let Some(ptr) = stream.to_com_ptr::<IBStream>() {
+                    c.setComponentState(ptr.as_ptr());
+                }
+                if !ctrl.is_empty() {
+                    let stream = ComWrapper::new(super::stream::MemoryStream::with_data(&ctrl));
+                    if let Some(ptr) = stream.to_com_ptr::<IBStream>() {
+                        c.setState(ptr.as_ptr());
+                    }
+                }
+            }
+        }
+        ok
+    }
+
     /// React to restartComponent flags from the controller thread.
     fn drain_restart_flags(&mut self) {
         let flags = self.restart_flags.swap(0, Ordering::AcqRel);
@@ -439,10 +511,19 @@ impl BlockProcessor for Vst3Plugin {
     fn set_bypassed(&mut self, bypassed: bool) {
         self.bypass = bypassed;
     }
+
+    fn save_state(&self) -> Option<Vec<u8>> {
+        self.get_state()
+    }
+
+    fn restore_state(&mut self, state: &[u8]) -> bool {
+        self.set_state(state)
+    }
 }
 
 impl Drop for Vst3Plugin {
     fn drop(&mut self) {
+        let _lifecycle = lifecycle_guard();
         unsafe {
             if self.processing {
                 self.processor.setProcessing(0);
@@ -546,5 +627,28 @@ mod tests {
 
         // Ordered drop must not hang or crash.
         drop(p);
+    }
+
+    /// State roundtrip across two instances (graceful skip without Neutron).
+    #[test]
+    fn neutron_vst3_state_roundtrip() {
+        let Some((_tmp, id)) = setup_neutron() else {
+            eprintln!("skipped: Neutron 5 Equalizer VST3 not installed");
+            return;
+        };
+        let playing = Arc::new(AtomicBool::new(true));
+        let p1 = Vst3Plugin::new(&id, 48000, 2, playing.clone()).expect("instantiate");
+        let blob = p1.get_state().expect("get_state");
+        assert!(super::super::stream::unpack_state(&blob).is_some());
+        drop(p1);
+
+        let mut p2 = Vst3Plugin::new(&id, 48000, 2, playing).expect("instantiate 2");
+        assert!(p2.set_state(&blob), "set_state failed");
+        // Still processes cleanly after a restore.
+        let mut buf = vec![0.1f32; 512 * 2];
+        p2.process(&mut buf, 2, 48000);
+        assert!(buf.iter().all(|s| s.is_finite()));
+        // Garbage must be rejected without side effects.
+        assert!(!p2.set_state(b"not a packed state"));
     }
 }
