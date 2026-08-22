@@ -5,8 +5,11 @@
 #   - manual "Run workflow" -> smoke by default; tick "all_platforms" for full
 #
 # On tag builds the macOS artifacts are signed with the Developer ID and
-# notarized via the App Store Connect API key (repo secrets installed by the
-# Apple-codesigning setup script). The per-push safety net is ci.yml.
+# notarized via the App Store Connect API key. Required repository secrets:
+# APPLE_CERTIFICATE (base64 .p12), APPLE_CERTIFICATE_PASSWORD,
+# APPLE_SIGNING_IDENTITY, APPLE_TEAM_ID, APPLE_API_ISSUER, APPLE_API_KEY,
+# APPLE_API_KEY_P8_BASE64. Forks without these secrets still get untagged
+# smoke builds — signing steps only run on tags. Per-push safety net: ci.yml.
 #
 # ffmpeg is fetched as a static sidecar by scripts/fetch-ffmpeg.mjs, which
 # runs from tauri.conf.json's beforeBuildCommand — nothing CI-specific.

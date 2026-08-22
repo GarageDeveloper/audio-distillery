@@ -39,7 +39,7 @@ npm run tauri build        # produce installers
 
 Architecture, command contract and design system:
 
-- `SPEC.md` — product spec (the reference).
+- `ARCHITECTURE.md` — the architecture reference (signal flow, the two rules, plugin hosting).
 - `CLAUDE.md` — the two non-negotiable rules and their decisive tests.
 - `src-tauri/COMMANDS.md` — frontend/backend contract.
 - `design/DESIGN.md` — design system ("Alambic" direction).
@@ -61,3 +61,7 @@ AudioDistillery is released under the [MIT License](LICENSE).
   [ffmpeg.martin-riedl.de](https://ffmpeg.martin-riedl.de) under the GPL;
   its sources are available from that site. FFmpeg is a trademark of
   Fabrice Bellard.
+- Audio decoding uses [Symphonia](https://github.com/pdeljanov/Symphonia)
+  (MPL-2.0, file-level copyleft — consumed unmodified as a registry
+  dependency). All other Rust and npm dependencies are under permissive
+  licenses (MIT / Apache-2.0 / ISC); see each package's metadata.

@@ -1,4 +1,4 @@
-// Pure screen ↔ time conversion helpers, for DISPLAY purposes only (SPEC §3:
+// Pure screen ↔ time conversion helpers, for DISPLAY purposes only (ARCHITECTURE.md §3:
 // any authoritative position decision belongs to the backend).
 
 export interface Viewport {

@@ -27,7 +27,7 @@ pub struct LayerMix {
 }
 
 /// One file to produce. `out_path` is already unique (collisions resolved by
-/// suffixing — existing files are never overwritten, SPEC §3 bis).
+/// suffixing — existing files are never overwritten, ARCHITECTURE.md §3 bis).
 #[derive(Debug, Clone)]
 pub struct ExportJob {
     pub number: u32,

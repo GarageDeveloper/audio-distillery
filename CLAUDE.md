@@ -2,11 +2,11 @@
 
 Desktop app (Tauri 2 + Rust + React/TS) that splits long audio recordings into
 tracks via markers on a waveform, then exports them. Full requirements live in
-`SPEC.md` — read it before large changes. UI language: **English** (l10n later).
+`ARCHITECTURE.md` — read it before large changes. UI language: **English** (l10n later).
 
 ## Two non-negotiable rules
 
-### 1. Strict frontend/backend separation (SPEC §3)
+### 1. Strict frontend/backend separation (ARCHITECTURE.md §3)
 The frontend is a display terminal, nothing more. It never decodes audio,
 never computes peaks, never validates marker positions, never owns canonical
 state. It sends *intentions* via Tauri commands and displays what comes back
@@ -15,7 +15,7 @@ state. It sends *intentions* via Tauri commands and displays what comes back
 touching one line of backend code. If a feature breaks this test, it is in the
 wrong layer.
 
-### 2. Non-destructive editing (SPEC §3 bis)
+### 2. Non-destructive editing (ARCHITECTURE.md §3 bis)
 Source audio files are sacred: opened **read-only**, everywhere, always.
 Everything (markers, names, config) is a declarative recipe in the `.still`
 project file. Exports only ever create **new** files (name collisions get a
@@ -52,5 +52,5 @@ Keep that test passing forever.
   message (`StillError`).
 - Sample positions are `u64` samples at the source rate (TS: `number`).
 - Long operations emit progress events (`load:progress`, `export:progress`).
-- Phase 2 (metadata/lofty) and phase 3 (`ProcessingChain`) are anticipated in
-  SPEC §7 — don't implement early, don't block them architecturally.
+- Plugin hosting follows the hard-won rules in ARCHITECTURE.md §5 (main-thread
+  lifecycle, subprocess VST3 scanning, container views) — never regress them.

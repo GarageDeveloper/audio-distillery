@@ -346,7 +346,7 @@ fn split_indexed(title: &str) -> (&str, Option<u32>) {
     (title, None)
 }
 
-/// Canonical in-memory state: the single source of truth (SPEC §3).
+/// Canonical in-memory state: the single source of truth (ARCHITECTURE.md §3).
 pub struct ProjectState {
     pub project: Project,
     pub info: AudioInfo,

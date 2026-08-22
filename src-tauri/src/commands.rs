@@ -497,7 +497,7 @@ fn with_session<T>(
 }
 
 /// Apply optional zero-crossing snap to an edge position (backend decides,
-/// SPEC §3: the frontend never adjusts positions itself).
+/// ARCHITECTURE.md §3: the frontend never adjusts positions itself).
 fn snapped(s: &ProjectState, position: u64) -> u64 {
     if s.project.snap_to_zero {
         still_core::snap_to_zero_crossing(&s.info.clips, position, 50)
