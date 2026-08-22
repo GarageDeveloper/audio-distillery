@@ -5,6 +5,8 @@ import { api } from "../api";
 interface PlaybackDisplay {
   playing: boolean;
   positionSeconds: number;
+  /** Output-device failure reported by the engine (playback is silent). */
+  deviceError: string | null;
   /** Adopt a backend-returned state immediately (after toggle/seek). */
   adopt: (s: PlaybackState) => void;
 }
@@ -16,12 +18,14 @@ interface PlaybackDisplay {
 export function usePlayback(_sampleRate: number, active: boolean): PlaybackDisplay {
   const [playing, setPlaying] = useState(false);
   const [positionSeconds, setPositionSeconds] = useState(0);
+  const [deviceError, setDeviceError] = useState<string | null>(null);
   const base = useRef({ pos: 0, at: performance.now(), playing: false });
 
   const adopt = useCallback((s: PlaybackState) => {
     base.current = { pos: s.position_seconds, at: performance.now(), playing: s.playing };
     setPlaying(s.playing);
     setPositionSeconds(s.position_seconds);
+    setDeviceError(s.device_error);
   }, []);
 
   // Poll the authoritative state.
@@ -56,5 +60,5 @@ export function usePlayback(_sampleRate: number, active: boolean): PlaybackDispl
     return () => window.clearInterval(id);
   }, [active, playing]);
 
-  return { playing, positionSeconds, adopt };
+  return { playing, positionSeconds, deviceError, adopt };
 }

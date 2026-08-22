@@ -2,10 +2,11 @@ import type { ProjectView } from "../types/ProjectView";
 
 interface Props {
   view: ProjectView | null;
+  deviceError: string | null;
   onAbout: () => void;
 }
 
-export function StatusBar({ view, onAbout }: Props) {
+export function StatusBar({ view, deviceError, onAbout }: Props) {
   return (
     <div className="status-bar">
       <div className="hints">
@@ -36,6 +37,11 @@ export function StatusBar({ view, onAbout }: Props) {
       >
         AudioDistillery
       </button>
+      {deviceError && (
+        <span className="device-error" title={deviceError}>
+          Audio device error: {deviceError}
+        </span>
+      )}
       {view && (
         <span className="fileinfo">
           {view.audio.format} · {(view.audio.sample_rate / 1000).toLocaleString("en-US", { maximumFractionDigits: 1 })}{" "}

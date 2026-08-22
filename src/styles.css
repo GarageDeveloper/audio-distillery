@@ -1227,3 +1227,11 @@ button.wordmark:hover { background: var(--panel-2); }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   direction: rtl; text-align: left;
 }
+
+/* Output-device failure in the status bar */
+.device-error {
+  color: var(--err);
+  font-size: 11px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 40%;
+}
