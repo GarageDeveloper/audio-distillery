@@ -1207,3 +1207,23 @@ button.wordmark:hover { background: var(--panel-2); }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .strip-slots .hint { font-size: 12px; color: var(--text-3); line-height: 1.5; }
+
+/* VST3 scan-paths mini dialog */
+.picker-foot { display: flex; }
+.picker-folders {
+  font-size: 11px;
+  color: var(--text-3);
+  padding: 2px 4px;
+  border-radius: var(--r-s);
+}
+.picker-folders:hover { color: var(--copper); }
+.scan-paths { border-top: 1px solid var(--line-soft); }
+.scan-path {
+  flex: 1; min-width: 0;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-2);
+  padding: 4px 8px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  direction: rtl; text-align: left;
+}

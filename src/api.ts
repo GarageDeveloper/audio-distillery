@@ -82,6 +82,9 @@ export const api = {
     invoke<ProjectView>("set_album_meta", { meta }),
   getArtworkPreview: () => invoke<string | null>("get_artwork_preview"),
   listPlugins: () => invoke<PluginInfo[]>("list_plugins"),
+  getVst3ScanPaths: () => invoke<string[]>("get_vst3_scan_paths"),
+  setVst3ScanPaths: (paths: string[]) =>
+    invoke<PluginInfo[]>("set_vst3_scan_paths", { paths }),
   addChainPlugin: (target: ChainTarget, component: string, name: string) =>
     invoke<ProjectView>("add_chain_plugin", { target, component, name }),
   removeChainPlugin: (id: number) =>

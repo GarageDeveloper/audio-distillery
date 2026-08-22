@@ -136,7 +136,9 @@ always track order, regardless of finish order.
 
 | Command | Parameters | Returns | Errors |
 |---|---|---|---|
-| `list_plugins` | — | `PluginInfo[]` (installed AU 'aufx' + VST3 effects, `format` field; empty off-macOS; first call scans VST3 dirs, then disk-cached) | — |
+| `list_plugins` | — | `PluginInfo[]` (installed AU 'aufx' + VST3 effects, `format` field; empty off-macOS; VST3 entries come from the disk cache, refreshed by a background subprocess) | — |
+| `get_vst3_scan_paths` | — | `string[]` (user's extra VST3 folders, beyond the two standard locations) | — |
+| `set_vst3_scan_paths` | `paths: string[]` | `PluginInfo[]` (persists the list, rescans in the throwaway subprocess, returns the refreshed listing) | — |
 | `add_chain_plugin` | `target: ChainTarget`, `component: string`, `name: string` | `ProjectView` | target gone / plugin not installed / failed to instantiate |
 | `remove_chain_plugin` | `id: number` (global across every chain) | `ProjectView` | — |
 | `move_chain_plugin` | `id: number`, `delta: number` (within its own chain) | `ProjectView` | — |

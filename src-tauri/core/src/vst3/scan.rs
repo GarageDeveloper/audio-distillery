@@ -50,6 +50,8 @@ struct ScanCache {
 #[derive(Default)]
 struct ScanState {
     cache_path: Option<PathBuf>,
+    /// User-configured extra scan directories (beyond the standard two).
+    extra_dirs: Vec<PathBuf>,
     scanned: bool,
     bundles: Vec<ScannedBundle>,
     /// cid → bundle path, for every class of every format (not only Fx).
@@ -69,11 +71,25 @@ pub fn set_cache_path(path: PathBuf) {
     guard.get_or_insert_with(Default::default).cache_path = Some(path);
 }
 
+/// User-configured extra scan directories, added to the standard ones for
+/// every scan/staleness check. Set by the app layer (persisted there).
+pub fn set_extra_dirs(dirs: Vec<PathBuf>) {
+    let mut guard = STATE.lock().unwrap();
+    guard.get_or_insert_with(Default::default).extra_dirs = dirs;
+}
+
 fn default_dirs() -> Vec<PathBuf> {
     let mut dirs = vec![PathBuf::from("/Library/Audio/Plug-Ins/VST3")];
     if let Some(home) = std::env::var_os("HOME") {
         dirs.push(PathBuf::from(home).join("Library/Audio/Plug-Ins/VST3"));
     }
+    dirs
+}
+
+/// Standard directories + the user's extra ones.
+fn scan_roots(state: &ScanState) -> Vec<PathBuf> {
+    let mut dirs = default_dirs();
+    dirs.extend(state.extra_dirs.iter().cloned());
     dirs
 }
 
@@ -315,7 +331,7 @@ pub fn cache_is_stale() -> bool {
         .map(|b| (b.path, b.binary_mtime))
         .collect();
     let mut found = Vec::new();
-    for dir in default_dirs() {
+    for dir in scan_roots(state) {
         discover_bundles(&dir, &mut found);
     }
     found
@@ -329,7 +345,8 @@ pub fn cache_is_stale() -> bool {
 pub fn full_scan_blocking() {
     let mut guard = STATE.lock().unwrap();
     let state = guard.get_or_insert_with(Default::default);
-    rescan(state, &default_dirs());
+    let roots = scan_roots(state);
+    rescan(state, &roots);
 }
 
 /// Scan ONLY the given directories, loading their bundles in-process.

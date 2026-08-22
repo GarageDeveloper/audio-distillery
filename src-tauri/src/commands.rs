@@ -717,6 +717,40 @@ fn snapshot_chain_states(app: &AppHandle, state: &State<'_, AppState>, s: &mut P
     }
 }
 
+/// The user's extra VST3 scan directories (persisted app-side).
+#[tauri::command]
+pub fn get_vst3_scan_paths(app: AppHandle) -> CmdResult<Vec<String>> {
+    Ok(crate::load_scan_paths(&app))
+}
+
+/// Replace the extra VST3 scan directories, rescan (in the throwaway
+/// subprocess) and return the refreshed plugin list.
+#[tauri::command]
+pub async fn set_vst3_scan_paths(
+    app: AppHandle,
+    paths: Vec<String>,
+) -> CmdResult<Vec<PluginInfo>> {
+    use tauri::Manager;
+    let file = crate::scan_paths_file(&app).ok_or("no config directory")?;
+    if let Some(dir) = file.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    std::fs::write(&file, serde_json::to_string(&paths).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    still_core::vst3::set_extra_dirs(paths.iter().map(Into::into).collect());
+    let cache = app
+        .path()
+        .app_config_dir()
+        .map(|d| d.join("vst3_scan_cache.json"))
+        .map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::run_scan_subprocess(&cache, &paths);
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(still_core::list_plugins())
+}
+
 /// Every installed effect plugin (Audio Units + VST3, macOS).
 /// VST3 entries come from the scan cache, refreshed in a background
 /// subprocess at startup (see lib.rs) — never scanned in this process.
