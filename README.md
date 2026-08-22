@@ -18,6 +18,27 @@ mastered, tagged albums — exported to WAV / FLAC / MP3 / AAC.
 
 </details>
 
+## Why this exists
+
+I play in a band, and every rehearsal ends the same way: a long continuous
+recording — sometimes a single stereo file, sometimes the separate inputs
+of a portable multitrack recorder — that nobody ever splits into songs,
+because doing it with the existing tools is tedious. Audacity means manual
+labels and destructive edits; WaveLab does everything, but at the price of
+a steep learning curve and, in our experience, real tagging bugs (see our
+reports on a [malformed `trkn` atom that makes track numbers invisible in
+Apple Music](https://forums.steinberg.net/t/bug-report-wavelab-pro-13-writes-a-malformed-trkn-track-number-invisible-in-apple-music/1036154)
+and a [lost disc number written as `0/0`](https://forums.steinberg.net/t/bug-report-m4a-disc-number-tpos-lost-wavelab-13-0-30-writes-the-itunes-disk-atom-as-0-0/1038038)).
+
+AudioDistillery is the tool I wanted instead: load the session (multitrack
+or not), let it detect what looks like songs, turn them into a track list
+in a couple of clicks, name them, rebalance the inputs, optionally tag the
+lot ("rehearsal of March 12th, with the band…" — cover art included), and
+export to the usual formats with each format's native tags written
+**correctly**. Nothing outrageously complicated, nothing destructive, and
+the tagging bugs stop at our door: the exported files are checked against
+the pickiest consumer (Apple Music) rather than against a spec reading.
+
 - Load WAV, FLAC, MP3 or AIFF (multi-GB files stream — nothing is loaded whole
   into RAM).
 - Navigate a fast multi-resolution waveform (wheel = zoom at cursor, minimap).
