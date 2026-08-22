@@ -1,5 +1,5 @@
 // Typed wrappers around the Tauri commands. The frontend only ever sends
-// intentions and displays what the backend returns (SPEC §3).
+// intentions and displays what the backend returns (ARCHITECTURE.md §3).
 import { invoke } from "@tauri-apps/api/core";
 import type { ProjectView } from "./types/ProjectView";
 import type { PeakSlice } from "./types/PeakSlice";

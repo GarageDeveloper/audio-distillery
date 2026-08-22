@@ -2,7 +2,7 @@
 //! each exported file by lofty, which maps it to the container's native tag
 //! format (ID3v2 for MP3, MP4 atoms for M4A/AAC, Vorbis comments for FLAC,
 //! RIFF INFO for WAV). Applied to EXPORTED files only — never to sources
-//! (SPEC §3 bis).
+//! (ARCHITECTURE.md §3 bis).
 //!
 //! Every text field supports dynamic macros expanded per track:
 //! `{title}` `{n}` `{ntotal}` `{disc}` `{dtotal}` `{album}` `{artist}`

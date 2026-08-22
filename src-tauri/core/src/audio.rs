@@ -137,7 +137,7 @@ pub(crate) fn open(path: &Path) -> Result<Opened> {
     if !path.is_file() {
         return Err(StillError::FileNotFound(path.display().to_string()));
     }
-    // Read-only handle: the source file is sacred (SPEC §3 bis).
+    // Read-only handle: the source file is sacred (ARCHITECTURE.md §3 bis).
     let file = File::open(path)?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
     let mut hint = Hint::new();

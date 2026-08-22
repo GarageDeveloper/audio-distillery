@@ -1,8 +1,8 @@
 //! AudioDistillery core ("still-core"): all business logic, with zero Tauri
-//! dependency. The decisive test (SPEC §3): a CLI could replace the GUI
+//! dependency. The decisive test (ARCHITECTURE.md §3): a CLI could replace the GUI
 //! frontend entirely by calling into this crate.
 //!
-//! Non-negotiable rule (SPEC §3 bis): source audio files are opened
+//! Non-negotiable rule (ARCHITECTURE.md §3 bis): source audio files are opened
 //! read-only, everywhere, always. Only exports create new files.
 
 pub mod audio;

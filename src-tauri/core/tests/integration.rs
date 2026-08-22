@@ -1,5 +1,5 @@
 //! Integration tests over the full pipeline with a programmatically generated
-//! WAV file, including the decisive non-destructive test from SPEC §3 bis:
+//! WAV file, including the decisive non-destructive test from ARCHITECTURE.md §3 bis:
 //! after a full load → mark → export scenario, the source file must be
 //! byte-for-byte identical (checksum) to its initial state.
 

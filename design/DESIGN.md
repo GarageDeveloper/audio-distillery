@@ -1,107 +1,146 @@
-# AudioDistillery (« Still ») — Direction artistique & système de design
+# AudioDistillery ("Still") — Art direction & design system
 
-> Livrable de l'équipe design — accompagne les maquettes `direction-a.html`, `direction-b.html`, `direction-c.html` (à ouvrir dans un navigateur ; chaque page montre l'écran principal en état édition, le dialogue d'export en réglages, la variante progression et le rapport final).
->
-> **Note produit** : la langue par défaut de l'interface est l'**anglais** (localisation ultérieure). Toutes les chaînes UI de ce document et des maquettes sont donc en anglais ; ce document reste en français.
-
----
-
-## 1. Les trois directions
-
-### Direction A — « Alambic » (`direction-a.html`)
-
-**Thèse.** Still signifie *alambic*. Le matériau de l'alambic, c'est le cuivre. La direction assume donc une palette **chaude** — brun-noir fumé et cuivre incandescent — là où 100 % des outils audio du marché sont froids (gris/bleu). La waveform est traitée comme de la matière en fusion : dégradé cuivre vertical (sombre aux crêtes, incandescent au centre), doublé d'une couche RMS plus brillante par-dessus la couche peak.
-
-- Signature : waveform cuivre + marqueurs en « étiquettes de fût » (fanions à queue d'aronde M1…M5).
-- Ton : hardware analogique, VU-mètres, machines à bande. Chiffres monospace tabulaires, filets gravés.
-- Risque assumé : une identité chromatique unique dans la catégorie, directement dérivée du nom du produit.
-
-### Direction B — « Signal » (`direction-b.html`)
-
-**Thèse.** Précision spectrale façon FabFilter / iZotope RX. Bleu-noir profond, panneaux en léger verre, et une signature fonctionnelle : les **deux canaux codés en couleur** (cyan glace = gauche, indigo = droit) avec légende L/R dans la toolbar. Playhead luminescent (glow blanc), minimap en bandeau d'aperçu au-dessus de la waveform, timecode dans un cadran dédié.
-
-- Signature : bicolorisation L/R — porteuse d'information réelle (déséquilibre de canaux visible d'un coup d'œil).
-- Ton : instrument de mesure, oscilloscope. Le plus « pro-audio » des trois.
-- Limite : c'est aussi le look le plus attendu de la catégorie — compétent mais peu différenciant.
-
-### Direction C — « Atelier » (`direction-c.html`)
-
-**Thèse.** Calme radical, esprit Ableton : graphite chaud (plus clair que les fonds habituels), aplats sans relief ni dégradé, **waveform monochrome ivoire**. La couleur ne décore jamais : le vert bouteille est réservé à ce qui se manipule (marqueurs, bouton play, actions). Rayons généreux, cibles larges, densité détendue.
-
-- Signature : la discipline chromatique elle-même — un seul vert, uniquement fonctionnel.
-- Ton : outil simple et amical, fidèle au « 10× plus simple » du cahier des charges.
-- Limite : identité douce ; le produit risque de ressembler à « une app utilitaire de plus » plutôt qu'à un outil audio désirable.
+> Design-team deliverable — accompanies the mockups `direction-a.html`,
+> `direction-b.html`, `direction-c.html` (open them in a browser; each page
+> shows the main screen in editing state, the export dialog in settings,
+> the progress variant and the final report).
 
 ---
 
-## 2. Recommandation : Direction A — « Alambic »
+## 1. The three directions
 
-**Pourquoi A.**
+### Direction A — "Alambic" (`direction-a.html`)
 
-1. **Ancrage de marque unique.** La palette cuivre découle littéralement du nom (Still = alambic = cuivre). Aucun concurrent ne peut la revendiquer ; B pourrait être n'importe quel plugin, C n'importe quel utilitaire.
-2. **Lisibilité de la waveform.** Le cuivre sur brun-noir offre un excellent contraste sans agressivité, et le couple peak (sombre) / RMS (incandescent) rend la dynamique du concert immédiatement lisible — c'est le cœur du métier de l'app.
-3. **Confort d'usage réel.** On découpe un concert le soir, au casque : une dominante chaude fatigue moins qu'un cyan saturé, et reste crédible « pro » grâce à la rigueur typographique (monospace tabulaire, filets, densité maîtrisée).
-4. **Compatible avec la simplicité voulue.** A reprend la discipline de C (une seule couleur d'accent, hiérarchie sobre) tout en gardant une identité forte. On recommande d'ailleurs d'**emprunter à C ses cibles généreuses** (poignées de marqueurs 28 px, rayons un cran plus doux) — c'est intégré dans les specs ci-dessous.
+**Thesis.** Still means *alembic* — a copper still. The still's material is
+copper. This direction therefore embraces a **warm** palette — smoky
+brown-black and glowing copper — where 100 % of the audio tools on the
+market are cold (grey/blue). The waveform is treated as molten material: a
+vertical copper gradient (dark at the peaks, glowing at the center),
+doubled by a brighter RMS layer over the peak layer.
 
-**Ce qu'on garde des autres directions.** De B : l'infobulle de temps pendant le drag de marqueur et la minimap contrastée. De C : les cibles de clic larges et le ton rédactionnel direct.
+- Signature: copper waveform + markers as "cask labels" (dovetail flags
+  M1…M5).
+- Tone: analog hardware, VU meters, tape machines. Tabular monospace
+  digits, engraved rules.
+- Accepted risk: a chromatic identity unique in the category, derived
+  directly from the product name.
 
-**Point de vigilance.** Avec un accent unique chaud, les états sémantiques doivent rester discernables : le vert succès et le rouge erreur définis ci-dessous sont volontairement désaturés pour cohabiter avec le cuivre sans le concurrencer.
+### Direction B — "Signal" (`direction-b.html`)
+
+**Thesis.** Spectral precision in the FabFilter / iZotope RX vein. Deep
+blue-black, lightly glassy panels, and a functional signature: the **two
+channels color-coded** (ice cyan = left, indigo = right) with an L/R
+legend in the toolbar. Luminescent playhead (white glow), minimap as a
+preview strip above the waveform, timecode in a dedicated dial.
+
+- Signature: L/R bi-coloring — carrying real information (channel
+  imbalance visible at a glance).
+- Tone: measuring instrument, oscilloscope. The most "pro-audio" of the
+  three.
+- Limit: also the most expected look of the category — competent but not
+  differentiating.
+
+### Direction C — "Atelier" (`direction-c.html`)
+
+**Thesis.** Radical calm, Ableton spirit: warm graphite (lighter than the
+usual backgrounds), flat surfaces without relief or gradients,
+**monochrome ivory waveform**. Color never decorates: bottle green is
+reserved for what can be manipulated (markers, play button, actions).
+Generous radii, large targets, relaxed density.
+
+- Signature: the chromatic discipline itself — a single green, purely
+  functional.
+- Tone: a simple, friendly tool, true to the product's "10× simpler"
+  brief.
+- Limit: a soft identity; the product risks looking like "one more
+  utility app" rather than a desirable audio tool.
 
 ---
 
-## 3. Système de design — Direction A « Alambic »
+## 2. Recommendation: Direction A — "Alambic"
 
-### 3.1 Tokens CSS complets
+**Why A.**
+
+1. **Unique brand anchor.** The copper palette flows literally from the
+   name (Still = alembic = copper). No competitor can claim it; B could
+   be any plugin, C any utility.
+2. **Waveform legibility.** Copper on brown-black gives excellent
+   contrast without harshness, and the peak (dark) / RMS (glowing) pair
+   makes the recording's dynamics immediately readable — the heart of the
+   app's job.
+3. **Real-world comfort.** You split a concert at night, on headphones: a
+   warm dominant tires less than saturated cyan, and stays credibly "pro"
+   through typographic rigor (tabular monospace, rules, controlled
+   density).
+4. **Compatible with the intended simplicity.** A borrows C's discipline
+   (a single accent color, sober hierarchy) while keeping a strong
+   identity. We also recommend **borrowing C's generous targets** (28 px
+   marker handles, slightly softer radii) — integrated in the specs
+   below.
+
+**What we keep from the other directions.** From B: the time tooltip
+during marker drags and the contrasted minimap. From C: the large click
+targets and the direct writing tone.
+
+**Point of vigilance.** With a single warm accent, semantic states must
+stay discernible: the success green and error red defined below are
+deliberately desaturated to coexist with the copper without competing.
+
+---
+
+## 3. Design system — Direction A "Alambic"
+
+### 3.1 Full CSS tokens
 
 ```css
 /* ==========================================================
-   Still — Design tokens. Thème sombre par défaut.
-   Basculer le thème clair via [data-theme="light"] sur <html>.
+   Still — Design tokens. Dark theme by default.
+   Switch to light via [data-theme="light"] on <html>.
    ========================================================== */
 :root {
-  /* --- Fonds --- */
-  --bg:            #17130E;  /* fond app (brun-noir fumé) */
-  --bg-deep:       #100D09;  /* zone waveform, minimap, champs */
-  --panel:         #1F1A13;  /* panneau pistes, modales */
-  --panel-2:       #262018;  /* boutons, hover de surface */
-  --raised:        #2B241B;  /* hover de bouton, éléments saisis */
+  /* --- Backgrounds --- */
+  --bg:            #17130E;  /* app background (smoky brown-black) */
+  --bg-deep:       #100D09;  /* waveform area, minimap, fields */
+  --panel:         #1F1A13;  /* track panel, modals */
+  --panel-2:       #262018;  /* buttons, surface hover */
+  --raised:        #2B241B;  /* button hover, grabbed elements */
 
-  /* --- Traits --- */
-  --line:          #322A20;  /* bordures structurantes */
-  --line-soft:     #262017;  /* grille temporelle, séparateurs faibles */
+  /* --- Lines --- */
+  --line:          #322A20;  /* structural borders */
+  --line-soft:     #262017;  /* time grid, weak separators */
 
-  /* --- Texte --- */
-  --text:          #EFE6D8;  /* primaire */
-  --text-2:        #B3A48D;  /* secondaire (labels, en-têtes) */
-  --text-3:        #7D7060;  /* tertiaire (méta, hints, status bar) */
-  --text-on-accent:#1C1207;  /* texte sur fond cuivre */
+  /* --- Text --- */
+  --text:          #EFE6D8;  /* primary */
+  --text-2:        #B3A48D;  /* secondary (labels, headers) */
+  --text-3:        #7D7060;  /* tertiary (meta, hints, status bar) */
+  --text-on-accent:#1C1207;  /* text on copper backgrounds */
 
-  /* --- Accent cuivre --- */
-  --copper:        #E0883A;  /* accent principal */
-  --copper-hi:     #F4B269;  /* hover, valeurs actives, timecode */
-  --copper-lo:     #A85E24;  /* bordures actives, pressed */
-  --copper-dim:    rgba(224, 136, 58, .14);  /* fonds sélectionnés */
+  /* --- Copper accent --- */
+  --copper:        #E0883A;  /* main accent */
+  --copper-hi:     #F4B269;  /* hover, active values, timecode */
+  --copper-lo:     #A85E24;  /* active borders, pressed */
+  --copper-dim:    rgba(224, 136, 58, .14);  /* selected backgrounds */
 
   /* --- Waveform --- */
-  --wave-l-peak:   #6E4A22;  /* canal G, couche peak (sombre) */
-  --wave-l-rms:    #F4B269;  /* canal G, couche RMS (via dégradé copperL) */
-  --wave-r-peak:   #5A3C1D;  /* canal D, couche peak */
-  --wave-r-rms:    #D89050;  /* canal D, couche RMS — un cran plus doux que G */
-  --wave-bg:       #100D09;  /* fond de la zone waveform */
-  --wave-center:   #2B2318;  /* ligne médiane de chaque canal */
-  --grid-time:     #262017;  /* verticales de la grille temporelle */
-  --minimap-wave:  #A87B45;  /* waveform mono de la minimap */
+  --wave-l-peak:   #6E4A22;  /* left channel, peak layer (dark) */
+  --wave-l-rms:    #F4B269;  /* left channel, RMS layer (copper gradient) */
+  --wave-r-peak:   #5A3C1D;  /* right channel, peak layer */
+  --wave-r-rms:    #D89050;  /* right channel, RMS — one notch softer */
+  --wave-bg:       #100D09;  /* waveform area background */
+  --wave-center:   #2B2318;  /* each channel's center line */
+  --grid-time:     #262017;  /* time grid verticals */
+  --minimap-wave:  #A87B45;  /* minimap's mono waveform */
 
-  /* --- Curseurs & sélection --- */
-  --playhead:      #F8EFE2;  /* tête de lecture (blanc chaud) */
+  /* --- Cursors & selection --- */
+  --playhead:      #F8EFE2;  /* playhead (warm white) */
   --playhead-glow: rgba(248, 239, 226, .65);
-  --marker:        #E0883A;  /* ligne de marqueur */
+  --marker:        #E0883A;  /* marker line */
   --marker-glow:   rgba(224, 136, 58, .50);
-  --marker-flag-a: #E89043;  /* dégradé du fanion (haut) */
-  --marker-flag-b: #C06D28;  /* dégradé du fanion (bas) */
-  --selection:     rgba(244, 178, 105, .10); /* segment courant, plage minimap */
+  --marker-flag-a: #E89043;  /* flag gradient (top) */
+  --marker-flag-b: #C06D28;  /* flag gradient (bottom) */
+  --selection:     rgba(244, 178, 105, .10); /* current segment, minimap range */
 
-  /* --- Sémantique --- */
+  /* --- Semantics --- */
   --ok:            #8FBF6E;
   --ok-dim:        rgba(143, 191, 110, .10);
   --err:           #E0584A;
@@ -111,29 +150,29 @@
   /* --- Focus --- */
   --focus-ring:    #F4B269;
 
-  /* --- Géométrie --- */
-  --r-s: 4px;   /* champs, kbd, petits éléments */
-  --r-m: 7px;   /* boutons, lignes de liste, selects */
-  --r-l: 11px;  /* modales, cartes */
-  --r-round: 999px; /* chips, bouton play */
+  /* --- Geometry --- */
+  --r-s: 4px;   /* fields, kbd, small elements */
+  --r-m: 7px;   /* buttons, list rows, selects */
+  --r-l: 11px;  /* modals, cards */
+  --r-round: 999px; /* chips, play button */
 
-  /* --- Ombres --- */
+  /* --- Shadows --- */
   --shadow-pop:   0 8px 24px rgba(0,0,0,.45);                       /* menus, tooltips */
   --shadow-modal: 0 24px 64px rgba(0,0,0,.55), 0 2px 8px rgba(0,0,0,.40);
 
-  /* --- Typo --- */
+  /* --- Type --- */
   --font-ui:   -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text",
                "Segoe UI", system-ui, "Noto Sans", sans-serif;
   --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono",
                Menlo, Consolas, monospace;
 
-  /* --- Mouvements --- */
+  /* --- Motion --- */
   --ease: cubic-bezier(.25,.1,.25,1);
   --t-fast: 120ms;  /* hover, pressed */
-  --t-med:  200ms;  /* ouverture panneau, modale */
+  --t-med:  200ms;  /* panel opening, modal */
 }
 
-/* ---------- Variante claire (option) ---------- */
+/* ---------- Light variant (optional) ---------- */
 [data-theme="light"] {
   --bg:            #F4EFE6;
   --bg-deep:       #EAE3D6;
@@ -150,7 +189,7 @@
   --text-on-accent:#FFF6EA;
 
   --copper:        #C06818;
-  --copper-hi:     #A85E24;   /* en clair, le hover fonce */
+  --copper-hi:     #A85E24;   /* in light mode, hover darkens */
   --copper-lo:     #8A4C15;
   --copper-dim:    rgba(192, 104, 24, .12);
 
@@ -183,120 +222,200 @@
 }
 ```
 
-### 3.2 Typographie
+### 3.2 Typography
 
-Aucune police téléchargée : stack système uniquement.
+No downloaded fonts: system stack only.
 
-| Rôle | Police | Taille | Graisse | Notes |
+| Role | Font | Size | Weight | Notes |
 |---|---|---|---|---|
-| Corps UI (boutons, listes, labels) | `--font-ui` | 13 px | 400–500 | line-height 1.45 |
-| Nom de piste (liste) | `--font-ui` | 13 px | 500 | ellipsis si trop long |
-| Titres de modale | `--font-ui` | 16 px | 600 | |
-| Wordmark « STILL » | `--font-ui` | 13 px | 600 | `letter-spacing:.30em`, all-small-caps |
-| En-têtes de section (TRACKS, FORMAT…) | `--font-ui` | 11 px | 700 | uppercase, `letter-spacing:.12–.14em`, couleur `--text-2` |
-| Timecode principal | `--font-mono` | 15 px | 500 | `font-variant-numeric: tabular-nums`, couleur `--copper-hi` |
-| Durées, méta, règle temporelle | `--font-mono` | 10–12 px | 400 | tabular-nums partout où des chiffres bougent |
-| Hints / status bar | `--font-ui` | 11 px | 400 | couleur `--text-3` |
-| `kbd` | `--font-mono` | 10 px | 400 | fond `--panel-2`, bordure `--line`, bord bas 2 px |
+| UI body (buttons, lists, labels) | `--font-ui` | 13 px | 400–500 | line-height 1.45 |
+| Track name (list) | `--font-ui` | 13 px | 500 | ellipsis when too long |
+| Modal titles | `--font-ui` | 16 px | 600 | |
+| "STILL" wordmark | `--font-ui` | 13 px | 600 | `letter-spacing:.30em`, all-small-caps |
+| Section headers (TRACKS, FORMAT…) | `--font-ui` | 11 px | 700 | uppercase, `letter-spacing:.12–.14em`, color `--text-2` |
+| Main timecode | `--font-mono` | 15 px | 500 | `font-variant-numeric: tabular-nums`, color `--copper-hi` |
+| Durations, meta, time ruler | `--font-mono` | 10–12 px | 400 | tabular-nums everywhere digits move |
+| Hints / status bar | `--font-ui` | 11 px | 400 | color `--text-3` |
+| `kbd` | `--font-mono` | 10 px | 400 | background `--panel-2`, border `--line`, 2 px bottom edge |
 
-**Règle d'or** : tout nombre susceptible de défiler (timecode, durées, pourcentages) est en monospace tabulaire — zéro tremblement de layout pendant la lecture.
+**Golden rule**: any number that can scroll (timecode, durations,
+percentages) is tabular monospace — zero layout jitter during playback.
 
-### 3.3 Espacements, rayons, ombres
+### 3.3 Spacing, radii, shadows
 
-- Échelle d'espacement : **4 / 8 / 12 / 16 / 20 / 24 px** (base 4). Padding standard des conteneurs : 12–16 px ; gouttières de liste : 6–8 px.
-- Rayons : `--r-s` 4 px (champs), `--r-m` 7 px (boutons, lignes), `--r-l` 11 px (modales), `--r-round` (chips, play).
-- Ombres : uniquement `--shadow-pop` (tooltips, menus) et `--shadow-modal` (modales). **Aucune ombre sur les surfaces intégrées** — la profondeur vient des paliers de fond (`--bg-deep` < `--bg` < `--panel` < `--panel-2` < `--raised`).
-- Bordures : 1 px `--line` pour la structure ; le hover éclaircit le fond avant d'éclaircir la bordure.
+- Spacing scale: **4 / 8 / 12 / 16 / 20 / 24 px** (base 4). Standard
+  container padding: 12–16 px; list gutters: 6–8 px.
+- Radii: `--r-s` 4 px (fields), `--r-m` 7 px (buttons, rows), `--r-l`
+  11 px (modals), `--r-round` (chips, play).
+- Shadows: only `--shadow-pop` (tooltips, menus) and `--shadow-modal`
+  (modals). **No shadow on embedded surfaces** — depth comes from the
+  background steps (`--bg-deep` < `--bg` < `--panel` < `--panel-2` <
+  `--raised`).
+- Borders: 1 px `--line` for structure; hover lightens the background
+  before lightening the border.
 
-### 3.4 Spécification des zones
+### 3.4 Zone specification
 
-Fenêtre par défaut 1360×860 (min 1024×640). Ordre vertical : toolbar → règle → **waveform** → minimap → status bar ; panneau pistes à droite.
+Default window 1360×860 (min 1024×640). Vertical order: toolbar → ruler →
+**waveform** → minimap → status bar; track panel on the right.
 
-#### Toolbar — h 52 px, fond dégradé `#211B13 → #1C1710`, bordure basse `--line`
-- Gauche : wordmark + goutte cuivre (18 px), séparateur, bouton **Open** (30 px de haut), puis nom du fichier (600) + méta mono (`1:12:36 · 44.1 kHz · stereo`, `--text-3`).
-- Centre : transport — précédent / **play 34 px rond** (icône cuivre, bord `#4A3B26`) / suivant — puis timecode `27:35 / 1:12:36`.
-- Droite : bouton primaire **Export…** (dégradé cuivre, texte `--text-on-accent`), toggle du panneau (icône, état `aria-pressed`).
-- Boutons : h 30 px, padding 12 px, rayon `--r-m` ; icônes 12–14 px, trait 1.4–1.6.
+#### Toolbar — h 52 px, gradient background `#211B13 → #1C1710`, bottom border `--line`
+- Left: wordmark + copper drop (18 px), separator, **Open** button (30 px
+  tall), then file name (600) + mono meta (`1:12:36 · 44.1 kHz · stereo`,
+  `--text-3`).
+- Center: transport — previous / **round 34 px play** (copper icon,
+  border `#4A3B26`) / next — then timecode `27:35 / 1:12:36`.
+- Right: primary **Export…** button (copper gradient, `--text-on-accent`
+  text), panel toggle (icon, `aria-pressed` state).
+- Buttons: h 30 px, 12 px padding, `--r-m` radius; 12–14 px icons,
+  1.4–1.6 stroke.
 
-#### Règle temporelle — h 26 px, fond `--bg-deep`
-Ticks majeurs toutes les 10 min (libellés mono 10 px `--text-3`), mineurs toutes les 5 min ; densité adaptée au zoom (cible : un libellé tous les ~110 px minimum).
+#### Time ruler — h 26 px, `--bg-deep` background
+Major ticks every 10 min (mono 10 px labels, `--text-3`), minor every
+5 min; density adapts to zoom (target: one label at least every ~110 px).
 
-#### Zone waveform — flexible (≈ 620 px à 860 de haut), fond `--wave-bg` avec léger vignettage radial
-- Deux canaux : centres à 27 % et 73 % de la hauteur, amplitude max 21 % ; ligne médiane `--wave-center` 1 px par canal.
-- Rendu par canal : couche **peak** (barres 2 px, `--wave-*-peak`) sous une couche **RMS** (≈ 45 % de la hauteur peak, dégradé cuivre vertical `--copper-lo → --copper-hi → --copper-lo`). Canal droit un cran plus doux que le gauche pour lire la stéréo sans légende.
-- **Segments** : entre deux marqueurs, chip centré en haut (top 12 px) — numéro seul (`1`), ou `3 · Ashes` pour le segment en lecture (chip plein cuivre, texte `--text-on-accent`). Fond du segment courant : `--selection`.
-- **Marqueurs** : ligne 1 px `--marker` + glow ; fanion queue d'aronde 20 px de haut (`M1`… mono 10 px 700). **Cible de saisie : 28 px de large** (zone invisible centrée sur la ligne), curseur `ew-resize`. Hover : ligne 3 px. Drag : ligne 3 px + glow renforcé + infobulle mono `34:10.2` sous le fanion.
-- **Playhead** : 1 px `--playhead` + glow + triangle 12 px pointe en bas au sommet. Toujours au-dessus des marqueurs (z-order : segments < grille < wave < marqueurs < playhead).
+#### Waveform area — flexible (≈ 620 px at 860 tall), `--wave-bg` background with a light radial vignette
+- Two channels: centers at 27 % and 73 % of the height, max amplitude
+  21 %; 1 px `--wave-center` center line per channel.
+- Per-channel rendering: a **peak** layer (2 px bars, `--wave-*-peak`)
+  under an **RMS** layer (≈ 45 % of the peak height, vertical copper
+  gradient `--copper-lo → --copper-hi → --copper-lo`). Right channel one
+  notch softer than the left so stereo reads without a legend.
+- **Segments**: between two markers, a centered chip at the top (top
+  12 px) — number alone (`1`), or `3 · Ashes` for the playing segment
+  (solid copper chip, `--text-on-accent` text). Current segment
+  background: `--selection`.
+- **Markers**: 1 px `--marker` line + glow; 20 px dovetail flag (`M1`…
+  mono 10 px 700). **Grab target: 28 px wide** (invisible zone centered
+  on the line), `ew-resize` cursor. Hover: 3 px line. Drag: 3 px line +
+  stronger glow + mono tooltip `34:10.2` under the flag.
+- **Playhead**: 1 px `--playhead` + glow + 12 px downward triangle at the
+  top. Always above the markers (z-order: segments < grid < wave <
+  markers < playhead).
 
-#### Minimap — h 64 px, sous la waveform, fond `--bg-deep`, bordure haute `--line`
-- Waveform mono (`--minimap-wave`, opacité .75), marqueurs en traits 1 px cuivre 55 %, playhead 1 px blanc chaud.
-- **Rectangle de viewport** : bordure 1 px `--copper`, fond `--copper-dim`, rayon 3 px, curseur `grab`/`grabbing`. Clic hors viewport = recentrage ; drag = pan ; molette sur la waveform = zoom (le rectangle se rétrécit).
+#### Minimap — h 64 px, below the waveform, `--bg-deep` background, top border `--line`
+- Mono waveform (`--minimap-wave`, opacity .75), markers as 1 px copper
+  55 % strokes, playhead 1 px warm white.
+- **Viewport rectangle**: 1 px `--copper` border, `--copper-dim` fill,
+  3 px radius, `grab`/`grabbing` cursor. Click outside the viewport =
+  recenter; drag = pan; wheel over the waveform = zoom (the rectangle
+  shrinks).
 
-#### Panneau pistes — w 284 px, escamotable (translation `--t-med`), fond `--panel`, bordure gauche `--line`
-- En-tête h 40 px : `TRACKS` (11 px 700 uppercase) + `6 · 1:12:36` (mono, `--text-3`).
-- Ligne : grille `26px 1fr auto`, h ≈ 38 px, rayon `--r-m` — numéro (mono, aligné droite), nom (500, ellipsis), durée (mono 11 px).
-  - hover → fond `--panel-2` ; piste en lecture → fond `--copper-dim` + bordure `rgba(224,136,58,.28)` + numéro cuivre 700 ;
-  - édition → input pleine largeur, fond `--bg-deep`, bordure `--copper-lo`.
-- Pied h ≈ 36 px : hint `Double-click to rename` + `6 tracks`.
-- Sélection dans la liste ⇄ surbrillance du segment sur la waveform (couplage bidirectionnel).
+#### Track panel — w 284 px, collapsible (`--t-med` translation), `--panel` background, left border `--line`
+- Header h 40 px: `TRACKS` (11 px 700 uppercase) + `6 · 1:12:36` (mono,
+  `--text-3`).
+- Row: `26px 1fr auto` grid, h ≈ 38 px, `--r-m` radius — number (mono,
+  right-aligned), name (500, ellipsis), duration (mono 11 px).
+  - hover → `--panel-2` background; playing track → `--copper-dim`
+    background + `rgba(224,136,58,.28)` border + copper 700 number;
+  - editing → full-width input, `--bg-deep` background, `--copper-lo`
+    border.
+- Footer h ≈ 36 px: `Double-click to rename` hint + `6 tracks`.
+- List selection ⇄ segment highlight on the waveform (bidirectional
+  coupling).
 
-#### Status bar — h 28 px, fond `--bg-deep`, bordure haute `--line`
-- Gauche : raccourcis en `kbd` + libellés : `Space Play/Pause · M Add marker · ← → Seek · ⌫ Delete marker`.
-- Droite : format du fichier en mono : `WAV · 44.1 kHz · 16-bit · stereo`. La status bar sert aussi de zone de messages transitoires (« Marker added at 27:35 », 3 s).
+#### Status bar — h 28 px, `--bg-deep` background, top border `--line`
+- Left: shortcuts as `kbd` + labels: `Space Play/Pause · M Add marker ·
+  ← → Seek · ⌫ Delete marker`.
+- Right: file format in mono: `WAV · 44.1 kHz · 16-bit · stereo`. The
+  status bar also hosts transient messages ("Marker added at 27:35",
+  3 s).
 
-#### Modal d'export — w 480 px, centrée, rayon `--r-l`, ombre `--shadow-modal`, backdrop `rgba(10,8,5,.62)` + blur 2 px
-1. **Réglages** : titre `Export 6 tracks` + sous-titre fichier ; **Format** en segmented control (WAV / FLAC / MP3 / AAC — segment actif en dégradé cuivre) ; **Quality** (visible si MP3/AAC : 320/256/192/V0) et **Sample rate** sur une rangée ; **Destination** (chemin mono + `Choose…`) ; **File naming** (input mono `{n} - {title}`, hint : `Preview: 03 - Ashes.mp3 — placeholders: {n} {title} {date}`). Pied : `Cancel` / `Export 6 tracks` (primaire).
-2. **Progression** : liste 6 lignes (`n° · nom · barre 4 px · statut mono` — `done` vert, `62%` cuivre sur fond `--copper-dim`, `waiting` gris) ; barre globale 7 px (dégradé cuivre) ; `Track 4 of 6` / `58% · ~1 min left` ; bouton `Cancel export`.
-3. **Rapport** : bandeau succès (`--ok-dim` + coche ronde) `6 tracks exported` + chemin + poids total ; liste mono des fichiers (`✓ 01 - Intro & Tuning.mp3`…) ; pied `Show in Finder` (« Show in Explorer » sous Windows, « Show in Files » sous Linux) / `Done` (primaire).
-4. **Erreur** (par piste) : la ligne passe en `--err-dim`, statut `failed` en `--err` ; le rapport liste `✗ 04 - Boreal.mp3 — destination is not writable` avec bouton `Retry failed`. L'export des autres pistes continue.
+#### Export modal — w 480 px, centered, `--r-l` radius, `--shadow-modal`, backdrop `rgba(10,8,5,.62)` + 2 px blur
+1. **Settings**: title `Export 6 tracks` + file subtitle; **Format** as a
+   segmented control (WAV / FLAC / MP3 / AAC — active segment in copper
+   gradient); **Quality** (visible for MP3/AAC: 320/256/192/V0) and
+   **Sample rate** on one row; **Destination** (mono path + `Choose…`);
+   **File naming** (mono input `{n} - {title}`, hint:
+   `Preview: 03 - Ashes.mp3 — placeholders: {n} {title} {date}`). Footer:
+   `Cancel` / `Export 6 tracks` (primary).
+2. **Progress**: 6-row list (`n° · name · 4 px bar · mono status` —
+   `done` green, `62%` copper on `--copper-dim`, `waiting` grey); 7 px
+   global bar (copper gradient); `Track 4 of 6` / `58% · ~1 min left`;
+   `Cancel export` button.
+3. **Report**: success banner (`--ok-dim` + round check) `6 tracks
+   exported` + path + total size; mono file list
+   (`✓ 01 - Intro & Tuning.mp3`…); footer `Show in Finder` ("Show in
+   Explorer" on Windows, "Show in Files" on Linux) / `Done` (primary).
+4. **Error** (per track): the row turns `--err-dim`, `failed` status in
+   `--err`; the report lists `✗ 04 - Boreal.mp3 — destination is not
+   writable` with a `Retry failed` button. Other tracks keep exporting.
 
-#### État vide (aucun fichier)
-- Toolbar réduite (Open seul actif, transport et Export désactivés à 40 % d'opacité), panneau et minimap masqués.
-- Au centre de la zone waveform : silhouette de waveform en pointillés cuivre 20 %, titre `Drop an audio file here` (16 px 600), sous-ligne `or press Open — WAV, FLAC, MP3, AAC · up to 4 hours` (`--text-3`), bouton `Open a file…`.
-- Drag-over : bordure interne 2 px `--copper` en pointillés animés (désactivé si `prefers-reduced-motion`), fond `--copper-dim`.
+#### Empty state (no file)
+- Reduced toolbar (Open alone active, transport and Export disabled at
+  40 % opacity), panel and minimap hidden.
+- Centered in the waveform area: a dotted copper waveform silhouette at
+  20 %, title `Drop an audio file here` (16 px 600), subline `or press
+  Open — WAV, FLAC, MP3, AAC · up to 4 hours` (`--text-3`), `Open a
+  file…` button.
+- Drag-over: inner 2 px `--copper` animated dotted border (disabled with
+  `prefers-reduced-motion`), `--copper-dim` background.
 
-#### État chargement / analyse
-- Le nom du fichier apparaît immédiatement dans la toolbar.
-- Zone waveform : la waveform **se dessine de gauche à droite** au fil de l'analyse (les colonnes analysées apparaissent en cuivre, le reste en `--line-soft`) — la barre de progression est la waveform elle-même ; libellé central discret `Analyzing… 42%` (mono).
-- Annulable : `Esc` ou bouton `Cancel` sous le libellé.
+#### Loading / analysis state
+- The file name appears immediately in the toolbar.
+- Waveform area: the waveform **draws itself left to right** as analysis
+  progresses (analyzed columns appear in copper, the rest in
+  `--line-soft`) — the progress bar is the waveform itself; a discreet
+  centered label `Analyzing… 42%` (mono).
+- Cancellable: `Esc` or a `Cancel` button under the label.
 
-### 3.5 Flux UX complet
+### 3.5 Full UX flow
 
-1. **Ouvrir** — Drop ou `Open` → analyse avec waveform-progrès → à la fin, l'app est en édition : 1 piste unique « Track 01 », playhead à 0, minimap visible, panneau ouvert.
-2. **Écouter / naviguer** — `Space` lecture-pause ; clic sur la waveform ou la minimap = seek ; `← →` ±5 s, `Shift+← →` ±30 s ; molette = zoom autour du curseur ; `↑ ↓` piste précédente/suivante (seek au début de piste).
-3. **Marquer** — `M` pose un marqueur à la tête de lecture (ou double-clic sur la waveform à l'endroit voulu). Les numéros de pistes se recalculent instantanément ; la nouvelle piste apparaît dans le panneau avec un nom par défaut `Track 04`. Drag d'un fanion = ajustement fin (infobulle de temps, zoom auto léger aux bords). `⌫` sur un marqueur sélectionné le supprime (les deux pistes fusionnent, le nom de la première survit ; annulable).
-4. **Nommer** — Double-clic sur le nom dans le panneau (ou `Enter` sur la ligne sélectionnée) → input inline, texte présélectionné ; `Enter` valide, `Esc` annule, `Tab` valide et passe à la piste suivante (flux « je nomme tout le set » sans toucher la souris).
-5. **Exporter** — `Export…` → modale réglages (mémorise les derniers choix) → progression par piste + globale → rapport final avec `Show in Finder`. L'app reste utilisable pendant l'export (la modale peut être réduite en pilule de progression dans la toolbar).
-6. **Undo/redo global** — `Cmd/Ctrl+Z` couvre pose/déplacement/suppression de marqueurs et renommages.
+1. **Open** — Drop or `Open` → analysis with waveform-as-progress → the
+   app lands in editing: a single "Track 01", playhead at 0, minimap
+   visible, panel open.
+2. **Listen / navigate** — `Space` play-pause; click on the waveform or
+   minimap = seek; `← →` ±5 s, `Shift+← →` ±30 s; wheel = zoom around the
+   cursor; `↑ ↓` previous/next track (seek to track start).
+3. **Mark** — `M` drops a marker at the playhead (or double-click the
+   waveform at the desired spot). Track numbers recompute instantly; the
+   new track appears in the panel with a default name `Track 04`.
+   Dragging a flag = fine adjustment (time tooltip, light auto-zoom at
+   the edges). `⌫` on a selected marker deletes it (the two tracks merge,
+   the first name survives; undoable).
+4. **Name** — Double-click the name in the panel (or `Enter` on the
+   selected row) → inline input, text preselected; `Enter` confirms,
+   `Esc` cancels, `Tab` confirms and moves to the next track (the "I name
+   the whole set" flow without touching the mouse).
+5. **Export** — `Export…` → settings modal (remembers last choices) →
+   per-track + global progress → final report with `Show in Finder`. The
+   app stays usable during export (the modal can be reduced to a progress
+   pill in the toolbar).
+6. **Global undo/redo** — `Cmd/Ctrl+Z` covers marker add/move/delete and
+   renames.
 
 ### 3.6 Micro-interactions
 
-| Interaction | Comportement |
+| Interaction | Behaviour |
 |---|---|
-| Hover marqueur | Ligne 1→3 px, fanion s'éclaircit (`--t-fast`), curseur `ew-resize` |
-| Drag marqueur | Glow renforcé, infobulle mono du temps sous le fanion, snap optionnel aux silences détectés (aimantation ±250 ms, désactivable avec `Alt`), les durées du panneau se mettent à jour en direct |
-| Pose de marqueur (`M`) | Le fanion « tombe » de 6 px avec fondu 150 ms (aucune animation si `prefers-reduced-motion`) ; message status bar `Marker added at 27:35` |
-| Renommage inline | Bordure cuivre + texte présélectionné ; validation = flash 300 ms `--copper-dim` sur la ligne |
-| Play/pause | L'icône bascule sans animation ; le timecode cuivre est la seule chose qui « bouge » en permanence |
-| Seek (clic) | Le playhead saute sans transition (précision avant tout), léger flash du triangle |
-| Zoom | Centré sur la souris ; le rectangle de minimap s'anime en `--t-fast` |
-| Toggle panneau | Translation 200 ms `--ease` ; la waveform se redimensionne en continu |
-| Export lancé | Le bouton `Export…` devient pilule de progression `Exporting 58%` si la modale est réduite |
-| Erreurs | Jamais de modale d'alerte pour les cas bénins : bandeau inline dans la modale d'export ou message status bar teinté `--err`. Ex. : `Can't read this file — format not supported (.aiff coming soon)` |
-| Focus clavier | `outline: 2px solid var(--focus-ring); outline-offset: 2px` sur tout élément interactif |
+| Marker hover | Line 1→3 px, flag lightens (`--t-fast`), `ew-resize` cursor |
+| Marker drag | Stronger glow, mono time tooltip under the flag, optional snap to detected silences (±250 ms magnet, disable with `Alt`), panel durations update live |
+| Marker drop (`M`) | The flag "falls" 6 px with a 150 ms fade (no animation with `prefers-reduced-motion`); status-bar message `Marker added at 27:35` |
+| Inline rename | Copper border + preselected text; confirmation = 300 ms `--copper-dim` flash on the row |
+| Play/pause | The icon flips without animation; the copper timecode is the only thing permanently "moving" |
+| Seek (click) | The playhead jumps without transition (precision first), light triangle flash |
+| Zoom | Centered on the mouse; the minimap rectangle animates in `--t-fast` |
+| Panel toggle | 200 ms `--ease` translation; the waveform resizes continuously |
+| Export started | The `Export…` button becomes a progress pill `Exporting 58%` when the modal is reduced |
+| Errors | Never an alert modal for benign cases: inline banner in the export modal or `--err`-tinted status-bar message. E.g. `Can't read this file — format not supported (.aiff coming soon)` |
+| Keyboard focus | `outline: 2px solid var(--focus-ring); outline-offset: 2px` on every interactive element |
 
-### 3.7 Accessibilité & garde-fous
+### 3.7 Accessibility & guardrails
 
-- Contrastes : `--text` sur `--bg` ≈ 13:1 ; `--text-2` ≈ 7:1 ; `--text-3` réservé aux méta non essentielles. `--text-on-accent` sur cuivre ≥ 7:1.
-- `prefers-reduced-motion` : toutes les animations décoratives coupées (les barres de progression restent).
-- Toutes les commandes de la toolbar accessibles au clavier ; la liste de pistes est une vraie liste navigable (`↑ ↓`, `Enter` pour renommer).
-- Les glows (playhead, marqueurs) sont décoratifs : l'information reste lisible sans eux (lignes pleines).
+- Contrast: `--text` on `--bg` ≈ 13:1; `--text-2` ≈ 7:1; `--text-3`
+  reserved for non-essential meta. `--text-on-accent` on copper ≥ 7:1.
+- `prefers-reduced-motion`: all decorative animations off (progress bars
+  stay).
+- Every toolbar command is keyboard-accessible; the track list is a real
+  navigable list (`↑ ↓`, `Enter` to rename).
+- Glows (playhead, markers) are decorative: the information stays
+  readable without them (solid lines).
 
 ---
 
-## 4. Fichiers
+## 4. Files
 
-- `design/direction-a.html` — Direction A « Alambic » (recommandée)
-- `design/direction-b.html` — Direction B « Signal »
-- `design/direction-c.html` — Direction C « Atelier »
-- `design/DESIGN.md` — ce document
+- `design/direction-a.html` — Direction A "Alambic" (recommended)
+- `design/direction-b.html` — Direction B "Signal"
+- `design/direction-c.html` — Direction C "Atelier"
+- `design/DESIGN.md` — this document

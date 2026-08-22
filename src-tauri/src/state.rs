@@ -7,7 +7,7 @@ use crate::chain_host::ChainHost;
 use crate::editor::EditorRegistry;
 
 /// Global app state managed by Tauri. The canonical project state (single
-/// source of truth, SPEC §3) lives here, in the backend.
+/// source of truth, ARCHITECTURE.md §3) lives here, in the backend.
 pub struct AppState {
     pub session: Mutex<Option<ProjectState>>,
     pub player: PlayerHandle,
