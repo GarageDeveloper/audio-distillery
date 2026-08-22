@@ -1,8 +1,17 @@
 # AudioDistillery
 
-**Still** — a non-destructive workshop for splitting long audio recordings
-(concerts, vinyl rips, DJ mixes) into individual tracks, and exporting them to
-WAV / FLAC / MP3 / AAC.
+[![CI](https://github.com/GarageDeveloper/audio-distillery/actions/workflows/ci.yml/badge.svg)](https://github.com/GarageDeveloper/audio-distillery/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-a85e24.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/GarageDeveloper/audio-distillery?color=e0883a)](https://github.com/GarageDeveloper/audio-distillery/releases)
+
+**Still** — a non-destructive workshop for turning long audio recordings
+(concerts, vinyl rips, DJ mixes, multitrack field recordings) into finished,
+mastered, tagged albums — exported to WAV / FLAC / MP3 / AAC.
+
+<!-- Screenshots: drop PNGs into design/screenshots/ and uncomment.
+![Main window](design/screenshots/main-window.png)
+![Chains panel](design/screenshots/chains-panel.png)
+-->
 
 - Load WAV, FLAC, MP3 or AIFF (multi-GB files stream — nothing is loaded whole
   into RAM).
@@ -11,8 +20,16 @@ WAV / FLAC / MP3 / AAC.
   end, or drag a selection and turn it into a track. Everything outside the
   regions (applause, gaps, lead-in) is simply ignored at export. Silence
   detection can propose the regions for you.
-- Rename tracks inline, then export sample-accurate cuts with per-track
-  progress and a final report.
+- Mix time-synchronized **multitrack layers** (e.g. the separate inputs of a
+  field recorder): per-layer gain/mute/solo, per-track overrides, chained
+  takes.
+- **Master in real time with your own plugins** — Audio Units *and* VST3,
+  with native plugin editors, at three scopes: per layer, per track (active
+  only inside that track), and on the master bus. Save chains as presets;
+  exports render through the exact same signal path, latency-compensated.
+- Tag the album: metadata, multi-disc numbering, filename macros, cover art.
+- Rename tracks inline, then export sample-accurate cuts in parallel with
+  per-track progress and a final report.
 - Save the whole session as a tiny `.still` project file.
 - Pick your look: Alambic (default), Alambic Light, Signal or Atelier.
 
@@ -43,6 +60,12 @@ Architecture, command contract and design system:
 - `CLAUDE.md` — the two non-negotiable rules and their decisive tests.
 - `src-tauri/COMMANDS.md` — frontend/backend contract.
 - `design/DESIGN.md` — design system ("Alambic" direction).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) — start with the two non-negotiable
+rules; they are what makes this codebase safe to change. Notable releases
+are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

@@ -2,6 +2,17 @@
   "name": "audiodistillery",
   "private": true,
   "version": "0.3.0",
+  "description": "Still — a non-destructive workshop for turning long recordings into mastered, tagged albums (Tauri + Rust)",
+  "author": "Raphaël Enrici",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GarageDeveloper/audio-distillery.git"
+  },
+  "homepage": "https://github.com/GarageDeveloper/audio-distillery",
+  "bugs": {
+    "url": "https://github.com/GarageDeveloper/audio-distillery/issues"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -25,6 +36,5 @@
     "vite": "^7.0.4",
     "vitest": "^3.2.4",
     "@tauri-apps/cli": "^2"
-  },
-  "license": "MIT"
+  }
 }
