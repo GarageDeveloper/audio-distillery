@@ -8,10 +8,15 @@
 (concerts, vinyl rips, DJ mixes, multitrack field recordings) into finished,
 mastered, tagged albums — exported to WAV / FLAC / MP3 / AAC.
 
-<!-- Screenshots: drop PNGs into design/screenshots/ and uncomment.
-![Main window](design/screenshots/main-window.png)
-![Chains panel](design/screenshots/chains-panel.png)
--->
+![Main window — splitting a recording with a mastering chain on the master bus](design/screenshots/main-window.png)
+
+<details>
+<summary>More screenshots</summary>
+
+![Plugin picker — the same plugin as Audio Unit and VST3](design/screenshots/chains-panel.png)
+![Empty state](design/screenshots/empty-state.png)
+
+</details>
 
 - Load WAV, FLAC, MP3 or AIFF (multi-GB files stream — nothing is loaded whole
   into RAM).
