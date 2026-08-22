@@ -39,6 +39,13 @@ export to the usual formats with each format's native tags written
 the tagging bugs stop at our door: the exported files are checked against
 the pickiest consumer (Apple Music) rather than against a spec reading.
 
+To be clear, none of this is meant as condescending criticism: those
+applications do a staggering number of very hard things, and I understand
+both how difficult they are to maintain and that their workflow simply
+isn't the one that fits me. AudioDistillery only tries to nail one narrow
+job — and I hope it can help other amateur musicians at the end of a
+rehearsal too. :)
+
 - Load WAV, FLAC, MP3 or AIFF (multi-GB files stream — nothing is loaded whole
   into RAM).
 - Navigate a fast multi-resolution waveform (wheel = zoom at cursor, minimap).
