@@ -3,6 +3,20 @@
 All notable changes to AudioDistillery are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.1] — 2026-08-23
+
+### Fixed
+- **No playback audio on Windows**: the engine forced the session sample
+  rate onto the output device, which WASAPI shared mode rejects (CoreAudio
+  had been resampling transparently on macOS, hiding the bug). The stream
+  now opens at the device's own rate with a streaming windowed-sinc
+  resampler converting session → device on the render thread — identical
+  behaviour on every platform. ([#6])
+- Output-device failures are no longer silent: the status bar shows an
+  actionable "Audio device error" message.
+
+[#6]: https://github.com/GarageDeveloper/audio-distillery/issues/6
+
 ## [0.3.0] — 2026-08-22
 
 ### Added

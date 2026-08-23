@@ -1,7 +1,7 @@
 {
   "name": "audiodistillery",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Still — a non-destructive workshop for turning long recordings into mastered, tagged albums (Tauri + Rust)",
   "author": "Raphaël Enrici",
   "license": "MIT",
