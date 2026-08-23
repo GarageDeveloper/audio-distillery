@@ -235,8 +235,9 @@ kbd {
   bottom: 84px;
   transform: translateX(-50%);
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
   padding: 10px 14px;
   background: var(--panel);
   border: 1px solid var(--copper-lo);
@@ -729,8 +730,16 @@ kbd {
 .track-mix .del:hover { color: var(--err); background: var(--err-dim); }
 
 /* Auto-split minimum-length filter */
-.proposal-count { white-space: nowrap; flex: none; }
-.proposal-count strong { color: var(--copper-hi); }
+.proposal-controls {
+  display: flex; align-items: center; gap: 12px;
+}
+.proposal-result {
+  font-size: 11px; color: var(--text-2);
+  white-space: nowrap;
+  padding-top: 6px;
+  border-top: 1px solid var(--line-soft);
+}
+.proposal-result strong { color: var(--copper-hi); }
 .proposal-ignored { color: var(--text-3); }
 .proposal-min {
   display: inline-flex; align-items: center; gap: 4px;

@@ -556,24 +556,7 @@ export default function App() {
               )}
               {proposals && (
                 <div className="proposal-bar">
-                  <span className="proposal-count">
-                    {(proposals?.length ?? 0) === 0 ? (
-                      <span className="proposal-ignored">
-                        Nothing detected — try another source or lower thresholds
-                      </span>
-                    ) : (
-                      <>
-                        <strong>{keptProposals.length}</strong> track
-                        {keptProposals.length !== 1 ? "s" : ""} kept
-                        {ignoredProposals.length > 0 && (
-                          <span className="proposal-ignored">
-                            {" "}· {ignoredProposals.length} left out
-                          </span>
-                        )}
-                      </>
-                    )}
-                  </span>
-
+                  <div className="proposal-controls">
                   {(view?.layers.length ?? 0) > 1 && (
                     <label className="proposal-source" title="Which signal the silence detection listens to — a between-songs-quiet layer often beats the mix">
                       Detect on
@@ -684,6 +667,25 @@ export default function App() {
                   <button className="btn" onClick={() => setProposals(null)}>
                     Dismiss
                   </button>
+                  </div>
+
+                  <div className="proposal-result">
+                    {(proposals?.length ?? 0) === 0 ? (
+                      <span className="proposal-ignored">
+                        Nothing detected — try another source or lower thresholds
+                      </span>
+                    ) : (
+                      <>
+                        <strong>{keptProposals.length}</strong>&nbsp;track
+                        {keptProposals.length !== 1 ? "s" : ""} kept
+                        {ignoredProposals.length > 0 && (
+                          <span className="proposal-ignored">
+                            {" "}· {ignoredProposals.length} left out
+                          </span>
+                        )}
+                      </>
+                    )}
+                  </div>
                 </div>
               )}
             </>
