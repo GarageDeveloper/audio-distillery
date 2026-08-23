@@ -106,6 +106,7 @@ pub fn run() {
             commands::move_region_edge,
             commands::remove_region,
             commands::rename_track,
+            commands::rename_layer,
             commands::set_snap_to_zero,
             commands::set_export_config,
             commands::set_album_meta,

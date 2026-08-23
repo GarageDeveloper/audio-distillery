@@ -323,6 +323,7 @@ pub async fn add_layers(
                 solo: false,
                 collapsed: false,
                 inserts: Vec::new(),
+                custom_name: None,
             });
         }
         Ok((groups, new_layers))
@@ -591,6 +592,15 @@ pub fn remove_region(
         s.remove_region(id).map_err(err)?;
         sync_playback(&state, s);
         resync_chains_after_edit(&app, &state, s, &before);
+        Ok(s.view())
+    })
+}
+
+/// Set (empty = clear back to the file-name fallback) a layer's name.
+#[tauri::command]
+pub fn rename_layer(state: State<'_, AppState>, id: u32, name: String) -> CmdResult<ProjectView> {
+    with_session(&state, |s| {
+        s.rename_layer(id, &name).map_err(err)?;
         Ok(s.view())
     })
 }

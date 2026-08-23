@@ -72,6 +72,7 @@ trims or rejects conflicting spans and clamps edge moves.
 | `move_region_edge` | `id: number`, `edge: "start" \| "end"`, `position: number` | `ProjectView` (position clamped to neighbors, bounds and min length) | unknown id |
 | `remove_region` | `id: number` | `ProjectView` (the freed audio is then ignored) | unknown id |
 | `rename_track` | `id: number`, `title: string` | `ProjectView` (empty title restores the default `Track NN`) | unknown id |
+| `rename_layer` | `id: number`, `name: string` (empty clears back to the file-name fallback) | `ProjectView` | unknown layer id |
 | `set_snap_to_zero` | `enabled: boolean` | `ProjectView` | no audio loaded |
 | `undo` / `redo` | — | `ProjectView` | no audio loaded |
 | `detect_silences` | `params: SilenceParams` | `RegionSpan[]` (proposed track regions; leading/trailing silence and gaps excluded) | no audio loaded |

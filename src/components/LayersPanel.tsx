@@ -1,9 +1,10 @@
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ProjectView } from "../types/ProjectView";
 import { GainInput } from "./GainInput";
 
 interface Props {
   view: ProjectView;
+  onRename: (id: number, name: string) => void;
   onGain: (id: number, gainDb: number) => void;
   onMute: (id: number, muted: boolean) => void;
   onSolo: (id: number, solo: boolean) => void;
@@ -17,8 +18,31 @@ interface Props {
  * gain fader, mute and remove. Values are the backend's; slider moves are
  * throttled intentions.
  */
-export function LayersPanel({ view, onGain, onMute, onSolo, onCollapse, onRemove, onAdd }: Props) {
+export function LayersPanel({ view, onRename, onGain, onMute, onSolo, onCollapse, onRemove, onAdd }: Props) {
   const throttle = useRef<Record<number, number>>({});
+  const [editing, setEditing] = useState<number | null>(null);
+  const [draft, setDraft] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editing != null) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+  }, [editing]);
+
+  const commit = (id: number, nextId?: number) => {
+    onRename(id, draft);
+    if (nextId !== undefined) {
+      const next = view.layers.find((l) => l.id === nextId);
+      if (next) {
+        setDraft(next.name);
+        setEditing(nextId);
+        return;
+      }
+    }
+    setEditing(null);
+  };
 
   const sendGain = (id: number, value: number) => {
     const now = performance.now();
@@ -47,9 +71,34 @@ export function LayersPanel({ view, onGain, onMute, onSolo, onCollapse, onRemove
             >
               {l.collapsed ? "▸" : "▾"}
             </button>
-            <span className="layer-name" title={l.name}>
-              {l.name}
-            </span>
+            {editing === l.id ? (
+              <input
+                ref={inputRef}
+                className="rename-input layer-rename"
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onBlur={() => commit(l.id)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") commit(l.id);
+                  if (e.key === "Escape") setEditing(null);
+                  if (e.key === "Tab") {
+                    e.preventDefault();
+                    commit(l.id, view.layers[i + 1]?.id);
+                  }
+                }}
+              />
+            ) : (
+              <span
+                className="layer-name"
+                title={`${l.source_name} — double-click to rename`}
+                onDoubleClick={() => {
+                  setDraft(l.name);
+                  setEditing(l.id);
+                }}
+              >
+                {l.name}
+              </span>
+            )}
             <span className="layer-ch">{l.channels === 1 ? "mono" : "stereo"}</span>
             <button
               className={`layer-mute ${l.muted ? "on" : ""}`}

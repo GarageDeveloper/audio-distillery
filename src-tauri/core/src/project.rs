@@ -133,6 +133,10 @@ pub struct Layer {
     /// Insert chain of THIS layer (pre-fader, always active).
     #[serde(default)]
     pub inserts: Vec<MasteringPluginCfg>,
+    /// User-chosen display name; None = fall back to the first source's
+    /// file name.
+    #[serde(default)]
+    pub custom_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -171,6 +175,7 @@ impl Project {
                 solo: false,
                 collapsed: false,
                 inserts: Vec::new(),
+                custom_name: None,
             })
             .collect();
         let next_layer_id = layers.len() as u32 + 1;
@@ -292,8 +297,11 @@ pub struct TrackInfo {
 #[ts(export, export_to = "../../../src/types/")]
 pub struct LayerView {
     pub id: u32,
-    /// First source's file name.
+    /// Display name: the user's custom name, else the first source's file
+    /// name.
     pub name: String,
+    /// Always the first source's file name (tooltip after a rename).
+    pub source_name: String,
     pub channels: u16,
     pub duration_seconds: f64,
     pub gain_db: f32,
@@ -814,6 +822,23 @@ impl ProjectState {
         Ok(())
     }
 
+    /// Set (or clear, with an empty string) a layer's display name.
+    pub fn rename_layer(&mut self, id: u32, name: &str) -> Result<()> {
+        let layer = self
+            .project
+            .layers
+            .iter_mut()
+            .find(|l| l.id == id)
+            .ok_or_else(|| StillError::InvalidMarker(format!("unknown layer id {id}")))?;
+        let name = name.trim();
+        layer.custom_name = if name.is_empty() {
+            None
+        } else {
+            Some(name.to_string())
+        };
+        Ok(())
+    }
+
     pub fn rename_track(&mut self, id: u32, title: &str) -> Result<()> {
         if !self.project.regions.iter().any(|r| r.id == id) {
             return Err(StillError::InvalidMarker(format!("unknown track id {id}")));
@@ -1013,14 +1038,19 @@ impl ProjectState {
             .enumerate()
             .map(|(i, l)| {
                 let scanned = self.info.layers.get(i);
+                let source_name = l
+                    .sources
+                    .first()
+                    .and_then(|s| Path::new(&s.path).file_name())
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| format!("Layer {}", i + 1));
                 LayerView {
                     id: l.id,
                     name: l
-                        .sources
-                        .first()
-                        .and_then(|s| Path::new(&s.path).file_name())
-                        .map(|s| s.to_string_lossy().to_string())
-                        .unwrap_or_else(|| format!("Layer {}", i + 1)),
+                        .custom_name
+                        .clone()
+                        .unwrap_or_else(|| source_name.clone()),
+                    source_name,
                     channels: scanned.map(|s| s.channels).unwrap_or(0),
                     duration_seconds: scanned
                         .map(|s| s.duration_samples as f64 / sr)
@@ -1214,6 +1244,7 @@ fn migrate_v4(legacy: LegacyProjectV4) -> Project {
                 solo: l.solo,
                 collapsed: l.collapsed,
                 inserts: Vec::new(),
+                custom_name: None,
             })
             .collect(),
         regions: legacy.regions,
@@ -1659,5 +1690,24 @@ mod tests {
         assert!(loaded.layers.iter().all(|l| l.inserts.is_empty()));
         assert!(loaded.regions.iter().all(|r| r.inserts.is_empty()));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Renaming a layer sets/clears the custom name; the view resolves it
+    /// with the file-name fallback.
+    #[test]
+    fn renames_layers_with_fallback() {
+        let mut state = state(60);
+        let id = state.project.layers[0].id;
+        assert!(state.rename_layer(id, "  Room mic  ").is_ok());
+        assert_eq!(state.project.layers[0].custom_name.as_deref(), Some("Room mic"));
+        let v = state.view();
+        assert_eq!(v.layers[0].name, "Room mic");
+        assert!(v.layers[0].source_name.ends_with(".wav"));
+        // Empty clears back to the fallback.
+        state.rename_layer(id, "   ").unwrap();
+        assert!(state.project.layers[0].custom_name.is_none());
+        assert_eq!(state.view().layers[0].name, state.view().layers[0].source_name);
+        // Unknown id errors.
+        assert!(state.rename_layer(9999, "x").is_err());
     }
 }
