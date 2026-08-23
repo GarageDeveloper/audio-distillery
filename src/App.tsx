@@ -415,13 +415,12 @@ export default function App() {
             (t) => t.start_sample <= r.start && r.end <= t.end_sample
           )
       );
-      if (fresh.length === 0) {
-        showError("No track regions matching the current settings were found.");
-      } else {
-        setProposals(fresh);
-        setExcluded(new Set());
-        setReviewIdx(0);
-      }
+      // Open the bar even with ZERO results: in multitrack sessions the
+      // remedy (switching the detection source to a quieter layer) lives
+      // in the bar itself.
+      setProposals(fresh);
+      setExcluded(new Set());
+      setReviewIdx(0);
     } catch (e) {
       showError(String(e));
     }
@@ -558,12 +557,20 @@ export default function App() {
               {proposals && (
                 <div className="proposal-bar">
                   <span className="proposal-count">
-                    <strong>{keptProposals.length}</strong> track
-                    {keptProposals.length !== 1 ? "s" : ""} kept
-                    {ignoredProposals.length > 0 && (
+                    {(proposals?.length ?? 0) === 0 ? (
                       <span className="proposal-ignored">
-                        {" "}· {ignoredProposals.length} left out
+                        Nothing detected — try another source or lower thresholds
                       </span>
+                    ) : (
+                      <>
+                        <strong>{keptProposals.length}</strong> track
+                        {keptProposals.length !== 1 ? "s" : ""} kept
+                        {ignoredProposals.length > 0 && (
+                          <span className="proposal-ignored">
+                            {" "}· {ignoredProposals.length} left out
+                          </span>
+                        )}
+                      </>
                     )}
                   </span>
 
