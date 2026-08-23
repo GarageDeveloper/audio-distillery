@@ -43,9 +43,10 @@ export default function App() {
   const [proposals, setProposals] = useState<RegionSpan[] | null>(null);
   /// Auto-split detection source: null = the mix, else a layer id.
   const [detectLayer, setDetectLayer] = useState<number | null>(null);
-  /// Review state: excluded proposal keys + the proposal being auditioned.
+  /// Review state: excluded proposal keys. The "current" proposal is
+  /// derived from the playhead — clicking the waveform or just letting
+  /// playback run moves the review focus.
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
-  const [reviewIdx, setReviewIdx] = useState(0);
   const [dropChoice, setDropChoice] = useState<string[] | null>(null);
   const [minTrackSecs, setMinTrackSecs] = useState(120);
   const [waveMode, setWaveMode] = useState<"mix" | "layers">("mix");
@@ -420,7 +421,6 @@ export default function App() {
       // in the bar itself.
       setProposals(fresh);
       setExcluded(new Set());
-      setReviewIdx(0);
     } catch (e) {
       showError(String(e));
     }
@@ -436,6 +436,10 @@ export default function App() {
     (r) => (r.end - r.start) / sr >= minTrackSecs
   );
   const keptProposals = longEnough.filter((r) => !excluded.has(spanKey(r)));
+  /// Proposal under the playhead (null = the cursor is outside every one).
+  const reviewCurrent = longEnough.findIndex(
+    (r) => playheadSample >= r.start && playheadSample < r.end
+  );
   const ignoredProposals = (proposals ?? []).filter(
     (r) => (r.end - r.start) / sr < minTrackSecs || excluded.has(spanKey(r))
   );
@@ -586,58 +590,71 @@ export default function App() {
                     <span className="proposal-review">
                       <button
                         className="btn btn-icon"
-                        title="Previous proposal (plays from its start)"
+                        title="Previous proposal before the playhead (plays from its start)"
                         onClick={() => {
-                          const i =
-                            (reviewIdx - 1 + longEnough.length) % longEnough.length;
-                          setReviewIdx(i);
-                          seekToAndPlay(longEnough[i].start);
+                          const before = [...longEnough]
+                            .reverse()
+                            .find((r) => r.start < playheadSample - sr * 0.5);
+                          const target = before ?? longEnough[longEnough.length - 1];
+                          seekToAndPlay(target.start);
                         }}
                       >
                         ‹
                       </button>
-                      <span className="review-pos">
-                        {Math.min(reviewIdx + 1, longEnough.length)}/{longEnough.length}
+                      <span
+                        className="review-pos"
+                        title={
+                          reviewCurrent >= 0
+                            ? "The playhead is inside this proposal"
+                            : "The playhead is outside every proposal — click the waveform or use ‹ ›"
+                        }
+                      >
+                        {reviewCurrent >= 0 ? reviewCurrent + 1 : "–"}/{longEnough.length}
                       </span>
                       <button
                         className="btn btn-icon"
-                        title="Next proposal (plays from its start)"
+                        title="Next proposal after the playhead (plays from its start)"
                         onClick={() => {
-                          const i = (reviewIdx + 1) % longEnough.length;
-                          setReviewIdx(i);
-                          seekToAndPlay(longEnough[i].start);
+                          const after = longEnough.find((r) => r.start > playheadSample + 1);
+                          const target = after ?? longEnough[0];
+                          seekToAndPlay(target.start);
                         }}
                       >
                         ›
                       </button>
                       <button
                         className="btn btn-icon"
+                        disabled={reviewCurrent < 0}
                         title="Audition this proposal's ENDING (plays the last seconds)"
                         onClick={() => {
-                          const r = longEnough[Math.min(reviewIdx, longEnough.length - 1)];
+                          const r = longEnough[reviewCurrent];
                           seekToAndPlay(Math.max(r.start, r.end - 5 * sr));
                         }}
                       >
                         ⇥
                       </button>
-                      {(() => {
-                        const r = longEnough[Math.min(reviewIdx, longEnough.length - 1)];
-                        const out = excluded.has(spanKey(r));
-                        return (
-                          <button
-                            className={`btn proposal-keep ${out ? "excluded" : ""}`}
-                            title={out ? "Excluded — click to keep this track" : "Kept — click to exclude this track"}
-                            onClick={() => {
-                              const next = new Set(excluded);
-                              if (out) next.delete(spanKey(r));
-                              else next.add(spanKey(r));
-                              setExcluded(next);
-                            }}
-                          >
-                            {out ? "✕ excluded" : "✓ kept"}
-                          </button>
-                        );
-                      })()}
+                      {reviewCurrent >= 0 ? (
+                        (() => {
+                          const r = longEnough[reviewCurrent];
+                          const out = excluded.has(spanKey(r));
+                          return (
+                            <button
+                              className={`btn proposal-keep ${out ? "excluded" : ""}`}
+                              title={out ? "Excluded — click to keep this track" : "Kept — click to exclude this track"}
+                              onClick={() => {
+                                const next = new Set(excluded);
+                                if (out) next.delete(spanKey(r));
+                                else next.add(spanKey(r));
+                                setExcluded(next);
+                              }}
+                            >
+                              {out ? "✕ excluded" : "✓ kept"}
+                            </button>
+                          );
+                        })()
+                      ) : (
+                        <span className="proposal-outside">outside</span>
+                      )}
                     </span>
                   )}
 

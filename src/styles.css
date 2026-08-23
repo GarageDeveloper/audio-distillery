@@ -1285,3 +1285,9 @@ button.wordmark:hover { background: var(--panel-2); }
 }
 .proposal-keep { height: 24px; padding: 0 8px; font-size: 11px; color: var(--ok); }
 .proposal-keep.excluded { color: var(--err); }
+
+.proposal-outside {
+  font-size: 11px; color: var(--text-3); font-style: italic;
+  padding: 0 4px;
+}
+.proposal-review .btn-icon:disabled { opacity: .35; }
