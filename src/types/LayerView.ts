@@ -6,9 +6,14 @@ import type { MasteringPluginView } from "./MasteringPluginView";
  */
 export type LayerView = { id: number, 
 /**
- * First source's file name.
+ * Display name: the user's custom name, else the first source's file
+ * name.
  */
-name: string, channels: number, duration_seconds: number, gain_db: number, muted: boolean, solo: boolean, collapsed: boolean, 
+name: string, 
+/**
+ * Always the first source's file name (tooltip after a rename).
+ */
+source_name: string, channels: number, duration_seconds: number, gain_db: number, muted: boolean, solo: boolean, collapsed: boolean, 
 /**
  * This layer's insert chain (pre-fader, always active).
  */

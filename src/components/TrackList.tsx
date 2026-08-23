@@ -21,6 +21,7 @@ interface Props {
   onRename: (id: number, title: string) => void;
   onRemoveRegion: (id: number) => void;
   onSeek: (sample: number) => void;
+  onLayerRename: (id: number, name: string) => void;
   onLayerGain: (id: number, gainDb: number) => void;
   onLayerMute: (id: number, muted: boolean) => void;
   onLayerSolo: (id: number, solo: boolean) => void;
@@ -41,6 +42,7 @@ export function TrackList({
   onRename,
   onRemoveRegion,
   onSeek,
+  onLayerRename,
   onLayerGain,
   onLayerMute,
   onLayerSolo,
@@ -94,6 +96,7 @@ export function TrackList({
       {view.layers.length > 1 && (
         <LayersPanel
           view={view}
+          onRename={onLayerRename}
           onGain={onLayerGain}
           onMute={onLayerMute}
           onSolo={onLayerSolo}

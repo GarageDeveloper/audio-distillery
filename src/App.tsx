@@ -620,6 +620,7 @@ export default function App() {
             onRename={(id, title) => void apply(() => api.renameTrack(id, title))}
             onRemoveRegion={(id) => void apply(() => api.removeRegion(id))}
             onSeek={seekToAndPlay}
+            onLayerRename={(id, name) => void apply(() => api.renameLayer(id, name))}
             onLayerGain={(id, db) => void apply(() => api.setLayerGain(id, db))}
             onLayerMute={(id, m) => void apply(() => api.setLayerMuted(id, m))}
             onLayerSolo={(id, so) => void apply(() => api.setLayerSolo(id, so))}

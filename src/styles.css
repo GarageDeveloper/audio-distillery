@@ -1235,3 +1235,6 @@ button.wordmark:hover { background: var(--panel-2); }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   max-width: 40%;
 }
+
+/* Layer inline rename */
+.layer-rename { flex: 1; min-width: 0; font-size: 12px; }

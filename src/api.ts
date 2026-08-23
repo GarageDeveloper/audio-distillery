@@ -72,6 +72,8 @@ export const api = {
       position: Math.round(position),
     }),
   removeRegion: (id: number) => invoke<ProjectView>("remove_region", { id }),
+  renameLayer: (id: number, name: string) =>
+    invoke<ProjectView>("rename_layer", { id, name }),
   renameTrack: (id: number, title: string) =>
     invoke<ProjectView>("rename_track", { id, title }),
   setSnapToZero: (enabled: boolean) =>
