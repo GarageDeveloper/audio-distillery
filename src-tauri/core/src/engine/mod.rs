@@ -19,6 +19,7 @@
 
 pub mod decode;
 pub mod render;
+pub mod resample;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -50,6 +51,9 @@ pub type ChainStateSnapshot = Vec<(u32, Option<Vec<u8>>)>;
 pub struct PlaybackState {
     pub playing: bool,
     pub position_seconds: f64,
+    /// Output-device failure (no device, format refused…); playback is
+    /// silent while this is set. Display it — silence must never be mute.
+    pub device_error: Option<String>,
     pub ready: bool,
 }
 
@@ -121,6 +125,8 @@ struct Shared {
     ring_read: AtomicU64,
     flush_upto: AtomicU64,
     sample_rate: AtomicU64,
+    /// Output DEVICE rate (ring frames are device-rate frames).
+    device_rate: AtomicU64,
     total_samples: AtomicU64,
     error: Mutex<Option<String>>,
 }
@@ -137,6 +143,7 @@ impl Shared {
             ring_read: AtomicU64::new(0),
             flush_upto: AtomicU64::new(0),
             sample_rate: AtomicU64::new(44_100),
+            device_rate: AtomicU64::new(44_100),
             total_samples: AtomicU64::new(0),
             error: Mutex::new(None),
         }
@@ -246,14 +253,17 @@ impl PlayerHandle {
     pub fn state(&self) -> PlaybackState {
         let s = &self.shared;
         let sr = s.sample_rate.load(Ordering::Relaxed).max(1) as f64;
-        let pos = (s.seek_base.load(Ordering::Relaxed)
-            + s.consumed.load(Ordering::Relaxed)) as f64
-            / sr;
+        let dr = s.device_rate.load(Ordering::Relaxed).max(1) as f64;
+        // seek_base is in SESSION samples; consumed counts DEVICE frames.
+        let pos = s.seek_base.load(Ordering::Relaxed) as f64 / sr
+            + s.consumed.load(Ordering::Relaxed) as f64 / dr;
         let total = s.total_samples.load(Ordering::Relaxed) as f64 / sr;
+        let device_error = s.error.lock().unwrap().clone();
         PlaybackState {
             playing: s.playing.load(Ordering::Relaxed),
             position_seconds: if total > 0.0 { pos.min(total) } else { pos },
-            ready: s.loaded.load(Ordering::Relaxed) && s.error.lock().unwrap().is_none(),
+            ready: s.loaded.load(Ordering::Relaxed) && device_error.is_none(),
+            device_error,
         }
     }
 }
@@ -296,6 +306,9 @@ fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
     let mut _stream: Option<cpal::Stream> = None;
     let mut device_channels = 2usize;
     let mut block = vec![0.0f32; BLOCK_FRAMES * 8];
+    // Session → device rate conversion (None when the rates match).
+    let mut resampler: Option<resample::StreamResampler> = None;
+    let mut rs_out = vec![0.0f32; BLOCK_FRAMES * 8 * 2];
 
     loop {
         let timeout = if shared.playing.load(Ordering::Relaxed) {
@@ -336,15 +349,34 @@ fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
                 *shared.error.lock().unwrap() = None;
 
                 match open_stream(&shared, sample_rate) {
-                    Ok((stream, prod, dev_ch)) => {
+                    Ok((stream, prod, dev_ch, dev_rate)) => {
                         _stream = Some(stream);
                         producer = Some(prod);
                         device_channels = dev_ch;
+                        shared.device_rate.store(dev_rate as u64, Ordering::Relaxed);
+                        resampler = if dev_rate != sample_rate {
+                            Some(resample::StreamResampler::new(
+                                sample_rate,
+                                dev_rate,
+                                channels,
+                            ))
+                        } else {
+                            None
+                        };
+                        if std::env::var("STILL_AUDIO_DEBUG").is_ok() {
+                            eprintln!(
+                                "[audio] session {sample_rate} Hz -> device {dev_rate} Hz ({} ch), resampling: {}",
+                                dev_ch,
+                                resampler.is_some()
+                            );
+                        }
                     }
                     Err(e) => {
                         *shared.error.lock().unwrap() = Some(e);
                         producer = None;
                         _stream = None;
+                        shared.device_rate.store(sample_rate as u64, Ordering::Relaxed);
+                        resampler = None;
                     }
                 }
                 shared.loaded.store(true, Ordering::Relaxed);
@@ -399,11 +431,17 @@ fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
                 if let Some(r) = &mut renderer {
                     let target = (secs * r.sample_rate as f64).round() as u64;
                     seek_engine(&shared, r, target);
+                    if let Some(rs) = &mut resampler {
+                        rs.reset();
+                    }
                 }
             }
             Ok(Cmd::Stop) => {
                 if let Some(r) = &mut renderer {
                     seek_engine(&shared, r, 0);
+                    if let Some(rs) = &mut resampler {
+                        rs.reset();
+                    }
                 }
                 shared.playing.store(false, Ordering::Relaxed);
                 shared.playing_flag.store(false, Ordering::Relaxed);
@@ -418,27 +456,44 @@ fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
         match (&mut renderer, &mut producer) {
             (Some(r), Some(p)) => {
                 let ch = r.channels;
+                // Worst-case device frames one block can produce.
+                let max_out = resampler
+                    .as_ref()
+                    .map(|rs| rs.max_out_frames(BLOCK_FRAMES))
+                    .unwrap_or(BLOCK_FRAMES);
                 loop {
-                    if p.slots() < BLOCK_FRAMES * device_channels {
+                    if p.slots() < max_out * device_channels {
                         break;
                     }
                     let got = r.render_block(&mut block, BLOCK_FRAMES);
                     if got == 0 {
                         break;
                     }
+                    // Session rate → device rate when they differ.
+                    let (frames, src): (usize, &[f32]) = match &mut resampler {
+                        Some(rs) => {
+                            let need = rs.max_out_frames(got) * ch;
+                            if rs_out.len() < need {
+                                rs_out.resize(need, 0.0);
+                            }
+                            let n = rs.process(&block, got, &mut rs_out);
+                            (n, &rs_out[..])
+                        }
+                        None => (got, &block[..]),
+                    };
                     // Interleave the session channels onto the device layout
                     // (duplicate mono, zero extra device channels beyond 2).
-                    for f in 0..got {
+                    for f in 0..frames {
                         for dc in 0..device_channels {
                             let v = if dc < 2 {
-                                block[f * ch + dc.min(ch - 1)]
+                                src[f * ch + dc.min(ch - 1)]
                             } else {
                                 0.0
                             };
                             let _ = p.push(v);
                         }
                     }
-                    shared.ring_written.fetch_add(got as u64, Ordering::Relaxed);
+                    shared.ring_written.fetch_add(frames as u64, Ordering::Relaxed);
                 }
                 if r.finished()
                     && shared.ring_read.load(Ordering::Relaxed)
@@ -481,7 +536,7 @@ fn seek_engine(shared: &Arc<Shared>, r: &mut Renderer, target: u64) {
 fn open_stream(
     shared: &Arc<Shared>,
     sample_rate: u32,
-) -> std::result::Result<(cpal::Stream, rtrb::Producer<f32>, usize), String> {
+) -> std::result::Result<(cpal::Stream, rtrb::Producer<f32>, usize, u32), String> {
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
     let host = cpal::default_host();
@@ -490,14 +545,20 @@ fn open_stream(
         .ok_or_else(|| "no audio output device".to_string())?;
     let default_cfg = device.default_output_config().map_err(|e| e.to_string())?;
     let device_channels = (default_cfg.channels() as usize).clamp(1, 8);
+    // Open at the DEVICE's own rate: WASAPI shared mode refuses anything
+    // but its mix format (CoreAudio silently resampled for us, which is
+    // why forcing the session rate only ever worked on macOS). The render
+    // side resamples session → device when the rates differ.
+    let device_rate = default_cfg.sample_rate().0.max(8_000);
     let config = cpal::StreamConfig {
         channels: device_channels as u16,
-        sample_rate: cpal::SampleRate(sample_rate),
+        sample_rate: cpal::SampleRate(device_rate),
         buffer_size: cpal::BufferSize::Default,
     };
+    let _ = sample_rate;
 
     // ~90 ms of buffered audio between render thread and callback.
-    let capacity = ((sample_rate as usize / 11).next_power_of_two()) * device_channels;
+    let capacity = ((device_rate as usize / 11).next_power_of_two()) * device_channels;
     let (producer, mut consumer) = rtrb::RingBuffer::<f32>::new(capacity);
     let shared_cb = shared.clone();
     let dc = device_channels;
@@ -542,5 +603,5 @@ fn open_stream(
         )
         .map_err(|e| format!("cannot open the audio output: {e}"))?;
     stream.play().map_err(|e| e.to_string())?;
-    Ok((stream, producer, device_channels))
+    Ok((stream, producer, device_channels, device_rate))
 }

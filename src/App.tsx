@@ -654,7 +654,11 @@ export default function App() {
         )}
       </div>
 
-      <StatusBar view={view} onAbout={() => setAboutOpen(true)} />
+      <StatusBar
+        view={view}
+        deviceError={playback.deviceError}
+        onAbout={() => setAboutOpen(true)}
+      />
 
       {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} />}
 
