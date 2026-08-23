@@ -576,7 +576,8 @@ export default function App() {
 
                   {(view?.layers.length ?? 0) > 1 && (
                     <label className="proposal-source" title="Which signal the silence detection listens to — a between-songs-quiet layer often beats the mix">
-                      on
+                      Detect on
+                      <span className="select-wrap">
                       <select
                         value={detectLayer ?? "mix"}
                         onChange={(e) => {
@@ -593,6 +594,8 @@ export default function App() {
                           </option>
                         ))}
                       </select>
+                      <span className="select-chevron">▾</span>
+                      </span>
                     </label>
                   )}
 

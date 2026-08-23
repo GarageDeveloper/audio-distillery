@@ -1241,17 +1241,28 @@ button.wordmark:hover { background: var(--panel-2); }
 
 /* Auto-split review controls */
 .proposal-source {
-  display: inline-flex; align-items: center; gap: 5px;
-  font-size: 11px; color: var(--text-3);
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--text-2);
 }
+.select-wrap { position: relative; display: inline-flex; align-items: center; }
 .proposal-source select {
-  background: var(--bg-deep);
-  border: 1px solid var(--line);
-  border-radius: var(--r-s);
-  padding: 3px 6px;
-  font-size: 11px;
-  color: inherit;
-  max-width: 140px;
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--panel-2);
+  border: 1px solid var(--copper-lo);
+  border-radius: var(--r-m);
+  padding: 4px 22px 4px 8px;
+  font-size: 11px; font-weight: 600;
+  color: var(--copper-hi);
+  max-width: 150px;
+  cursor: pointer;
+}
+.proposal-source select:hover { background: var(--raised); border-color: var(--copper); }
+.select-chevron {
+  position: absolute; right: 7px;
+  pointer-events: none;
+  font-size: 9px;
+  color: var(--copper);
 }
 .proposal-review { display: inline-flex; align-items: center; gap: 4px; }
 .proposal-review .btn-icon { width: 24px; height: 24px; padding: 0; }
