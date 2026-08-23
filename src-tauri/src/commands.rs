@@ -1090,12 +1090,31 @@ pub fn redo(app: AppHandle, state: State<'_, AppState>) -> CmdResult<ProjectView
 pub fn detect_silences(
     state: State<'_, AppState>,
     params: SilenceParams,
+    layer_id: Option<u32>,
 ) -> CmdResult<Vec<RegionSpan>> {
     with_session(&state, |s| {
-        // Detection runs on the same mix the user sees/hears.
-        let merged = s.merged_pyramid();
+        // Default: detect on the same mix the user sees/hears. With a
+        // layer id, detect on THAT layer's own pyramid instead — in
+        // multitrack sessions one bleeding input can fill the very
+        // silences that separate the songs, while a quiet-between-songs
+        // layer (a DI, a spot mic) is a far better detector.
+        let pyramid = match layer_id {
+            Some(id) => {
+                let idx = s
+                    .project
+                    .layers
+                    .iter()
+                    .position(|l| l.id == id)
+                    .ok_or_else(|| format!("unknown layer id {id}"))?;
+                s.peaks
+                    .get(idx)
+                    .cloned()
+                    .ok_or_else(|| "layer has no peak data".to_string())?
+            }
+            None => s.merged_pyramid(),
+        };
         Ok(still_core::detect_track_regions(
-            &merged,
+            &pyramid,
             s.info.sample_rate,
             s.info.duration_samples,
             &params,

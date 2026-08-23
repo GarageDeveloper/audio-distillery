@@ -41,6 +41,11 @@ export default function App() {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null);
   const [proposals, setProposals] = useState<RegionSpan[] | null>(null);
+  /// Auto-split detection source: null = the mix, else a layer id.
+  const [detectLayer, setDetectLayer] = useState<number | null>(null);
+  /// Review state: excluded proposal keys + the proposal being auditioned.
+  const [excluded, setExcluded] = useState<Set<string>>(new Set());
+  const [reviewIdx, setReviewIdx] = useState(0);
   const [dropChoice, setDropChoice] = useState<string[] | null>(null);
   const [minTrackSecs, setMinTrackSecs] = useState(120);
   const [waveMode, setWaveMode] = useState<"mix" | "layers">("mix");
@@ -393,13 +398,16 @@ export default function App() {
     [playback, showError]
   );
 
-  const detectSilences = useCallback(async () => {
+  const detectSilences = useCallback(async (layerId: number | null) => {
     try {
-      const found = await api.detectSilences({
-        threshold_db: -40,
-        min_silence_ms: 1500,
-        min_track_seconds: 15,
-      });
+      const found = await api.detectSilences(
+        {
+          threshold_db: -40,
+          min_silence_ms: 1500,
+          min_track_seconds: 15,
+        },
+        layerId
+      );
       // Hide proposals fully covered by an existing track already.
       const fresh = found.filter(
         (r) =>
@@ -411,6 +419,8 @@ export default function App() {
         showError("No track regions matching the current settings were found.");
       } else {
         setProposals(fresh);
+        setExcluded(new Set());
+        setReviewIdx(0);
       }
     } catch (e) {
       showError(String(e));
@@ -419,13 +429,16 @@ export default function App() {
 
   const playheadSample = playback.positionSeconds * (view?.audio.sample_rate ?? 44100);
 
-  // Auto-split proposals filtered by the live minimum-length criterion.
+  // Auto-split proposals filtered by the live minimum-length criterion,
+  // minus the ones excluded during review.
   const sr = view?.audio.sample_rate ?? 44100;
-  const keptProposals = (proposals ?? []).filter(
+  const spanKey = (r: RegionSpan) => `${r.start}-${r.end}`;
+  const longEnough = (proposals ?? []).filter(
     (r) => (r.end - r.start) / sr >= minTrackSecs
   );
+  const keptProposals = longEnough.filter((r) => !excluded.has(spanKey(r)));
   const ignoredProposals = (proposals ?? []).filter(
-    (r) => (r.end - r.start) / sr < minTrackSecs
+    (r) => (r.end - r.start) / sr < minTrackSecs || excluded.has(spanKey(r))
   );
 
   return (
@@ -450,7 +463,7 @@ export default function App() {
         onSaveAs={() => void saveProject(true)}
         onUndo={() => void apply(() => api.undo())}
         onRedo={() => void apply(() => api.redo())}
-        onDetectSilences={() => void detectSilences()}
+        onDetectSilences={() => void detectSilences(detectLayer)}
         onExport={() => setExportOpen(true)}
         onAlbum={() => setAlbumOpen(true)}
         onTogglePanel={() => setPanelOpen((p) => !p)}
@@ -549,10 +562,92 @@ export default function App() {
                     {keptProposals.length !== 1 ? "s" : ""} kept
                     {ignoredProposals.length > 0 && (
                       <span className="proposal-ignored">
-                        {" "}· {ignoredProposals.length} ignored (&lt; {minTrackSecs}s)
+                        {" "}· {ignoredProposals.length} left out
                       </span>
                     )}
                   </span>
+
+                  {(view?.layers.length ?? 0) > 1 && (
+                    <label className="proposal-source" title="Which signal the silence detection listens to — a between-songs-quiet layer often beats the mix">
+                      on
+                      <select
+                        value={detectLayer ?? "mix"}
+                        onChange={(e) => {
+                          const v =
+                            e.target.value === "mix" ? null : Number(e.target.value);
+                          setDetectLayer(v);
+                          void detectSilences(v);
+                        }}
+                      >
+                        <option value="mix">Mix</option>
+                        {view?.layers.map((l) => (
+                          <option key={l.id} value={l.id}>
+                            {l.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+
+                  {longEnough.length > 0 && (
+                    <span className="proposal-review">
+                      <button
+                        className="btn btn-icon"
+                        title="Previous proposal (plays from its start)"
+                        onClick={() => {
+                          const i =
+                            (reviewIdx - 1 + longEnough.length) % longEnough.length;
+                          setReviewIdx(i);
+                          seekToAndPlay(longEnough[i].start);
+                        }}
+                      >
+                        ‹
+                      </button>
+                      <span className="review-pos">
+                        {Math.min(reviewIdx + 1, longEnough.length)}/{longEnough.length}
+                      </span>
+                      <button
+                        className="btn btn-icon"
+                        title="Next proposal (plays from its start)"
+                        onClick={() => {
+                          const i = (reviewIdx + 1) % longEnough.length;
+                          setReviewIdx(i);
+                          seekToAndPlay(longEnough[i].start);
+                        }}
+                      >
+                        ›
+                      </button>
+                      <button
+                        className="btn btn-icon"
+                        title="Audition this proposal's ENDING (plays the last seconds)"
+                        onClick={() => {
+                          const r = longEnough[Math.min(reviewIdx, longEnough.length - 1)];
+                          seekToAndPlay(Math.max(r.start, r.end - 5 * sr));
+                        }}
+                      >
+                        ⇥
+                      </button>
+                      {(() => {
+                        const r = longEnough[Math.min(reviewIdx, longEnough.length - 1)];
+                        const out = excluded.has(spanKey(r));
+                        return (
+                          <button
+                            className={`btn proposal-keep ${out ? "excluded" : ""}`}
+                            title={out ? "Excluded — click to keep this track" : "Kept — click to exclude this track"}
+                            onClick={() => {
+                              const next = new Set(excluded);
+                              if (out) next.delete(spanKey(r));
+                              else next.add(spanKey(r));
+                              setExcluded(next);
+                            }}
+                          >
+                            {out ? "✕ excluded" : "✓ kept"}
+                          </button>
+                        );
+                      })()}
+                    </span>
+                  )}
+
                   <label className="proposal-min">
                     min
                     <input

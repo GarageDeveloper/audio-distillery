@@ -1238,3 +1238,28 @@ button.wordmark:hover { background: var(--panel-2); }
 
 /* Layer inline rename */
 .layer-rename { flex: 1; min-width: 0; font-size: 12px; }
+
+/* Auto-split review controls */
+.proposal-source {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; color: var(--text-3);
+}
+.proposal-source select {
+  background: var(--bg-deep);
+  border: 1px solid var(--line);
+  border-radius: var(--r-s);
+  padding: 3px 6px;
+  font-size: 11px;
+  color: inherit;
+  max-width: 140px;
+}
+.proposal-review { display: inline-flex; align-items: center; gap: 4px; }
+.proposal-review .btn-icon { width: 24px; height: 24px; padding: 0; }
+.review-pos {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-2);
+  min-width: 34px; text-align: center;
+}
+.proposal-keep { height: 24px; padding: 0 8px; font-size: 11px; color: var(--ok); }
+.proposal-keep.excluded { color: var(--err); }

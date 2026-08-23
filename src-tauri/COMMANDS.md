@@ -75,7 +75,7 @@ trims or rejects conflicting spans and clamps edge moves.
 | `rename_layer` | `id: number`, `name: string` (empty clears back to the file-name fallback) | `ProjectView` | unknown layer id |
 | `set_snap_to_zero` | `enabled: boolean` | `ProjectView` | no audio loaded |
 | `undo` / `redo` | — | `ProjectView` | no audio loaded |
-| `detect_silences` | `params: SilenceParams` | `RegionSpan[]` (proposed track regions; leading/trailing silence and gaps excluded) | no audio loaded |
+| `detect_silences` | `params: SilenceParams`, `layer_id?: number` (detect on ONE layer's pyramid instead of the mix) | `RegionSpan[]` (proposed track regions; leading/trailing silence and gaps excluded) | no audio loaded |
 
 When snap-to-zero is enabled, `add_region`/`move_region_edge` adjust the
 requested positions to the nearest zero crossing (backend decision; the
