@@ -1293,8 +1293,13 @@ button.wordmark:hover { background: var(--panel-2); }
 .proposal-review .btn-icon:disabled { opacity: .35; }
 
 /* Export presets */
-.preset-row { display: flex; align-items: center; gap: 8px; }
+.preset-row { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
 .cd-preset { height: 26px; padding: 0 10px; font-size: 12px; }
+.cd-preset.active {
+  color: var(--copper);
+  background: var(--copper-dim);
+  border-color: rgba(224, 136, 58, .28);
+}
 
 .cd-image-toggle {
   display: inline-flex; align-items: center; gap: 6px;

@@ -36,6 +36,13 @@ type Phase = "settings" | "running" | "report";
 
 export function ExportDialog({ view, progress, onClose, onError, onViewChange }: Props) {
   const [cfg, setCfg] = useState<ExportConfig>({ ...view.export_config });
+  /// The Red Book-compatible combination the CD features require.
+  const cdCombo =
+    cfg.format === "wav" && cfg.bit_depth <= 16 && cfg.target_sample_rate === 44100;
+  useEffect(() => {
+    if (!cdCombo && cfg.cd_image) setCfg((c) => ({ ...c, cd_image: false }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cdCombo]);
   // Collapsed by default: metadata is edited any time via the Album… button;
   // this section is just a shortcut.
   const [metaOpen, setMetaOpen] = useState(false);
@@ -155,6 +162,33 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
                   </button>
                 ))}
               </div>
+              <div className="preset-row">
+                <button
+                  className={`btn cd-preset ${cdCombo ? "active" : ""}`}
+                  title="Red Book CD delivery: WAV · 44.1 kHz · 16-bit · dithered"
+                  onClick={() =>
+                    setCfg({
+                      ...cfg,
+                      format: "wav",
+                      bit_depth: 16,
+                      target_sample_rate: 44100,
+                      dither: "auto",
+                    })
+                  }
+                >
+                  CD preset (44.1 kHz · 16-bit · dither)
+                </button>
+                {cdCombo && (
+                  <label className="cd-image-toggle" title="One Red Book WAV image (frame-aligned tracks) plus a .cue sheet with CD-Text — burnable and pressable">
+                    <input
+                      type="checkbox"
+                      checked={cfg.cd_image}
+                      onChange={(e) => setCfg({ ...cfg, cd_image: e.target.checked })}
+                    />
+                    Single image + cue sheet
+                  </label>
+                )}
+              </div>
             </div>
 
             <div className="field-row">
@@ -230,45 +264,7 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
               )}
             </div>
 
-            <div className="field preset-row">
-              <span className="hint">Preset:</span>
-              <button
-                className="btn cd-preset"
-                title="Red Book CD delivery: WAV · 44.1 kHz · 16-bit · dithered"
-                onClick={() =>
-                  setCfg({
-                    ...cfg,
-                    format: "wav",
-                    bit_depth: 16,
-                    target_sample_rate: 44100,
-                    dither: "auto",
-                  })
-                }
-              >
-                CD (44.1 kHz · 16-bit · dither)
-              </button>
-              <label className="cd-image-toggle" title="One Red Book WAV image (44.1 kHz / 16-bit, frame-aligned tracks) plus a .cue sheet with CD-Text — burnable and pressable">
-                <input
-                  type="checkbox"
-                  checked={cfg.cd_image}
-                  onChange={(e) => {
-                    const on = e.target.checked;
-                    setCfg(
-                      on
-                        ? {
-                            ...cfg,
-                            cd_image: true,
-                            format: "wav",
-                            bit_depth: 16,
-                            target_sample_rate: 44100,
-                          }
-                        : { ...cfg, cd_image: false }
-                    );
-                  }}
-                />
-                Single image + cue sheet
-              </label>
-            </div>
+
 
             <div className="field">
               <label>Destination</label>
