@@ -3,6 +3,26 @@
 All notable changes to AudioDistillery are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.0] — 2026-08-25
+
+### Added
+- **Renameable layers** ([#3]): double-click a layer's name to rename it
+  ("Room mic", "Bass DI"…) — Enter/Esc/Tab semantics like track renaming,
+  file name kept as a tooltip, the name flowing to the per-track mix rows
+  and the Chains target selector. Empty name restores the file-name
+  display.
+- **Auto-split, evolved** ([#4]): pick the detection source in multitrack
+  sessions (the mix, or any single layer — a between-songs-quiet input
+  often beats a bleeding mix); the proposals bar opens even when nothing
+  is found so the source can be switched; and proposals are reviewed by
+  ear before adding — playhead-driven navigation (‹ › jump between
+  proposals, ⇥ auditions an ending), per-proposal keep/exclude with
+  excluded spans staying visible in red on the waveform, and "Add N
+  tracks" adding exactly what you kept.
+
+[#3]: https://github.com/GarageDeveloper/audio-distillery/issues/3
+[#4]: https://github.com/GarageDeveloper/audio-distillery/issues/4
+
 ## [0.3.1] — 2026-08-23
 
 ### Fixed
