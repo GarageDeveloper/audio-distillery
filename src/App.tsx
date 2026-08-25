@@ -34,6 +34,18 @@ interface LoadState {
 export default function App() {
   const [view, setView] = useState<ProjectView | null>(null);
   const [loading, setLoading] = useState<LoadState>({ active: false, progress: 0, fileName: "" });
+  // The overlay pops under the pointer right where the layout-choice button
+  // was; arm Cancel after a beat so a stray double-click can't abort the
+  // load (Esc stays immediate).
+  const [cancelArmed, setCancelArmed] = useState(false);
+  useEffect(() => {
+    if (!loading.active) {
+      setCancelArmed(false);
+      return;
+    }
+    const t = window.setTimeout(() => setCancelArmed(true), 700);
+    return () => window.clearTimeout(t);
+  }, [loading.active]);
   const [error, setError] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(true);
   const [exportOpen, setExportOpen] = useState(false);
@@ -725,8 +737,9 @@ export default function App() {
                   <span className="loading-pct">{Math.round(loading.progress * 100)}%</span>
                   <button
                     className="btn"
+                    disabled={!cancelArmed}
                     onClick={() => {
-                      void api.cancelLoad();
+                      if (cancelArmed) void api.cancelLoad();
                     }}
                   >
                     Cancel (Esc)
