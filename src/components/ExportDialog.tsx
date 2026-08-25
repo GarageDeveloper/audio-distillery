@@ -56,7 +56,9 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
   const [perTrack, setPerTrack] = useState<Record<number, number>>({});
 
   useEffect(() => {
-    if (progress) {
+    // Analysis events reuse the same channel but count measurement steps,
+    // not encoded tracks — keep them out of the per-track bars.
+    if (progress && !progress.analyzing) {
       setPerTrack((m) => ({ ...m, [progress.track_number]: progress.track_progress }));
     }
   }, [progress]);
@@ -343,19 +345,45 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
                   </div>
                 );
               })}
+              {progress?.analyzing && (
+                <div className="export-row active">
+                  <span className="num">~</span>
+                  <span className="name">Analyzing loudness — {progress.track_title}</span>
+                  <span className="bar">
+                    <div
+                      style={{ width: `${Math.round(progress.overall_progress * 100)}%` }}
+                    />
+                  </span>
+                  <span className="st">
+                    {progress.completed_tracks} / {progress.track_count}
+                  </span>
+                </div>
+              )}
             </div>
             <div className="export-global">
               <div className="progress-track">
                 <div
                   className="progress-fill"
-                  style={{ width: `${Math.round((progress?.overall_progress ?? 0) * 100)}%` }}
+                  style={{
+                    width: `${
+                      progress?.analyzing
+                        ? 100
+                        : Math.round((progress?.overall_progress ?? 0) * 100)
+                    }%`,
+                  }}
                 />
               </div>
               <div className="row">
                 <span>
-                  {progress?.completed_tracks ?? 0} of {progress?.track_count ?? trackCount} done
+                  {progress?.analyzing
+                    ? "All tracks encoded — measuring loudness…"
+                    : `${progress?.completed_tracks ?? 0} of ${progress?.track_count ?? trackCount} done`}
                 </span>
-                <span>{Math.round((progress?.overall_progress ?? 0) * 100)}%</span>
+                <span>
+                  {progress?.analyzing
+                    ? "100%"
+                    : `${Math.round((progress?.overall_progress ?? 0) * 100)}%`}
+                </span>
               </div>
             </div>
             <div className="modal-foot">
