@@ -441,8 +441,9 @@ export default function App() {
     (r) => playheadSample >= r.start && playheadSample < r.end
   );
   const ignoredProposals = (proposals ?? []).filter(
-    (r) => (r.end - r.start) / sr < minTrackSecs || excluded.has(spanKey(r))
+    (r) => (r.end - r.start) / sr < minTrackSecs
   );
+  const excludedProposals = longEnough.filter((r) => excluded.has(spanKey(r)));
 
   return (
     <div className="app">
@@ -484,6 +485,7 @@ export default function App() {
                 waveMode={view.layers.length > 1 ? waveMode : "mix"}
                 proposals={proposals ? keptProposals : null}
                 ignoredProposals={proposals ? ignoredProposals : null}
+                excludedProposals={proposals ? excludedProposals : null}
                 selection={selection}
                 pendingStart={pendingStart}
                 selectedTrack={selectedTrack}

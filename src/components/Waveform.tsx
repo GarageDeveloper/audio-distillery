@@ -25,6 +25,9 @@ interface Props {
   proposals: RegionSpan[] | null;
   /// Auto-split candidates rejected by the minimum-length filter (faint).
   ignoredProposals?: RegionSpan[] | null;
+  /// Proposals the user explicitly excluded during review: stay fully
+  /// materialized but marked in the error tint.
+  excludedProposals?: RegionSpan[] | null;
   selection: RegionSpan | null;
   pendingStart: number | null;
   selectedTrack: number | null;
@@ -487,6 +490,35 @@ export function Waveform(p: Props) {
       }
       ctx.restore();
     }
+    // Explicitly excluded proposals: still fully drawn, but in the error
+    // tint with a corner cross — reviewable and re-includable at a glance.
+    const { excludedProposals } = propsRef.current;
+    if (excludedProposals && excludedProposals.length > 0) {
+      ctx.save();
+      ctx.setLineDash([5, 4]);
+      for (const r of excludedProposals) {
+        const x0 = sampleToX(r.start, vp);
+        const x1 = sampleToX(r.end, vp);
+        if (x1 < 0 || x0 > w) continue;
+        const left = Math.max(x0, 0);
+        const width = Math.min(x1, w) - left;
+        ctx.globalAlpha = 0.10;
+        ctx.fillStyle = css("--err");
+        ctx.fillRect(left, RULER_H, width, area);
+        ctx.globalAlpha = 0.55;
+        ctx.strokeStyle = css("--err");
+        ctx.strokeRect(left + 0.5, RULER_H + 1.5, width - 1, area - 3);
+        // Small ✕ chip at the top of the span.
+        ctx.globalAlpha = 0.9;
+        ctx.setLineDash([]);
+        ctx.font = "700 10px ui-monospace, Menlo, monospace";
+        ctx.fillStyle = css("--err");
+        ctx.textAlign = "center";
+        ctx.fillText("✕", left + width / 2, RULER_H + 16);
+        ctx.setLineDash([5, 4]);
+      }
+      ctx.restore();
+    }
 
     // Live selection (before it becomes a track).
     if (selection) {
@@ -677,7 +709,7 @@ export function Waveform(p: Props) {
   // Redraw on any relevant prop change.
   useEffect(() => {
     draw();
-  }, [p.view, p.viewport, p.playheadSample, p.waveMode, p.proposals, p.ignoredProposals, p.selection, p.pendingStart, p.selectedTrack, draw]);
+  }, [p.view, p.viewport, p.playheadSample, p.waveMode, p.proposals, p.ignoredProposals, p.excludedProposals, p.selection, p.pendingStart, p.selectedTrack, draw]);
 
   // Auto-follow the playhead past the right edge.
   useEffect(() => {
