@@ -114,6 +114,10 @@ pub struct ExportConfig {
     /// Dither policy for lossless depth reduction.
     #[serde(default)]
     pub dither: DitherMode,
+    /// Export a single Red Book image + cue sheet instead of one file per
+    /// track (forces 44.1 kHz / 16-bit / WAV, frame-aligned tracks).
+    #[serde(default)]
+    pub cd_image: bool,
 }
 
 impl Default for ExportConfig {
@@ -126,6 +130,7 @@ impl Default for ExportConfig {
             template: "{n} - {title}".to_string(),
             target_sample_rate: None,
             dither: DitherMode::default(),
+            cd_image: false,
         }
     }
 }

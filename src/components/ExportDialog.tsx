@@ -247,6 +247,27 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
               >
                 CD (44.1 kHz · 16-bit · dither)
               </button>
+              <label className="cd-image-toggle" title="One Red Book WAV image (44.1 kHz / 16-bit, frame-aligned tracks) plus a .cue sheet with CD-Text — burnable and pressable">
+                <input
+                  type="checkbox"
+                  checked={cfg.cd_image}
+                  onChange={(e) => {
+                    const on = e.target.checked;
+                    setCfg(
+                      on
+                        ? {
+                            ...cfg,
+                            cd_image: true,
+                            format: "wav",
+                            bit_depth: 16,
+                            target_sample_rate: 44100,
+                          }
+                        : { ...cfg, cd_image: false }
+                    );
+                  }}
+                />
+                Single image + cue sheet
+              </label>
             </div>
 
             <div className="field">

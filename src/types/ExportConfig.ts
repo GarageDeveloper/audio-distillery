@@ -23,4 +23,9 @@ target_sample_rate: number | null,
 /**
  * Dither policy for lossless depth reduction.
  */
-dither: DitherMode, };
+dither: DitherMode, 
+/**
+ * Export a single Red Book image + cue sheet instead of one file per
+ * track (forces 44.1 kHz / 16-bit / WAV, frame-aligned tracks).
+ */
+cd_image: boolean, };

@@ -544,6 +544,7 @@ fn exported_files_carry_native_tags() {
         genre: "Rock".into(),
         comment: "".into(),
         disc_breaks: vec![3],
+        catalog_ean: String::new(),
         artwork_path: cover.display().to_string(),
     };
 
@@ -1020,4 +1021,77 @@ fn export_dithers_and_resamples() {
     assert_eq!(r.spec().sample_rate, 48_000);
     let dur = r.duration() as f64 / 48_000.0;
     assert!((dur - 1.0).abs() < 0.01, "duration {dur}");
+}
+
+/// Tier-2 pro export (#5): the Red Book image + cue sheet. Track INDEX
+/// offsets are frame-aligned (588 samples), the image is 44.1 kHz / 16-bit
+/// stereo, the total length equals the sum of the frame-padded tracks, and
+/// the cue carries CD-Text + CATALOG.
+#[test]
+fn export_cd_image_and_cue() {
+    let Ok(ffmpeg) = resolve_ffmpeg(&[]) else {
+        eprintln!("ffmpeg not found — CD image test skipped");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let wav = dir.path().join("src.wav");
+    write_wav(&wav, &[(3.0, 0.4)]);
+    let (info, peaks) = scan_file(&wav, |_| {}).unwrap();
+    let mut state = ProjectState::new(Project::new(vec![wav.display().to_string()]), info, vec![peaks]);
+    // Two tracks with deliberately NON-frame-aligned lengths.
+    state.add_region(0, SR as u64 + 123, None).unwrap();
+    state.add_region(SR as u64 + 200, 2 * SR as u64 + 777, None).unwrap();
+    let meta = still_core::AlbumMeta {
+        album: "Barn Sessions".into(),
+        album_artist: "The Copper Stills".into(),
+        catalog_ean: "1234567890128".into(),
+        ..Default::default()
+    };
+    let cfg = ExportConfig {
+        format: ExportFormat::Wav,
+        bit_depth: 16,
+        cd_image: true,
+        dest_dir: dir.path().join("out").display().to_string(),
+        ..Default::default()
+    };
+    let cancel = AtomicBool::new(false);
+    let jobs = plan_export(&state.tracks(), &cfg, &wav).unwrap();
+    let rep = still_core::export::run_export_cd_image(
+        &ffmpeg,
+        &mix_of(&state),
+        2,
+        SR,
+        &jobs,
+        &cfg,
+        &[],
+        &[],
+        &meta,
+        &cancel,
+        |_| {},
+    );
+    assert!(rep.errors.is_empty(), "{:?}", rep.errors);
+    assert_eq!(rep.files.len(), 2);
+
+    let image = &rep.files[0].path;
+    let r = hound::WavReader::open(image).unwrap();
+    assert_eq!(r.spec().sample_rate, 44_100);
+    assert_eq!(r.spec().channels, 2);
+    assert_eq!(r.spec().bits_per_sample, 16);
+    let total = r.duration() as u64;
+    assert_eq!(total % 588, 0, "image not frame-aligned: {total}");
+    // Each track padded up to a frame boundary.
+    let t1 = (SR as u64 + 123).div_ceil(588) * 588;
+    let t2 = (SR as u64 + 577).div_ceil(588) * 588;
+    assert_eq!(total, t1 + t2, "unexpected image length");
+
+    let cue = std::fs::read_to_string(&rep.files[1].path).unwrap();
+    assert!(cue.contains("CATALOG 1234567890128"), "{cue}");
+    assert!(cue.contains("TITLE \"Barn Sessions\""));
+    assert!(cue.contains("PERFORMER \"The Copper Stills\""));
+    assert!(cue.contains("TRACK 01 AUDIO"));
+    assert!(cue.contains("INDEX 01 00:00:00"));
+    // Track 2 starts at t1 samples → t1/588 frames.
+    let f = t1 / 588;
+    let expect = format!("INDEX 01 {:02}:{:02}:{:02}", f / 75 / 60, (f / 75) % 60, f % 75);
+    assert!(cue.contains(&expect), "cue missing {expect}:\n{cue}");
 }

@@ -447,24 +447,20 @@ pub fn run_export_with_chain(
 /// to ffmpeg for encoding. Latency-compensated: the chain's total reported
 /// latency is rendered ahead and dropped, so the output stays sample-exact.
 #[allow(clippy::too_many_arguments)]
-fn export_one_rendered(
-    ffmpeg: &Path,
+/// Build a per-track renderer with every chain instantiated on the CALLING
+/// thread: decoders for the audible layers (compaction mapped back to the
+/// ORIGINAL layer indices for lane chains), the track's own chain + the
+/// mastering chain on the master bus, latency summed for compensation.
+fn build_track_renderer(
     layers: &[LayerMix],
     session_channels: u16,
     sample_rate: u32,
     job: &ExportJob,
-    cfg: &ExportConfig,
     chain: &[MasterPluginSpec],
     lane_chains: &[Vec<MasterPluginSpec>],
-    cancel: &AtomicBool,
-    mut on_progress: impl FnMut(f32),
-) -> Result<()> {
+) -> Result<(Renderer, u64, usize)> {
     let channels = (session_channels.max(1) as usize).min(2);
 
-    // Full-timeline playlists per layer; the decoder seek positions us at
-    // the region start sample-accurately. Muted layers are dropped, which
-    // BREAKS the layer-index ↔ lane-index correspondence — `kept` records
-    // each surviving lane's ORIGINAL layer index (lane chains follow it).
     let kept: Vec<usize> = (0..layers.len())
         .filter(|i| job.layer_volumes.get(*i).copied().unwrap_or(1.0) > 0.0)
         .collect();
@@ -502,8 +498,6 @@ fn export_one_rendered(
         ));
     }
 
-    // Instantiate THIS worker's own plugin instances from the specs (any
-    // format — the factory dispatches on the component id).
     let instantiate = |specs: &[MasterPluginSpec]| -> Result<Vec<Box<dyn crate::engine::render::BlockProcessor>>> {
         let mut out = Vec::with_capacity(specs.len());
         for spec in specs {
@@ -522,8 +516,6 @@ fn export_one_rendered(
         }
         Ok(out)
     };
-    // Master bus for this job: the track's own chain (active the whole
-    // job), then the global mastering chain — same order as playback.
     let mut inserts = instantiate(&job.track_chain)?;
     inserts.extend(instantiate(chain)?);
     // Latency compensation covers the master bus (track + mastering).
@@ -531,7 +523,6 @@ fn export_one_rendered(
     // playback; typical layer inserts are zero-latency).
     let latency: u64 = inserts.iter().map(|p| p.latency_samples() as u64).sum();
 
-    let track_len = job.end_sample.saturating_sub(job.start_sample);
     let mut renderer = Renderer::new(
         decoders,
         VolumeAutomation {
@@ -551,6 +542,24 @@ fn export_one_rendered(
         }
     }
     renderer.seek(job.start_sample);
+    Ok((renderer, latency, channels))
+}
+
+fn export_one_rendered(
+    ffmpeg: &Path,
+    layers: &[LayerMix],
+    session_channels: u16,
+    sample_rate: u32,
+    job: &ExportJob,
+    cfg: &ExportConfig,
+    chain: &[MasterPluginSpec],
+    lane_chains: &[Vec<MasterPluginSpec>],
+    cancel: &AtomicBool,
+    mut on_progress: impl FnMut(f32),
+) -> Result<()> {
+    let track_len = job.end_sample.saturating_sub(job.start_sample);
+    let (mut renderer, latency, channels) =
+        build_track_renderer(layers, session_channels, sample_rate, job, chain, lane_chains)?;
 
     // ffmpeg encodes raw f32le PCM from stdin.
     let mut cmd = Command::new(ffmpeg);
@@ -967,4 +976,320 @@ mod tests {
         cfg.bit_depth = 24;
         assert!(codec_args(&cfg).contains(&"pcm_s24le".to_string()));
     }
+}
+
+/// Red Book frame: 1/75 s at 44.1 kHz.
+const CD_FRAME_SAMPLES: u64 = 588;
+const CD_RATE: u32 = 44_100;
+
+fn cue_time(frames: u64) -> String {
+    let ff = frames % 75;
+    let secs = frames / 75;
+    format!("{:02}:{:02}:{:02}", secs / 60, secs % 60, ff)
+}
+
+/// Export ONE Red Book image (44.1 kHz / 16-bit stereo WAV, every track
+/// padded to a CD frame boundary) plus its cue sheet with CD-Text from the
+/// album metadata. Tracks render through the full chain stack exactly like
+/// per-file exports; the image is sequential by nature (single worker).
+#[allow(clippy::too_many_arguments)]
+pub fn run_export_cd_image(
+    ffmpeg: &Path,
+    layers: &[LayerMix],
+    session_channels: u16,
+    sample_rate: u32,
+    jobs: &[ExportJob],
+    cfg: &ExportConfig,
+    chain: &[MasterPluginSpec],
+    lane_chains: &[Vec<MasterPluginSpec>],
+    meta: &AlbumMeta,
+    cancel: &AtomicBool,
+    on_progress: impl Fn(ExportProgress) + Send + Sync,
+) -> ExportReport {
+    let mut report = ExportReport {
+        files: Vec::new(),
+        errors: Vec::new(),
+        cancelled: false,
+    };
+
+    // Image + cue paths (collision-suffixed like every export output).
+    let dest = PathBuf::from(&cfg.dest_dir);
+    if let Err(e) = std::fs::create_dir_all(&dest) {
+        report.errors.push(e.to_string());
+        return report;
+    }
+    let base_name = if meta.album.trim().is_empty() {
+        "CD Image".to_string()
+    } else {
+        crate::naming::sanitize_filename(meta.album.trim())
+    };
+    let mut wav_path = dest.join(format!("{base_name}.wav"));
+    let mut cue_path = dest.join(format!("{base_name}.cue"));
+    let mut k = 1;
+    while wav_path.exists() || cue_path.exists() {
+        wav_path = dest.join(format!("{base_name} ({k}).wav"));
+        cue_path = dest.join(format!("{base_name} ({k}).cue"));
+        k += 1;
+    }
+
+    // One ffmpeg process encodes the whole image: 44.1 kHz f32 stereo in,
+    // dithered 16-bit WAV out (SRC to CD rate happens on OUR side so the
+    // cue frame offsets are exact).
+    use crate::project::DitherMode;
+    let dither = match cfg.dither {
+        DitherMode::Off => "0",
+        DitherMode::Triangular => "triangular",
+        DitherMode::Shibata => "shibata",
+        _ => "triangular_hp",
+    };
+    let mut cmd = Command::new(ffmpeg);
+    cmd.arg("-hide_banner")
+        .arg("-v")
+        .arg("error")
+        .arg("-f")
+        .arg("f32le")
+        .arg("-ar")
+        .arg(CD_RATE.to_string())
+        .arg("-ac")
+        .arg("2")
+        .arg("-i")
+        .arg("pipe:0")
+        .arg("-af")
+        .arg(format!(
+            "aresample=osr={CD_RATE}:out_sample_fmt=s16:dither_method={dither}"
+        ))
+        .arg("-c:a")
+        .arg("pcm_s16le")
+        .arg(&wav_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            report.errors.push(if e.kind() == std::io::ErrorKind::NotFound {
+                StillError::FfmpegNotFound.to_string()
+            } else {
+                e.to_string()
+            });
+            return report;
+        }
+    };
+    let mut stdin = child.stdin.take().expect("stdin piped");
+    let mut stderr = child.stderr.take().expect("stderr piped");
+    let stderr_reader = std::thread::spawn(move || {
+        let mut buf = String::new();
+        use std::io::Read as _;
+        let _ = stderr.read_to_string(&mut buf);
+        buf
+    });
+
+    // Per-track render → SRC to 44.1 stereo → frame padding, counting
+    // OUTPUT samples exactly for the cue offsets.
+    let mut track_starts: Vec<(u32, String, u64)> = Vec::new(); // number, title, start frame
+    let mut image_samples: u64 = 0;
+    let mut failed = false;
+    use std::io::Write as _;
+    let mut push = |stdin: &mut std::process::ChildStdin, data: &[f32]| -> bool {
+        let bytes = unsafe {
+            std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 4)
+        };
+        stdin.write_all(bytes).is_ok()
+    };
+
+    'tracks: for (ti, job) in jobs.iter().enumerate() {
+        if cancel.load(Ordering::SeqCst) {
+            report.cancelled = true;
+            break;
+        }
+        let (mut renderer, latency, channels) = match build_track_renderer(
+            layers,
+            session_channels,
+            sample_rate,
+            job,
+            chain,
+            lane_chains,
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                report
+                    .errors
+                    .push(format!("{}: {e}", job.title));
+                failed = true;
+                break;
+            }
+        };
+        track_starts.push((
+            job.number,
+            job.title.clone(),
+            image_samples / CD_FRAME_SAMPLES,
+        ));
+
+        let mut resampler = (sample_rate != CD_RATE)
+            .then(|| crate::engine::resample::StreamResampler::new(sample_rate, CD_RATE, 2));
+
+        let track_len = job.end_sample.saturating_sub(job.start_sample);
+        let mut block = vec![0.0f32; BLOCK_FRAMES * channels];
+        let mut stereo = vec![0.0f32; BLOCK_FRAMES * 2];
+        let mut rs_out = vec![0.0f32; (BLOCK_FRAMES * 2 + 16) * 2];
+        let mut to_skip = latency;
+        let mut consumed = 0u64;
+        let mut track_out = 0u64;
+
+        let mut feed = |resampler: &mut Option<crate::engine::resample::StreamResampler>,
+                        stereo: &[f32],
+                        frames: usize,
+                        rs_out: &mut Vec<f32>,
+                        stdin: &mut std::process::ChildStdin,
+                        track_out: &mut u64|
+         -> bool {
+            match resampler {
+                Some(rs) => {
+                    let need = rs.max_out_frames(frames) * 2;
+                    if rs_out.len() < need {
+                        rs_out.resize(need, 0.0);
+                    }
+                    let n = rs.process(stereo, frames, rs_out);
+                    *track_out += n as u64;
+                    push(stdin, &rs_out[..n * 2])
+                }
+                None => {
+                    *track_out += frames as u64;
+                    push(stdin, &stereo[..frames * 2])
+                }
+            }
+        };
+
+        while consumed < track_len {
+            if cancel.load(Ordering::SeqCst) {
+                report.cancelled = true;
+                break 'tracks;
+            }
+            let got = renderer.render_block(&mut block, BLOCK_FRAMES);
+            if got == 0 {
+                break;
+            }
+            let mut offset = 0usize;
+            if to_skip > 0 {
+                let drop_n = (to_skip.min(got as u64)) as usize;
+                offset = drop_n;
+                to_skip -= drop_n as u64;
+            }
+            let usable = ((got - offset) as u64).min(track_len - consumed) as usize;
+            if usable == 0 {
+                continue;
+            }
+            // Upmix/copy to stereo interleaved.
+            for f in 0..usable {
+                let src = (offset + f) * channels;
+                stereo[f * 2] = block[src];
+                stereo[f * 2 + 1] = block[src + (channels - 1).min(1)];
+            }
+            if !feed(&mut resampler, &stereo, usable, &mut rs_out, &mut stdin, &mut track_out) {
+                failed = true;
+                break 'tracks;
+            }
+            consumed += usable as u64;
+            on_progress(ExportProgress {
+                track_number: job.number,
+                track_count: jobs.len() as u32,
+                track_title: job.title.clone(),
+                track_progress: (consumed as f32 / track_len.max(1) as f32).min(1.0),
+                completed_tracks: ti as u32,
+                overall_progress: (ti as f32 + consumed as f32 / track_len.max(1) as f32)
+                    / jobs.len().max(1) as f32,
+            });
+        }
+        // Flush the resampler tail with silence so the last output frames
+        // of this track come out before the padding.
+        if resampler.is_some() {
+            let silence = vec![0.0f32; 64 * 2];
+            for _ in 0..2 {
+                if !feed(&mut resampler, &silence, 64, &mut rs_out, &mut stdin, &mut track_out) {
+                    failed = true;
+                    break 'tracks;
+                }
+            }
+        }
+        // Pad to the Red Book frame boundary.
+        let rem = (track_out % CD_FRAME_SAMPLES) as usize;
+        if rem != 0 {
+            let pad = CD_FRAME_SAMPLES as usize - rem;
+            let zeros = vec![0.0f32; pad * 2];
+            if !push(&mut stdin, &zeros) {
+                failed = true;
+                break 'tracks;
+            }
+            track_out += pad as u64;
+        }
+        image_samples += track_out;
+        on_progress(ExportProgress {
+            track_number: job.number,
+            track_count: jobs.len() as u32,
+            track_title: job.title.clone(),
+            track_progress: 1.0,
+            completed_tracks: (ti + 1) as u32,
+            overall_progress: (ti + 1) as f32 / jobs.len().max(1) as f32,
+        });
+    }
+
+    drop(stdin);
+    let status = child.wait();
+    let err_output = stderr_reader.join().unwrap_or_default();
+    if report.cancelled || failed || !status.map(|s| s.success()).unwrap_or(false) {
+        let _ = std::fs::remove_file(&wav_path);
+        if !report.cancelled {
+            let msg = err_output.trim();
+            report.errors.push(if msg.is_empty() {
+                "the CD image encoder failed".into()
+            } else {
+                msg.to_string()
+            });
+        }
+        return report;
+    }
+
+    // Cue sheet with CD-Text; CATALOG only when the EAN looks valid.
+    let performer = if meta.album_artist.trim().is_empty() {
+        meta.artist.trim()
+    } else {
+        meta.album_artist.trim()
+    };
+    let mut cue = String::new();
+    let ean: String = meta.catalog_ean.chars().filter(|c| c.is_ascii_digit()).collect();
+    if ean.len() == 13 || ean.len() == 12 {
+        cue.push_str(&format!("CATALOG {ean}\r\n"));
+    }
+    if !performer.is_empty() {
+        cue.push_str(&format!("PERFORMER \"{}\"\r\n", performer.replace('"', "'")));
+    }
+    if !meta.album.trim().is_empty() {
+        cue.push_str(&format!("TITLE \"{}\"\r\n", meta.album.trim().replace('"', "'")));
+    }
+    cue.push_str(&format!(
+        "FILE \"{}\" WAVE\r\n",
+        wav_path.file_name().unwrap_or_default().to_string_lossy()
+    ));
+    for (number, title, start_frame) in &track_starts {
+        cue.push_str(&format!("  TRACK {number:02} AUDIO\r\n"));
+        cue.push_str(&format!("    TITLE \"{}\"\r\n", title.replace('"', "'")));
+        if !performer.is_empty() {
+            cue.push_str(&format!("    PERFORMER \"{}\"\r\n", performer.replace('"', "'")));
+        }
+        cue.push_str(&format!("    INDEX 01 {}\r\n", cue_time(*start_frame)));
+    }
+    if let Err(e) = std::fs::write(&cue_path, cue) {
+        report.errors.push(e.to_string());
+        return report;
+    }
+
+    report.files.push(ExportedFile {
+        track_title: "CD image".into(),
+        path: wav_path.display().to_string(),
+    });
+    report.files.push(ExportedFile {
+        track_title: "Cue sheet".into(),
+        path: cue_path.display().to_string(),
+    });
+    report
 }

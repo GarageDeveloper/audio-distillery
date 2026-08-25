@@ -175,6 +175,16 @@ controller chunks) and loading a project re-instantiates the chain with
 them. `open_plugin_editor` opens the native editor window of either
 format (AU CocoaUI/generic view; VST3 IPlugView).
 
+### Professional export (tier 1+2 of #5)
+
+`ExportConfig` gained `target_sample_rate` (None = session rate; SRC via
+aresample), `dither` (auto/off/triangular/triangular_hp/shibata — engages
+when lossless output reduces to 16-bit) and `cd_image` (one Red Book
+44.1 kHz/16-bit WAV image with 588-sample frame-aligned tracks + a .cue
+sheet carrying CD-Text and the album's CATALOG EAN from
+`AlbumMeta.catalog_ean`). The CD image renders through the full chain
+stack sequentially.
+
 ## Playback
 
 | Command | Parameters | Returns |

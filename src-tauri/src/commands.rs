@@ -1186,9 +1186,17 @@ pub async fn export_tracks(
                 job.track_chain = specs_of(&r.inserts);
             }
         }
-        Ok((layers, s.info.channels, s.info.sample_rate, jobs, chain, lane_chains))
+        Ok((
+            layers,
+            s.info.channels,
+            s.info.sample_rate,
+            jobs,
+            chain,
+            lane_chains,
+            s.project.album_meta.clone(),
+        ))
     });
-    let (layers, session_channels, sample_rate, jobs, chain, lane_chains) = match prepared {
+    let (layers, session_channels, sample_rate, jobs, chain, lane_chains, meta) = match prepared {
         Ok(x) => x,
         Err(e) => {
             state.export_running.store(false, Ordering::SeqCst);
@@ -1212,6 +1220,30 @@ pub async fn export_tracks(
         // Progress arrives from several worker threads at once; throttle the
         // stream globally but always let start/end events through.
         let last = std::sync::Mutex::new(Instant::now() - Duration::from_secs(1));
+        if config.cd_image {
+            return Ok::<ExportReport, still_core::StillError>(
+                still_core::export::run_export_cd_image(
+                    &ffmpeg,
+                    &layers,
+                    session_channels,
+                    sample_rate,
+                    &jobs,
+                    &config,
+                    &chain,
+                    &lane_chains,
+                    &meta,
+                    &cancel,
+                    |p| {
+                        let force = p.track_progress == 0.0 || p.track_progress == 1.0;
+                        let mut last = last.lock().unwrap();
+                        if force || last.elapsed() >= Duration::from_millis(60) {
+                            *last = Instant::now();
+                            let _ = app2.emit("export:progress", &p);
+                        }
+                    },
+                ),
+            );
+        }
         Ok::<ExportReport, still_core::StillError>(still_core::export::run_export_with_chain(
             &ffmpeg,
             &layers,
