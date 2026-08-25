@@ -21,4 +21,9 @@ completed_tracks: number,
 /**
  * 0.0..=1.0 across the whole export.
  */
-overall_progress: number, };
+overall_progress: number, 
+/**
+ * True during the post-encode loudness measurement pass: the counters
+ * then describe analysis steps, not encoded tracks.
+ */
+analyzing: boolean, };

@@ -11,6 +11,7 @@ import type { AlbumMeta } from "./types/AlbumMeta";
 import type { PluginInfo } from "./types/PluginInfo";
 import type { ChainPresetInfo } from "./types/ChainPresetInfo";
 import type { ChainTarget } from "./types/ChainTarget";
+import type { MeterState } from "./types/MeterState";
 import type { RegionSpan } from "./types/RegionSpan";
 import type { RegionEdge } from "./types/RegionEdge";
 
@@ -99,6 +100,8 @@ export const api = {
   reloadChains: () => invoke<ProjectView>("reload_chains"),
   chainLatency: (target: ChainTarget) =>
     invoke<number>("chain_latency", { target }),
+  meterState: () => invoke<MeterState>("meter_state"),
+  resetMeter: () => invoke<void>("reset_meter"),
   saveChainPreset: (target: ChainTarget, name: string) =>
     invoke<ChainPresetInfo[]>("save_chain_preset", { target, name }),
   listChainPresets: () => invoke<ChainPresetInfo[]>("list_chain_presets"),

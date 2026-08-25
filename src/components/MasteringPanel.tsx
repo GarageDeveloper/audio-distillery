@@ -5,6 +5,7 @@ import type { ChainPresetInfo } from "../types/ChainPresetInfo";
 import type { ChainTarget } from "../types/ChainTarget";
 import { api } from "../api";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { MeterPanel } from "./MeterPanel";
 
 function chainKey(chain: { id: number }[], target: ChainTarget): string {
   return `${targetKey(target)}|${chain.map((p) => p.id).join(",")}`;
@@ -14,6 +15,7 @@ interface Props {
   view: ProjectView;
   /// Current playhead position (samples) — the Tracks section follows it.
   playheadSample: number;
+  playing: boolean;
   onError: (msg: string) => void;
   onViewChange: (v: ProjectView) => void;
 }
@@ -46,7 +48,7 @@ function targetKey(t: ChainTarget): string {
 type Section = "master" | "layers" | "tracks";
 const SECTION_KEY = "still-chain-section";
 
-export function MasteringPanel({ view, playheadSample, onError, onViewChange }: Props) {
+export function MasteringPanel({ view, playheadSample, playing, onError, onViewChange }: Props) {
   const [available, setAvailable] = useState<PluginInfo[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [filter, setFilter] = useState("");
@@ -650,6 +652,8 @@ export function MasteringPanel({ view, playheadSample, onError, onViewChange }: 
           </div>
         </div>
       )}
+
+      <MeterPanel playing={playing} />
 
       <div className="track-panel-foot">
         {chain.length > 0 ? (

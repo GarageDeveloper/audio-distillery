@@ -266,7 +266,7 @@ pub async fn add_take(
         return Err("No audio file given.".to_string());
     }
     check_extensions(&paths)?;
-    // Sort by name so Zoom-style suffixes (Tr1, Tr2, …) line up with the
+    // Sort by name so recorder-style suffixes (Tr1, Tr2, …) line up with the
     // layer order across takes.
     let mut paths = paths;
     paths.sort();
@@ -1005,6 +1005,18 @@ pub fn open_plugin_editor(
         return Err("This plugin is not running (did it fail to load?).".into());
     }
     state.editors.open(&app, id, unit, &name)
+}
+
+/// Live master-bus loudness snapshot (EBU R128, post-chain).
+#[tauri::command]
+pub fn meter_state(state: State<'_, AppState>) -> CmdResult<still_core::MeterState> {
+    Ok(state.player.meter_state())
+}
+
+/// Restart integrated loudness / LRA / true-peak max-hold.
+#[tauri::command]
+pub fn reset_meter(state: State<'_, AppState>) -> CmdResult<()> {
+    state.player.reset_meter().map_err(err)
 }
 
 /// Base64 preview of the project's cover image (display only).

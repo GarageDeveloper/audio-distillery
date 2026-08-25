@@ -31,7 +31,7 @@ Shared types are generated from Rust with `ts-rs` into `src/types/` (run
 | `get_project_view` | — | `ProjectView` | no audio loaded |
 
 A session's audio is a stack of **layers** (time-synchronized recordings of
-the same session, all starting at t = 0 — e.g. a Zoom recorder's stereo mic
+the same session, all starting at t = 0 — e.g. a field recorder's stereo mic
 plus its other inputs). Each layer is an ordered list of **clips** (source
 files) laid back-to-back — or pinned at an explicit timeline position for
 TAKE alignment, with silent gaps filling the difference (peaks, playback and
@@ -184,6 +184,13 @@ when lossless output reduces to 16-bit) and `cd_image` (one Red Book
 sheet carrying CD-Text and the album's CATALOG EAN from
 `AlbumMeta.catalog_ean`). The CD image renders through the full chain
 stack sequentially.
+
+| `meter_state` | — | `MeterState` (live post-chain EBU R128: LUFS-M/S/I, LRA, max-hold dBTP; render-thread fed) | — |
+| `reset_meter` | — | — (restarts I/LRA/true-peak accumulation) | — |
+
+Export reports (`ExportedFile`) now carry `lufs_i` / `lra` /
+`true_peak_db`, measured on the DELIVERED files by an ffmpeg ebur128
+analysis pass after encoding.
 
 ## Playback
 

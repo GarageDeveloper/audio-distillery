@@ -56,7 +56,9 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
   const [perTrack, setPerTrack] = useState<Record<number, number>>({});
 
   useEffect(() => {
-    if (progress) {
+    // Analysis events reuse the same channel but count measurement steps,
+    // not encoded tracks — keep them out of the per-track bars.
+    if (progress && !progress.analyzing) {
       setPerTrack((m) => ({ ...m, [progress.track_number]: progress.track_progress }));
     }
   }, [progress]);
@@ -343,19 +345,45 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
                   </div>
                 );
               })}
+              {progress?.analyzing && (
+                <div className="export-row active">
+                  <span className="num">~</span>
+                  <span className="name">Analyzing loudness — {progress.track_title}</span>
+                  <span className="bar">
+                    <div
+                      style={{ width: `${Math.round(progress.overall_progress * 100)}%` }}
+                    />
+                  </span>
+                  <span className="st">
+                    {progress.completed_tracks} / {progress.track_count}
+                  </span>
+                </div>
+              )}
             </div>
             <div className="export-global">
               <div className="progress-track">
                 <div
                   className="progress-fill"
-                  style={{ width: `${Math.round((progress?.overall_progress ?? 0) * 100)}%` }}
+                  style={{
+                    width: `${
+                      progress?.analyzing
+                        ? 100
+                        : Math.round((progress?.overall_progress ?? 0) * 100)
+                    }%`,
+                  }}
                 />
               </div>
               <div className="row">
                 <span>
-                  {progress?.completed_tracks ?? 0} of {progress?.track_count ?? trackCount} done
+                  {progress?.analyzing
+                    ? "All tracks encoded — measuring loudness…"
+                    : `${progress?.completed_tracks ?? 0} of ${progress?.track_count ?? trackCount} done`}
                 </span>
-                <span>{Math.round((progress?.overall_progress ?? 0) * 100)}%</span>
+                <span>
+                  {progress?.analyzing
+                    ? "100%"
+                    : `${Math.round((progress?.overall_progress ?? 0) * 100)}%`}
+                </span>
               </div>
             </div>
             <div className="modal-foot">
@@ -389,11 +417,82 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
               </div>
             )}
             <div className="report-files">
-              {report.files.map((f) => (
-                <span key={f.path} className="ok" title={f.path}>
-                  {f.path.split(/[/\\]/).pop()}
-                </span>
-              ))}
+              {(() => {
+                const measured = report.files.filter((f) => f.lufs_i != null);
+                const mean =
+                  measured.length > 1
+                    ? measured.reduce((a, f) => a + (f.lufs_i ?? 0), 0) / measured.length
+                    : null;
+                return report.files.map((f) => {
+                  const outlier =
+                    mean != null && f.lufs_i != null && Math.abs(f.lufs_i - mean) > 1.5;
+                  const hotTp = f.true_peak_db != null && f.true_peak_db > -1;
+                  const measured = f.track_measures.filter((m) => m.lufs_i != null);
+                  const trackMean =
+                    measured.length > 1
+                      ? measured.reduce((a, m) => a + (m.lufs_i ?? 0), 0) / measured.length
+                      : null;
+                  return (
+                    <span key={f.path} className="report-group">
+                      <span className="ok report-row" title={f.path}>
+                        <span className="report-name">{f.path.split(/[/\\]/).pop()}</span>
+                        {f.lufs_i != null && (
+                          <span
+                            className={`report-lufs ${outlier ? "outlier" : ""}`}
+                            title={
+                              outlier
+                                ? "More than 1.5 LU away from the album average — check this track's level"
+                                : "Integrated loudness / max true peak of the delivered file"
+                            }
+                          >
+                            {f.lufs_i.toFixed(1)} LUFS-I
+                            {f.true_peak_db != null && (
+                              <span
+                                className={hotTp ? "report-tp-hot" : undefined}
+                                title={
+                                  hotTp
+                                    ? "True peak above −1 dBTP — this file will clip on playback or lossy decoding; lower the level or add a limiter"
+                                    : undefined
+                                }
+                              >
+                                {` · ${f.true_peak_db.toFixed(1)} dBTP`}
+                              </span>
+                            )}
+                          </span>
+                        )}
+                      </span>
+                      {f.track_measures.map((m) => {
+                        const mOutlier =
+                          trackMean != null &&
+                          m.lufs_i != null &&
+                          Math.abs(m.lufs_i - trackMean) > 1.5;
+                        const mHot = m.true_peak_db != null && m.true_peak_db > -1;
+                        return (
+                          <span
+                            key={m.number}
+                            className="report-row report-track"
+                            title="Measured on this track's cue segment of the image"
+                          >
+                            <span className="report-name">
+                              {String(m.number).padStart(2, "0")} · {m.title}
+                            </span>
+                            {m.lufs_i != null && (
+                              <span className={`report-lufs ${mOutlier ? "outlier" : ""}`}>
+                                {m.lufs_i.toFixed(1)} LUFS-I
+                                {m.true_peak_db != null && (
+                                  <span className={mHot ? "report-tp-hot" : undefined}>
+                                    {` · ${m.true_peak_db.toFixed(1)} dBTP`}
+                                  </span>
+                                )}
+                              </span>
+                            )}
+                          </span>
+                        );
+                      })}
+                    </span>
+                  );
+                });
+              })()}
               {report.errors.map((e, i) => (
                 <span key={i} className="fail">
                   {e}

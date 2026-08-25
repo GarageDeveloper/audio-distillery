@@ -63,6 +63,10 @@ pub struct ExportProgress {
     pub completed_tracks: u32,
     /// 0.0..=1.0 across the whole export.
     pub overall_progress: f32,
+    /// True during the post-encode loudness measurement pass: the counters
+    /// then describe analysis steps, not encoded tracks.
+    #[serde(default)]
+    pub analyzing: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -70,6 +74,29 @@ pub struct ExportProgress {
 pub struct ExportedFile {
     pub track_title: String,
     pub path: String,
+    /// Integrated loudness of the DELIVERED file (EBU R128), measured by
+    /// an analysis pass after encoding. None = analysis unavailable.
+    #[serde(default)]
+    pub lufs_i: Option<f64>,
+    #[serde(default)]
+    pub lra: Option<f64>,
+    /// Max true peak (dBTP) of the delivered file.
+    #[serde(default)]
+    pub true_peak_db: Option<f64>,
+    /// Per-track breakdown when this single file holds several tracks
+    /// (CD image): each entry is measured on its cue segment.
+    #[serde(default)]
+    pub track_measures: Vec<TrackMeasure>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../src/types/")]
+pub struct TrackMeasure {
+    pub number: u32,
+    pub title: String,
+    pub lufs_i: Option<f64>,
+    pub lra: Option<f64>,
+    pub true_peak_db: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -270,6 +297,74 @@ pub fn export_concurrency(job_count: usize, available_cores: usize) -> usize {
     available_cores.saturating_sub(2).max(1).min(job_count.max(1))
 }
 
+/// Measure the DELIVERED file with ffmpeg's ebur128 filter (summary
+/// parsing): integrated loudness, loudness range and max true peak. This
+/// meters exactly what the listener receives, after every codec quirk.
+pub fn analyze_loudness(ffmpeg: &Path, file: &Path) -> (Option<f64>, Option<f64>, Option<f64>) {
+    analyze_loudness_af(ffmpeg, file, "ebur128=peak=true")
+}
+
+/// Same measurement restricted to `start_sample..end_sample` of the file
+/// (sample frames at the file's rate) — used for per-track figures inside
+/// a CD image.
+pub fn analyze_loudness_segment(
+    ffmpeg: &Path,
+    file: &Path,
+    start_sample: u64,
+    end_sample: u64,
+) -> (Option<f64>, Option<f64>, Option<f64>) {
+    analyze_loudness_af(
+        ffmpeg,
+        file,
+        &format!("atrim=start_sample={start_sample}:end_sample={end_sample},ebur128=peak=true"),
+    )
+}
+
+fn analyze_loudness_af(
+    ffmpeg: &Path,
+    file: &Path,
+    af: &str,
+) -> (Option<f64>, Option<f64>, Option<f64>) {
+    let out = Command::new(ffmpeg)
+        .arg("-hide_banner")
+        .arg("-nostdin")
+        .arg("-i")
+        .arg(file)
+        .arg("-af")
+        .arg(af)
+        .arg("-f")
+        .arg("null")
+        .arg("-")
+        .output();
+    let Ok(out) = out else {
+        return (None, None, None);
+    };
+    let text = String::from_utf8_lossy(&out.stderr);
+    let tail = &text[text.rfind("Summary:").unwrap_or(0)..];
+    let grab = |label: &str| -> Option<f64> {
+        tail.lines()
+            .find(|l| l.trim_start().starts_with(label))
+            .and_then(|l| l.split(':').nth(1))
+            .and_then(|v| v.trim().split_whitespace().next())
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|v| v.is_finite())
+    };
+    // "Peak:" appears under BOTH "Sample peak:" and "True peak:" — take the
+    // one from the True peak section specifically.
+    let true_peak = tail
+        .find("True peak:")
+        .map(|i| &tail[i..])
+        .and_then(|sect| {
+            sect.lines()
+                .find(|l| l.trim_start().starts_with("Peak:"))
+                .and_then(|l| l.split(':').nth(1))
+                .and_then(|v| v.trim().split_whitespace().next())
+                .and_then(|v| v.parse::<f64>().ok())
+                .filter(|v| v.is_finite())
+        });
+    (grab("I:"), grab("LRA:"), true_peak)
+}
+
 /// Cut and encode every track with ffmpeg (sample-accurate via `atrim`),
 /// running jobs in parallel across the available cores. The source is only
 /// ever read; each job writes a brand-new file.
@@ -351,6 +446,7 @@ pub fn run_export_with_chain(
             track_progress: p,
             completed_tracks: completed.load(Ordering::Relaxed),
             overall_progress: overall(&progress),
+            analyzing: false,
         });
     };
 
@@ -405,11 +501,17 @@ pub fn run_export_with_chain(
                                     .push((i, format!("{}: {e}", job.out_path.display())));
                             }
                         }
+                        // Loudness is measured in a dedicated pass after all
+                        // encoding, with its own progress phase.
                         files.lock().unwrap().push((
                             i,
                             ExportedFile {
                                 track_title: job.title.clone(),
                                 path: job.out_path.display().to_string(),
+                                lufs_i: None,
+                                lra: None,
+                                true_peak_db: None,
+                                track_measures: Vec::new(),
                             },
                         ));
                         completed.fetch_add(1, Ordering::Relaxed);
@@ -434,10 +536,43 @@ pub fn run_export_with_chain(
     // Report in track order, whatever order the workers finished in.
     let mut files = files.into_inner().unwrap();
     files.sort_by_key(|(i, _)| *i);
+    let mut files: Vec<ExportedFile> = files.into_iter().map(|(_, f)| f).collect();
     let mut errors = errors.into_inner().unwrap();
     errors.sort_by_key(|(i, _)| *i);
+
+    // Measurement pass on the delivered files (decode-only, still worth a
+    // visible phase so the dialog doesn't look stalled before the report).
+    let n = files.len() as u32;
+    for (k, f) in files.iter_mut().enumerate() {
+        if cancel.load(Ordering::SeqCst) {
+            break;
+        }
+        on_progress(ExportProgress {
+            track_number: (k + 1) as u32,
+            track_count: n,
+            track_title: f.track_title.clone(),
+            track_progress: 0.0,
+            completed_tracks: k as u32,
+            overall_progress: k as f32 / n.max(1) as f32,
+            analyzing: true,
+        });
+        let (lufs_i, lra, true_peak_db) = analyze_loudness(ffmpeg, Path::new(&f.path));
+        f.lufs_i = lufs_i;
+        f.lra = lra;
+        f.true_peak_db = true_peak_db;
+        on_progress(ExportProgress {
+            track_number: (k + 1) as u32,
+            track_count: n,
+            track_title: f.track_title.clone(),
+            track_progress: 1.0,
+            completed_tracks: (k + 1) as u32,
+            overall_progress: (k + 1) as f32 / n.max(1) as f32,
+            analyzing: true,
+        });
+    }
+
     ExportReport {
-        files: files.into_iter().map(|(_, f)| f).collect(),
+        files,
         errors: errors.into_iter().map(|(_, e)| e).collect(),
         cancelled: cancel.load(Ordering::SeqCst),
     }
@@ -1198,6 +1333,7 @@ pub fn run_export_cd_image(
                 completed_tracks: ti as u32,
                 overall_progress: (ti as f32 + consumed as f32 / track_len.max(1) as f32)
                     / jobs.len().max(1) as f32,
+                analyzing: false,
             });
         }
         // Flush the resampler tail with silence so the last output frames
@@ -1230,6 +1366,7 @@ pub fn run_export_cd_image(
             track_progress: 1.0,
             completed_tracks: (ti + 1) as u32,
             overall_progress: (ti + 1) as f32 / jobs.len().max(1) as f32,
+            analyzing: false,
         });
     }
 
@@ -1283,13 +1420,60 @@ pub fn run_export_cd_image(
         return report;
     }
 
+    // Measurement pass: whole image first, then every cue segment on its
+    // own (exactly what a CD player delivers per track) — with progress so
+    // the dialog doesn't look stalled before the report.
+    let steps = 1 + track_starts.len() as u32;
+    let analyze_progress = |k: u32, title: &str, done: bool| {
+        on_progress(ExportProgress {
+            track_number: k + 1,
+            track_count: steps,
+            track_title: title.to_string(),
+            track_progress: if done { 1.0 } else { 0.0 },
+            completed_tracks: k + done as u32,
+            overall_progress: (k + done as u32) as f32 / steps.max(1) as f32,
+            analyzing: true,
+        });
+    };
+    analyze_progress(0, "CD image", false);
+    let (lufs_i, lra, true_peak_db) = analyze_loudness(ffmpeg, &wav_path);
+    analyze_progress(0, "CD image", true);
+    let track_measures = track_starts
+        .iter()
+        .enumerate()
+        .map(|(i, (number, title, start_frame))| {
+            analyze_progress(1 + i as u32, title, false);
+            let start = start_frame * CD_FRAME_SAMPLES;
+            let end = track_starts
+                .get(i + 1)
+                .map(|t| t.2 * CD_FRAME_SAMPLES)
+                .unwrap_or(image_samples);
+            let (l, lra, tp) = analyze_loudness_segment(ffmpeg, &wav_path, start, end);
+            analyze_progress(1 + i as u32, title, true);
+            TrackMeasure {
+                number: *number,
+                title: title.clone(),
+                lufs_i: l,
+                lra,
+                true_peak_db: tp,
+            }
+        })
+        .collect();
     report.files.push(ExportedFile {
         track_title: "CD image".into(),
         path: wav_path.display().to_string(),
+        lufs_i,
+        lra,
+        true_peak_db,
+        track_measures,
     });
     report.files.push(ExportedFile {
         track_title: "Cue sheet".into(),
         path: cue_path.display().to_string(),
+        lufs_i: None,
+        lra: None,
+        true_peak_db: None,
+        track_measures: Vec::new(),
     });
     report
 }

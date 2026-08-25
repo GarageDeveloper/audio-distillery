@@ -14,6 +14,7 @@ ts-rs = { version = "10", features = ["serde-compat"] }
 lofty = "0.25"
 cpal = "0.15"
 rtrb = "0.3"
+ebur128 = "0.1.10"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 coreaudio-sys = "0.2"
