@@ -41,6 +41,12 @@ export default function App() {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null);
   const [proposals, setProposals] = useState<RegionSpan[] | null>(null);
+  /// Auto-split detection source: null = the mix, else a layer id.
+  const [detectLayer, setDetectLayer] = useState<number | null>(null);
+  /// Review state: excluded proposal keys. The "current" proposal is
+  /// derived from the playhead — clicking the waveform or just letting
+  /// playback run moves the review focus.
+  const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const [dropChoice, setDropChoice] = useState<string[] | null>(null);
   const [minTrackSecs, setMinTrackSecs] = useState(120);
   const [waveMode, setWaveMode] = useState<"mix" | "layers">("mix");
@@ -393,13 +399,16 @@ export default function App() {
     [playback, showError]
   );
 
-  const detectSilences = useCallback(async () => {
+  const detectSilences = useCallback(async (layerId: number | null) => {
     try {
-      const found = await api.detectSilences({
-        threshold_db: -40,
-        min_silence_ms: 1500,
-        min_track_seconds: 15,
-      });
+      const found = await api.detectSilences(
+        {
+          threshold_db: -40,
+          min_silence_ms: 1500,
+          min_track_seconds: 15,
+        },
+        layerId
+      );
       // Hide proposals fully covered by an existing track already.
       const fresh = found.filter(
         (r) =>
@@ -407,11 +416,11 @@ export default function App() {
             (t) => t.start_sample <= r.start && r.end <= t.end_sample
           )
       );
-      if (fresh.length === 0) {
-        showError("No track regions matching the current settings were found.");
-      } else {
-        setProposals(fresh);
-      }
+      // Open the bar even with ZERO results: in multitrack sessions the
+      // remedy (switching the detection source to a quieter layer) lives
+      // in the bar itself.
+      setProposals(fresh);
+      setExcluded(new Set());
     } catch (e) {
       showError(String(e));
     }
@@ -419,14 +428,22 @@ export default function App() {
 
   const playheadSample = playback.positionSeconds * (view?.audio.sample_rate ?? 44100);
 
-  // Auto-split proposals filtered by the live minimum-length criterion.
+  // Auto-split proposals filtered by the live minimum-length criterion,
+  // minus the ones excluded during review.
   const sr = view?.audio.sample_rate ?? 44100;
-  const keptProposals = (proposals ?? []).filter(
+  const spanKey = (r: RegionSpan) => `${r.start}-${r.end}`;
+  const longEnough = (proposals ?? []).filter(
     (r) => (r.end - r.start) / sr >= minTrackSecs
+  );
+  const keptProposals = longEnough.filter((r) => !excluded.has(spanKey(r)));
+  /// Proposal under the playhead (null = the cursor is outside every one).
+  const reviewCurrent = longEnough.findIndex(
+    (r) => playheadSample >= r.start && playheadSample < r.end
   );
   const ignoredProposals = (proposals ?? []).filter(
     (r) => (r.end - r.start) / sr < minTrackSecs
   );
+  const excludedProposals = longEnough.filter((r) => excluded.has(spanKey(r)));
 
   return (
     <div className="app">
@@ -450,7 +467,7 @@ export default function App() {
         onSaveAs={() => void saveProject(true)}
         onUndo={() => void apply(() => api.undo())}
         onRedo={() => void apply(() => api.redo())}
-        onDetectSilences={() => void detectSilences()}
+        onDetectSilences={() => void detectSilences(detectLayer)}
         onExport={() => setExportOpen(true)}
         onAlbum={() => setAlbumOpen(true)}
         onTogglePanel={() => setPanelOpen((p) => !p)}
@@ -468,6 +485,7 @@ export default function App() {
                 waveMode={view.layers.length > 1 ? waveMode : "mix"}
                 proposals={proposals ? keptProposals : null}
                 ignoredProposals={proposals ? ignoredProposals : null}
+                excludedProposals={proposals ? excludedProposals : null}
                 selection={selection}
                 pendingStart={pendingStart}
                 selectedTrack={selectedTrack}
@@ -544,15 +562,104 @@ export default function App() {
               )}
               {proposals && (
                 <div className="proposal-bar">
-                  <span className="proposal-count">
-                    <strong>{keptProposals.length}</strong> track
-                    {keptProposals.length !== 1 ? "s" : ""} kept
-                    {ignoredProposals.length > 0 && (
-                      <span className="proposal-ignored">
-                        {" "}· {ignoredProposals.length} ignored (&lt; {minTrackSecs}s)
+                  <div className="proposal-controls">
+                  {(view?.layers.length ?? 0) > 1 && (
+                    <label className="proposal-source" title="Which signal the silence detection listens to — a between-songs-quiet layer often beats the mix">
+                      Detect on
+                      <span className="select-wrap">
+                      <select
+                        value={detectLayer ?? "mix"}
+                        onChange={(e) => {
+                          const v =
+                            e.target.value === "mix" ? null : Number(e.target.value);
+                          setDetectLayer(v);
+                          void detectSilences(v);
+                        }}
+                      >
+                        <option value="mix">Mix</option>
+                        {view?.layers.map((l) => (
+                          <option key={l.id} value={l.id}>
+                            {l.name}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="select-chevron">▾</span>
                       </span>
-                    )}
-                  </span>
+                    </label>
+                  )}
+
+                  {longEnough.length > 0 && (
+                    <span className="proposal-review">
+                      <button
+                        className="btn btn-icon"
+                        title="Previous proposal before the playhead (plays from its start)"
+                        onClick={() => {
+                          const before = [...longEnough]
+                            .reverse()
+                            .find((r) => r.start < playheadSample - sr * 0.5);
+                          const target = before ?? longEnough[longEnough.length - 1];
+                          seekToAndPlay(target.start);
+                        }}
+                      >
+                        ‹
+                      </button>
+                      <span
+                        className="review-pos"
+                        title={
+                          reviewCurrent >= 0
+                            ? "The playhead is inside this proposal"
+                            : "The playhead is outside every proposal — click the waveform or use ‹ ›"
+                        }
+                      >
+                        {reviewCurrent >= 0 ? reviewCurrent + 1 : "–"}/{longEnough.length}
+                      </span>
+                      <button
+                        className="btn btn-icon"
+                        title="Next proposal after the playhead (plays from its start)"
+                        onClick={() => {
+                          const after = longEnough.find((r) => r.start > playheadSample + 1);
+                          const target = after ?? longEnough[0];
+                          seekToAndPlay(target.start);
+                        }}
+                      >
+                        ›
+                      </button>
+                      <button
+                        className="btn btn-icon"
+                        disabled={reviewCurrent < 0}
+                        title="Audition this proposal's ENDING (plays the last seconds)"
+                        onClick={() => {
+                          const r = longEnough[reviewCurrent];
+                          seekToAndPlay(Math.max(r.start, r.end - 5 * sr));
+                        }}
+                      >
+                        ⇥
+                      </button>
+                      {reviewCurrent >= 0 ? (
+                        (() => {
+                          const r = longEnough[reviewCurrent];
+                          const out = excluded.has(spanKey(r));
+                          return (
+                            <button
+                              className={`btn proposal-keep ${out ? "excluded" : ""}`}
+                              title={out ? "Excluded — click to keep this track" : "Kept — click to exclude this track"}
+                              onClick={() => {
+                                const next = new Set(excluded);
+                                if (out) next.delete(spanKey(r));
+                                else next.add(spanKey(r));
+                                setExcluded(next);
+                              }}
+                            >
+                              {out ? "✕ excluded" : "✓ kept"}
+                            </button>
+                          );
+                        })()
+                      ) : (
+                        <span className="proposal-outside">outside</span>
+                      )}
+                    </span>
+                  )}
+
                   <label className="proposal-min">
                     min
                     <input
@@ -579,6 +686,25 @@ export default function App() {
                   <button className="btn" onClick={() => setProposals(null)}>
                     Dismiss
                   </button>
+                  </div>
+
+                  <div className="proposal-result">
+                    {(proposals?.length ?? 0) === 0 ? (
+                      <span className="proposal-ignored">
+                        Nothing detected — try another source or lower thresholds
+                      </span>
+                    ) : (
+                      <>
+                        <strong>{keptProposals.length}</strong>&nbsp;track
+                        {keptProposals.length !== 1 ? "s" : ""} kept
+                        {ignoredProposals.length > 0 && (
+                          <span className="proposal-ignored">
+                            {" "}· {ignoredProposals.length} left out
+                          </span>
+                        )}
+                      </>
+                    )}
+                  </div>
                 </div>
               )}
             </>

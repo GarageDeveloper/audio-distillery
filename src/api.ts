@@ -108,8 +108,8 @@ export const api = {
     invoke<ChainPresetInfo[]>("delete_chain_preset", { name }),
   undo: () => invoke<ProjectView>("undo"),
   redo: () => invoke<ProjectView>("redo"),
-  detectSilences: (params: SilenceParams) =>
-    invoke<RegionSpan[]>("detect_silences", { params }),
+  detectSilences: (params: SilenceParams, layerId: number | null) =>
+    invoke<RegionSpan[]>("detect_silences", { params, layerId }),
   exportTracks: (config: ExportConfig) =>
     invoke<ExportReport>("export_tracks", { config }),
   cancelExport: () => invoke<void>("cancel_export"),
