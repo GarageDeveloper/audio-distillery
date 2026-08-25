@@ -31,7 +31,7 @@ Shared types are generated from Rust with `ts-rs` into `src/types/` (run
 | `get_project_view` | — | `ProjectView` | no audio loaded |
 
 A session's audio is a stack of **layers** (time-synchronized recordings of
-the same session, all starting at t = 0 — e.g. a Zoom recorder's stereo mic
+the same session, all starting at t = 0 — e.g. a field recorder's stereo mic
 plus its other inputs). Each layer is an ordered list of **clips** (source
 files) laid back-to-back — or pinned at an explicit timeline position for
 TAKE alignment, with silent gaps filling the difference (peaks, playback and

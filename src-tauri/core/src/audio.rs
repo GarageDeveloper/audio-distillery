@@ -321,7 +321,7 @@ fn scan_group(
 /// Decode a whole multitrack session: each group of paths is one LAYER
 /// (time-synchronized, starting at t = 0), each layer's paths are laid
 /// back-to-back. Layers must share the sample rate; channel counts may
-/// differ (a mono Zoom input next to the stereo mic is fine).
+/// differ (a mono recorder input next to the stereo mic is fine).
 /// `progress` receives 0.0..=1.0 over all files of all layers.
 pub fn scan_layers(
     groups: &[Vec<(PathBuf, Option<u64>)>],

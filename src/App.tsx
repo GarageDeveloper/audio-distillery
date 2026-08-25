@@ -847,7 +847,7 @@ export default function App() {
               }}
             >
               <strong>{view ? "Add as synced layers" : "Synced multitrack"}</strong>
-              <span>Time-aligned recordings of the same session (Zoom inputs), mixed together</span>
+              <span>Time-aligned recordings of the same session (field-recorder inputs), mixed together</span>
             </button>
             {view && view.layers.length > 1 && (
               <button

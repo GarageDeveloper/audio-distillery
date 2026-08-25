@@ -151,7 +151,7 @@ impl SourceRef {
     }
 }
 
-/// One time-synchronized layer of the session (e.g. one input of a Zoom
+/// One time-synchronized layer of the session (e.g. one input of a field
 /// recorder). All layers start at t = 0; each holds its own source clips
 /// (sequential, or pinned for take alignment), a mix gain, mute and solo.
 #[derive(Debug, Clone, Serialize, Deserialize)]

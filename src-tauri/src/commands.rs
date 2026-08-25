@@ -266,7 +266,7 @@ pub async fn add_take(
         return Err("No audio file given.".to_string());
     }
     check_extensions(&paths)?;
-    // Sort by name so Zoom-style suffixes (Tr1, Tr2, …) line up with the
+    // Sort by name so recorder-style suffixes (Tr1, Tr2, …) line up with the
     // layer order across takes.
     let mut paths = paths;
     paths.sort();

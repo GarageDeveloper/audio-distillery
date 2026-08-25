@@ -14,7 +14,7 @@ interface Props {
 }
 
 /**
- * Mix section: one row per time-synchronized layer (Zoom inputs…) with a
+ * Mix section: one row per time-synchronized layer (field-recorder inputs…) with a
  * gain fader, mute and remove. Values are the backend's; slider moves are
  * throttled intentions.
  */
