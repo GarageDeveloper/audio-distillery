@@ -1095,3 +1095,50 @@ fn export_cd_image_and_cue() {
     let expect = format!("INDEX 01 {:02}:{:02}:{:02}", f / 75 / 60, (f / 75) % 60, f % 75);
     assert!(cue.contains(&expect), "cue missing {expect}:\n{cue}");
 }
+
+/// Metering (#2): the export report measures the DELIVERED files. A
+/// −20 dBFS 997 Hz correlated stereo sine has a known integrated
+/// loudness (≈ −20.7 LUFS: −23.01 dB RMS/ch, +3.01 dB stereo sum,
+/// −0.691 dB BS.1770 offset, K-weighting ≈ 0 dB at 997 Hz) and a true
+/// peak at ≈ −20 dBTP.
+#[test]
+fn export_report_measures_loudness() {
+    let Ok(ffmpeg) = resolve_ffmpeg(&[]) else {
+        eprintln!("ffmpeg not found — loudness report test skipped");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let wav = dir.path().join("cal.wav");
+    let spec = hound::WavSpec {
+        channels: 2,
+        sample_rate: SR,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    let mut w = hound::WavWriter::create(&wav, spec).unwrap();
+    let amp = 10f32.powf(-20.0 / 20.0);
+    for i in 0..SR * 4 {
+        let s = (2.0 * std::f32::consts::PI * 997.0 * i as f32 / SR as f32).sin() * amp;
+        w.write_sample(s).unwrap();
+        w.write_sample(s).unwrap();
+    }
+    w.finalize().unwrap();
+    let (info, peaks) = scan_file(&wav, |_| {}).unwrap();
+    let mut state = ProjectState::new(Project::new(vec![wav.display().to_string()]), info, vec![peaks]);
+    state.add_region(0, 4 * SR as u64, None).unwrap();
+    let cfg = ExportConfig {
+        format: ExportFormat::Wav,
+        bit_depth: 24,
+        dest_dir: dir.path().join("out").display().to_string(),
+        ..Default::default()
+    };
+    let cancel = AtomicBool::new(false);
+    let jobs = plan_export(&state.tracks(), &cfg, &wav).unwrap();
+    let rep = run_export(&ffmpeg, &mix_of(&state), 2, SR, &jobs, &cfg, &cancel, |_| {});
+    assert!(rep.errors.is_empty(), "{:?}", rep.errors);
+    let f = &rep.files[0];
+    let i = f.lufs_i.expect("report should carry LUFS-I");
+    assert!((i - (-20.7)).abs() < 1.0, "LUFS-I {i}");
+    let tp = f.true_peak_db.expect("report should carry true peak");
+    assert!((tp - (-20.0)).abs() < 1.0, "TP {tp}");
+}

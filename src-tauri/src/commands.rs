@@ -1007,6 +1007,18 @@ pub fn open_plugin_editor(
     state.editors.open(&app, id, unit, &name)
 }
 
+/// Live master-bus loudness snapshot (EBU R128, post-chain).
+#[tauri::command]
+pub fn meter_state(state: State<'_, AppState>) -> CmdResult<still_core::MeterState> {
+    Ok(state.player.meter_state())
+}
+
+/// Restart integrated loudness / LRA / true-peak max-hold.
+#[tauri::command]
+pub fn reset_meter(state: State<'_, AppState>) -> CmdResult<()> {
+    state.player.reset_meter().map_err(err)
+}
+
 /// Base64 preview of the project's cover image (display only).
 #[tauri::command]
 pub fn get_artwork_preview(state: State<'_, AppState>) -> CmdResult<Option<String>> {

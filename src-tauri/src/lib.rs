@@ -121,6 +121,8 @@ pub fn run() {
             commands::open_plugin_editor,
             commands::reload_chains,
             commands::chain_latency,
+            commands::meter_state,
+            commands::reset_meter,
             commands::save_chain_preset,
             commands::list_chain_presets,
             commands::load_chain_preset,

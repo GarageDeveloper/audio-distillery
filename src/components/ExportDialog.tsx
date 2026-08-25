@@ -389,11 +389,35 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
               </div>
             )}
             <div className="report-files">
-              {report.files.map((f) => (
-                <span key={f.path} className="ok" title={f.path}>
-                  {f.path.split(/[/\\]/).pop()}
-                </span>
-              ))}
+              {(() => {
+                const measured = report.files.filter((f) => f.lufs_i != null);
+                const mean =
+                  measured.length > 1
+                    ? measured.reduce((a, f) => a + (f.lufs_i ?? 0), 0) / measured.length
+                    : null;
+                return report.files.map((f) => {
+                  const outlier =
+                    mean != null && f.lufs_i != null && Math.abs(f.lufs_i - mean) > 1.5;
+                  return (
+                    <span key={f.path} className="ok report-row" title={f.path}>
+                      <span className="report-name">{f.path.split(/[/\\]/).pop()}</span>
+                      {f.lufs_i != null && (
+                        <span
+                          className={`report-lufs ${outlier ? "outlier" : ""}`}
+                          title={
+                            outlier
+                              ? "More than 1.5 LU away from the album average — check this track's level"
+                              : "Integrated loudness / max true peak of the delivered file"
+                          }
+                        >
+                          {f.lufs_i.toFixed(1)} LUFS
+                          {f.true_peak_db != null && ` · ${f.true_peak_db.toFixed(1)} dBTP`}
+                        </span>
+                      )}
+                    </span>
+                  );
+                });
+              })()}
               {report.errors.map((e, i) => (
                 <span key={i} className="fail">
                   {e}

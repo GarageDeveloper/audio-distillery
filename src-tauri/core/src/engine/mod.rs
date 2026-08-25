@@ -46,6 +46,20 @@ pub struct MasterPluginSpec {
 /// Snapshot of one chain plugin's live state.
 pub type ChainStateSnapshot = Vec<(u32, Option<Vec<u8>>)>;
 
+/// Live loudness measurement of the master output (EBU R128 / BS.1770),
+/// fed post-master-chain on the render thread. None = not enough signal
+/// yet (or metering unavailable).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../src/types/")]
+pub struct MeterState {
+    pub lufs_m: Option<f64>,
+    pub lufs_s: Option<f64>,
+    pub lufs_i: Option<f64>,
+    pub lra: Option<f64>,
+    /// Max-hold true peak in dBTP since the last reset.
+    pub true_peak_db: Option<f64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../src/types/")]
 pub struct PlaybackState {
@@ -107,6 +121,7 @@ enum Cmd {
         channels: usize,
     },
     SetAutomation(VolumeAutomation),
+    ResetMeter,
     Pause,
     Resume,
     Seek(f64),
@@ -129,6 +144,7 @@ struct Shared {
     device_rate: AtomicU64,
     total_samples: AtomicU64,
     error: Mutex<Option<String>>,
+    meter: Mutex<MeterState>,
 }
 
 impl Shared {
@@ -146,6 +162,7 @@ impl Shared {
             device_rate: AtomicU64::new(44_100),
             total_samples: AtomicU64::new(0),
             error: Mutex::new(None),
+            meter: Mutex::new(MeterState::default()),
         }
     }
 }
@@ -250,6 +267,16 @@ impl PlayerHandle {
         self.send(Cmd::Stop)
     }
 
+    /// Latest master-bus loudness snapshot (post-chain, render-thread fed).
+    pub fn meter_state(&self) -> MeterState {
+        self.shared.meter.lock().unwrap().clone()
+    }
+
+    /// Restart integrated loudness / LRA / true-peak max-hold.
+    pub fn reset_meter(&self) -> Result<()> {
+        self.send(Cmd::ResetMeter)
+    }
+
     pub fn state(&self) -> PlaybackState {
         let s = &self.shared;
         let sr = s.sample_rate.load(Ordering::Relaxed).max(1) as f64;
@@ -309,6 +336,42 @@ fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
     // Session → device rate conversion (None when the rates match).
     let mut resampler: Option<resample::StreamResampler> = None;
     let mut rs_out = vec![0.0f32; BLOCK_FRAMES * 8 * 2];
+    // Post-master loudness meter (EBU R128), session-rate domain.
+    let mut meter: Option<ebur128::EbuR128> = None;
+
+    /// Feed a rendered block and refresh the shared snapshot.
+    fn meter_feed(
+        meter: &mut Option<ebur128::EbuR128>,
+        shared: &Arc<Shared>,
+        samples: &[f32],
+    ) {
+        let Some(m) = meter else { return };
+        if m.add_frames_f32(samples).is_err() {
+            return;
+        }
+        let clean = |v: std::result::Result<f64, ebur128::Error>| {
+            v.ok().filter(|x| x.is_finite() && *x > -300.0)
+        };
+        let mut snap = MeterState {
+            lufs_m: clean(m.loudness_momentary()),
+            lufs_s: clean(m.loudness_shortterm()),
+            lufs_i: clean(m.loudness_global()),
+            lra: m.loudness_range().ok().filter(|x| x.is_finite()),
+            true_peak_db: None,
+        };
+        let mut tp: f64 = 0.0;
+        let mut any = false;
+        for ch in 0..m.channels() {
+            if let Ok(p) = m.true_peak(ch) {
+                tp = tp.max(p);
+                any = true;
+            }
+        }
+        if any && tp > 0.0 {
+            snap.true_peak_db = Some(20.0 * tp.log10());
+        }
+        *shared.meter.lock().unwrap() = snap;
+    }
 
     loop {
         let timeout = if shared.playing.load(Ordering::Relaxed) {
@@ -379,6 +442,17 @@ fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
                         resampler = None;
                     }
                 }
+                meter = ebur128::EbuR128::new(
+                    channels as u32,
+                    sample_rate,
+                    ebur128::Mode::M
+                        | ebur128::Mode::S
+                        | ebur128::Mode::I
+                        | ebur128::Mode::LRA
+                        | ebur128::Mode::TRUE_PEAK,
+                )
+                .ok();
+                *shared.meter.lock().unwrap() = MeterState::default();
                 shared.loaded.store(true, Ordering::Relaxed);
                 if let Some(r) = &mut renderer {
                     r.master_sections = std::mem::take(&mut pending_sections)
@@ -408,6 +482,12 @@ fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
                     None => pending_lanes = lanes,
                 }
                 let _ = reply.send(());
+            }
+            Ok(Cmd::ResetMeter) => {
+                if let Some(m) = &mut meter {
+                    m.reset();
+                }
+                *shared.meter.lock().unwrap() = MeterState::default();
             }
             Ok(Cmd::SetAutomation(a)) => {
                 if let Some(r) = &mut renderer {
@@ -469,6 +549,7 @@ fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
                     if got == 0 {
                         break;
                     }
+                    meter_feed(&mut meter, &shared, &block[..got * ch]);
                     // Session rate → device rate when they differ.
                     let (frames, src): (usize, &[f32]) = match &mut resampler {
                         Some(rs) => {
@@ -507,6 +588,9 @@ fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
                 // No output device (CI, headless): advance a silent clock so
                 // transport state stays coherent.
                 let got = r.render_block(&mut block, BLOCK_FRAMES);
+                if got > 0 {
+                    meter_feed(&mut meter, &shared, &block[..got * r.channels]);
+                }
                 if got == 0 {
                     shared.playing.store(false, Ordering::Relaxed);
                 shared.playing_flag.store(false, Ordering::Relaxed);

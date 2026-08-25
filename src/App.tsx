@@ -775,6 +775,7 @@ export default function App() {
           <MasteringPanel
             view={view}
             playheadSample={playheadSample}
+            playing={playback.playing}
             onError={showError}
             onViewChange={setView}
           />

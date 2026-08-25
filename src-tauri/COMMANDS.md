@@ -185,6 +185,13 @@ sheet carrying CD-Text and the album's CATALOG EAN from
 `AlbumMeta.catalog_ean`). The CD image renders through the full chain
 stack sequentially.
 
+| `meter_state` | — | `MeterState` (live post-chain EBU R128: LUFS-M/S/I, LRA, max-hold dBTP; render-thread fed) | — |
+| `reset_meter` | — | — (restarts I/LRA/true-peak accumulation) | — |
+
+Export reports (`ExportedFile`) now carry `lufs_i` / `lra` /
+`true_peak_db`, measured on the DELIVERED files by an ffmpeg ebur128
+analysis pass after encoding.
+
 ## Playback
 
 | Command | Parameters | Returns |

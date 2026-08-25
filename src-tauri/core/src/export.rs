@@ -70,6 +70,15 @@ pub struct ExportProgress {
 pub struct ExportedFile {
     pub track_title: String,
     pub path: String,
+    /// Integrated loudness of the DELIVERED file (EBU R128), measured by
+    /// an analysis pass after encoding. None = analysis unavailable.
+    #[serde(default)]
+    pub lufs_i: Option<f64>,
+    #[serde(default)]
+    pub lra: Option<f64>,
+    /// Max true peak (dBTP) of the delivered file.
+    #[serde(default)]
+    pub true_peak_db: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -270,6 +279,37 @@ pub fn export_concurrency(job_count: usize, available_cores: usize) -> usize {
     available_cores.saturating_sub(2).max(1).min(job_count.max(1))
 }
 
+/// Measure the DELIVERED file with ffmpeg's ebur128 filter (summary
+/// parsing): integrated loudness, loudness range and max true peak. This
+/// meters exactly what the listener receives, after every codec quirk.
+pub fn analyze_loudness(ffmpeg: &Path, file: &Path) -> (Option<f64>, Option<f64>, Option<f64>) {
+    let out = Command::new(ffmpeg)
+        .arg("-hide_banner")
+        .arg("-nostdin")
+        .arg("-i")
+        .arg(file)
+        .arg("-af")
+        .arg("ebur128=peak=true")
+        .arg("-f")
+        .arg("null")
+        .arg("-")
+        .output();
+    let Ok(out) = out else {
+        return (None, None, None);
+    };
+    let text = String::from_utf8_lossy(&out.stderr);
+    let tail = &text[text.rfind("Summary:").unwrap_or(0)..];
+    let grab = |label: &str| -> Option<f64> {
+        tail.lines()
+            .find(|l| l.trim_start().starts_with(label))
+            .and_then(|l| l.split(':').nth(1))
+            .and_then(|v| v.trim().split_whitespace().next())
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|v| v.is_finite())
+    };
+    (grab("I:"), grab("LRA:"), grab("Peak:"))
+}
+
 /// Cut and encode every track with ffmpeg (sample-accurate via `atrim`),
 /// running jobs in parallel across the available cores. The source is only
 /// ever read; each job writes a brand-new file.
@@ -405,11 +445,16 @@ pub fn run_export_with_chain(
                                     .push((i, format!("{}: {e}", job.out_path.display())));
                             }
                         }
+                        let (lufs_i, lra, true_peak_db) =
+                            analyze_loudness(ffmpeg, &job.out_path);
                         files.lock().unwrap().push((
                             i,
                             ExportedFile {
                                 track_title: job.title.clone(),
                                 path: job.out_path.display().to_string(),
+                                lufs_i,
+                                lra,
+                                true_peak_db,
                             },
                         ));
                         completed.fetch_add(1, Ordering::Relaxed);
@@ -1283,13 +1328,20 @@ pub fn run_export_cd_image(
         return report;
     }
 
+    let (lufs_i, lra, true_peak_db) = analyze_loudness(ffmpeg, &wav_path);
     report.files.push(ExportedFile {
         track_title: "CD image".into(),
         path: wav_path.display().to_string(),
+        lufs_i,
+        lra,
+        true_peak_db,
     });
     report.files.push(ExportedFile {
         track_title: "Cue sheet".into(),
         path: cue_path.display().to_string(),
+        lufs_i: None,
+        lra: None,
+        true_peak_db: None,
     });
     report
 }
