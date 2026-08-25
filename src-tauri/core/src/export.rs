@@ -1090,7 +1090,7 @@ pub fn run_export_cd_image(
     let mut image_samples: u64 = 0;
     let mut failed = false;
     use std::io::Write as _;
-    let mut push = |stdin: &mut std::process::ChildStdin, data: &[f32]| -> bool {
+    let push = |stdin: &mut std::process::ChildStdin, data: &[f32]| -> bool {
         let bytes = unsafe {
             std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 4)
         };
@@ -1136,7 +1136,7 @@ pub fn run_export_cd_image(
         let mut consumed = 0u64;
         let mut track_out = 0u64;
 
-        let mut feed = |resampler: &mut Option<crate::engine::resample::StreamResampler>,
+        let feed = |resampler: &mut Option<crate::engine::resample::StreamResampler>,
                         stereo: &[f32],
                         frames: usize,
                         rs_out: &mut Vec<f32>,
