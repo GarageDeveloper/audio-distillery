@@ -1353,6 +1353,9 @@ button.wordmark:hover { background: var(--panel-2); }
 
 .report-row { display: flex; justify-content: space-between; gap: 10px; }
 .report-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.report-group { display: flex; flex-direction: column; gap: 4px; }
+/* Per-track measures inside a CD image: indented under the image row. */
+.report-track { padding-left: 18px; color: var(--text-3); }
 .report-lufs {
   flex: none;
   font-family: var(--font-mono); font-size: 11px;

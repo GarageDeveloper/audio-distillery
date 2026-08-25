@@ -1094,6 +1094,18 @@ fn export_cd_image_and_cue() {
     let f = t1 / 588;
     let expect = format!("INDEX 01 {:02}:{:02}:{:02}", f / 75 / 60, (f / 75) % 60, f % 75);
     assert!(cue.contains(&expect), "cue missing {expect}:\n{cue}");
+
+    // Per-track measures: both segments carry the same 440 Hz sine at 0.4
+    // amplitude → true peak ≈ 20·log10(0.4) ≈ −7.96 dBTP, matching LUFS.
+    let tm = &rep.files[0].track_measures;
+    assert_eq!(tm.len(), 2, "{tm:?}");
+    for m in tm {
+        let tp = m.true_peak_db.expect("per-track true peak missing");
+        assert!((tp + 7.96).abs() < 1.0, "true peak {tp} dBTP");
+        assert!(m.lufs_i.is_some(), "per-track LUFS missing: {m:?}");
+    }
+    let (l1, l2) = (tm[0].lufs_i.unwrap(), tm[1].lufs_i.unwrap());
+    assert!((l1 - l2).abs() < 0.5, "same material, different LUFS: {l1} vs {l2}");
 }
 
 /// Metering (#2): the export report measures the DELIVERED files. A

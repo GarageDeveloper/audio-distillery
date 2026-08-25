@@ -79,6 +79,20 @@ pub struct ExportedFile {
     /// Max true peak (dBTP) of the delivered file.
     #[serde(default)]
     pub true_peak_db: Option<f64>,
+    /// Per-track breakdown when this single file holds several tracks
+    /// (CD image): each entry is measured on its cue segment.
+    #[serde(default)]
+    pub track_measures: Vec<TrackMeasure>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../src/types/")]
+pub struct TrackMeasure {
+    pub number: u32,
+    pub title: String,
+    pub lufs_i: Option<f64>,
+    pub lra: Option<f64>,
+    pub true_peak_db: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -283,13 +297,37 @@ pub fn export_concurrency(job_count: usize, available_cores: usize) -> usize {
 /// parsing): integrated loudness, loudness range and max true peak. This
 /// meters exactly what the listener receives, after every codec quirk.
 pub fn analyze_loudness(ffmpeg: &Path, file: &Path) -> (Option<f64>, Option<f64>, Option<f64>) {
+    analyze_loudness_af(ffmpeg, file, "ebur128=peak=true")
+}
+
+/// Same measurement restricted to `start_sample..end_sample` of the file
+/// (sample frames at the file's rate) — used for per-track figures inside
+/// a CD image.
+pub fn analyze_loudness_segment(
+    ffmpeg: &Path,
+    file: &Path,
+    start_sample: u64,
+    end_sample: u64,
+) -> (Option<f64>, Option<f64>, Option<f64>) {
+    analyze_loudness_af(
+        ffmpeg,
+        file,
+        &format!("atrim=start_sample={start_sample}:end_sample={end_sample},ebur128=peak=true"),
+    )
+}
+
+fn analyze_loudness_af(
+    ffmpeg: &Path,
+    file: &Path,
+    af: &str,
+) -> (Option<f64>, Option<f64>, Option<f64>) {
     let out = Command::new(ffmpeg)
         .arg("-hide_banner")
         .arg("-nostdin")
         .arg("-i")
         .arg(file)
         .arg("-af")
-        .arg("ebur128=peak=true")
+        .arg(af)
         .arg("-f")
         .arg("null")
         .arg("-")
@@ -468,6 +506,7 @@ pub fn run_export_with_chain(
                                 lufs_i,
                                 lra,
                                 true_peak_db,
+                                track_measures: Vec::new(),
                             },
                         ));
                         completed.fetch_add(1, Ordering::Relaxed);
@@ -1342,12 +1381,34 @@ pub fn run_export_cd_image(
     }
 
     let (lufs_i, lra, true_peak_db) = analyze_loudness(ffmpeg, &wav_path);
+    // Per-track figures: each cue segment measured on its own, exactly as a
+    // CD player would deliver it.
+    let track_measures = track_starts
+        .iter()
+        .enumerate()
+        .map(|(i, (number, title, start_frame))| {
+            let start = start_frame * CD_FRAME_SAMPLES;
+            let end = track_starts
+                .get(i + 1)
+                .map(|t| t.2 * CD_FRAME_SAMPLES)
+                .unwrap_or(image_samples);
+            let (l, lra, tp) = analyze_loudness_segment(ffmpeg, &wav_path, start, end);
+            TrackMeasure {
+                number: *number,
+                title: title.clone(),
+                lufs_i: l,
+                lra,
+                true_peak_db: tp,
+            }
+        })
+        .collect();
     report.files.push(ExportedFile {
         track_title: "CD image".into(),
         path: wav_path.display().to_string(),
         lufs_i,
         lra,
         true_peak_db,
+        track_measures,
     });
     report.files.push(ExportedFile {
         track_title: "Cue sheet".into(),
@@ -1355,6 +1416,7 @@ pub fn run_export_cd_image(
         lufs_i: None,
         lra: None,
         true_peak_db: None,
+        track_measures: Vec::new(),
     });
     report
 }

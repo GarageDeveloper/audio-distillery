@@ -399,33 +399,68 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
                   const outlier =
                     mean != null && f.lufs_i != null && Math.abs(f.lufs_i - mean) > 1.5;
                   const hotTp = f.true_peak_db != null && f.true_peak_db > -1;
+                  const measured = f.track_measures.filter((m) => m.lufs_i != null);
+                  const trackMean =
+                    measured.length > 1
+                      ? measured.reduce((a, m) => a + (m.lufs_i ?? 0), 0) / measured.length
+                      : null;
                   return (
-                    <span key={f.path} className="ok report-row" title={f.path}>
-                      <span className="report-name">{f.path.split(/[/\\]/).pop()}</span>
-                      {f.lufs_i != null && (
-                        <span
-                          className={`report-lufs ${outlier ? "outlier" : ""}`}
-                          title={
-                            outlier
-                              ? "More than 1.5 LU away from the album average — check this track's level"
-                              : "Integrated loudness / max true peak of the delivered file"
-                          }
-                        >
-                          {f.lufs_i.toFixed(1)} LUFS-I
-                          {f.true_peak_db != null && (
-                            <span
-                              className={hotTp ? "report-tp-hot" : undefined}
-                              title={
-                                hotTp
-                                  ? "True peak above −1 dBTP — this file will clip on playback or lossy decoding; lower the level or add a limiter"
-                                  : undefined
-                              }
-                            >
-                              {` · ${f.true_peak_db.toFixed(1)} dBTP`}
+                    <span key={f.path} className="report-group">
+                      <span className="ok report-row" title={f.path}>
+                        <span className="report-name">{f.path.split(/[/\\]/).pop()}</span>
+                        {f.lufs_i != null && (
+                          <span
+                            className={`report-lufs ${outlier ? "outlier" : ""}`}
+                            title={
+                              outlier
+                                ? "More than 1.5 LU away from the album average — check this track's level"
+                                : "Integrated loudness / max true peak of the delivered file"
+                            }
+                          >
+                            {f.lufs_i.toFixed(1)} LUFS-I
+                            {f.true_peak_db != null && (
+                              <span
+                                className={hotTp ? "report-tp-hot" : undefined}
+                                title={
+                                  hotTp
+                                    ? "True peak above −1 dBTP — this file will clip on playback or lossy decoding; lower the level or add a limiter"
+                                    : undefined
+                                }
+                              >
+                                {` · ${f.true_peak_db.toFixed(1)} dBTP`}
+                              </span>
+                            )}
+                          </span>
+                        )}
+                      </span>
+                      {f.track_measures.map((m) => {
+                        const mOutlier =
+                          trackMean != null &&
+                          m.lufs_i != null &&
+                          Math.abs(m.lufs_i - trackMean) > 1.5;
+                        const mHot = m.true_peak_db != null && m.true_peak_db > -1;
+                        return (
+                          <span
+                            key={m.number}
+                            className="report-row report-track"
+                            title="Measured on this track's cue segment of the image"
+                          >
+                            <span className="report-name">
+                              {String(m.number).padStart(2, "0")} · {m.title}
                             </span>
-                          )}
-                        </span>
-                      )}
+                            {m.lufs_i != null && (
+                              <span className={`report-lufs ${mOutlier ? "outlier" : ""}`}>
+                                {m.lufs_i.toFixed(1)} LUFS-I
+                                {m.true_peak_db != null && (
+                                  <span className={mHot ? "report-tp-hot" : undefined}>
+                                    {` · ${m.true_peak_db.toFixed(1)} dBTP`}
+                                  </span>
+                                )}
+                              </span>
+                            )}
+                          </span>
+                        );
+                      })}
                     </span>
                   );
                 });
