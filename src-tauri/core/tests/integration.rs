@@ -937,3 +937,87 @@ fn export_renders_layer_and_track_chains() {
 
     assert_eq!(checksum(&wav_a), before);
 }
+
+/// Tier-1 pro export (#5): dithering a depth reduction and resampling.
+/// A −100 dBFS tone is below half an LSB at 16-bit: truncation (dither
+/// off) yields digital black, dither keeps energy. And a 48 kHz target
+/// resamples the file while preserving its duration.
+#[test]
+fn export_dithers_and_resamples() {
+    let Ok(ffmpeg) = resolve_ffmpeg(&[]) else {
+        eprintln!("ffmpeg not found — dither/SRC test skipped");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let wav = dir.path().join("quiet.wav");
+    // −100 dBFS ≈ 0.33 LSB at 16-bit.
+    let spec = hound::WavSpec {
+        channels: 2,
+        sample_rate: SR,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    let mut w = hound::WavWriter::create(&wav, spec).unwrap();
+    let amp = 10f32.powf(-100.0 / 20.0);
+    for i in 0..SR * 2 {
+        let s = (2.0 * std::f32::consts::PI * 440.0 * i as f32 / SR as f32).sin() * amp;
+        w.write_sample(s).unwrap();
+        w.write_sample(s).unwrap();
+    }
+    w.finalize().unwrap();
+    let (info, peaks) = scan_file(&wav, |_| {}).unwrap();
+    let mut state = ProjectState::new(Project::new(vec![wav.display().to_string()]), info, vec![peaks]);
+    state.add_region(0, SR as u64, None).unwrap();
+    let cancel = AtomicBool::new(false);
+
+    let read16 = |p: &Path| -> Vec<i16> {
+        hound::WavReader::open(p).unwrap().samples::<i16>().map(|s| s.unwrap()).collect()
+    };
+    let run_cfg = |cfg: &ExportConfig| {
+        let jobs = plan_export(&state.tracks(), cfg, &wav).unwrap();
+        let rep = run_export(&ffmpeg, &mix_of(&state), 2, SR, &jobs, cfg, &cancel, |_| {});
+        assert!(rep.errors.is_empty(), "{:?}", rep.errors);
+        jobs
+    };
+
+    // Dither OFF: pure truncation → digital black.
+    let cfg_off = ExportConfig {
+        format: ExportFormat::Wav,
+        bit_depth: 16,
+        dither: still_core::project::DitherMode::Off,
+        dest_dir: dir.path().join("off").display().to_string(),
+        ..Default::default()
+    };
+    let jobs = run_cfg(&cfg_off);
+    let s_off = read16(&jobs[0].out_path);
+    assert!(s_off.iter().all(|&s| s == 0), "expected silence after truncation");
+
+    // Dither AUTO: the tone survives as dithered LSB activity.
+    let cfg_auto = ExportConfig {
+        format: ExportFormat::Wav,
+        bit_depth: 16,
+        dest_dir: dir.path().join("auto").display().to_string(),
+        ..Default::default()
+    };
+    let jobs = run_cfg(&cfg_auto);
+    let s_auto = read16(&jobs[0].out_path);
+    let nonzero = s_auto.iter().filter(|&&s| s != 0).count();
+    assert!(
+        nonzero > s_auto.len() / 20,
+        "dither should keep LSB activity ({nonzero} nonzero)"
+    );
+
+    // SRC to 48 kHz: header rate and duration follow.
+    let cfg_srvarious = ExportConfig {
+        format: ExportFormat::Wav,
+        bit_depth: 24,
+        target_sample_rate: Some(48_000),
+        dest_dir: dir.path().join("srav").display().to_string(),
+        ..Default::default()
+    };
+    let jobs = run_cfg(&cfg_srvarious);
+    let r = hound::WavReader::open(&jobs[0].out_path).unwrap();
+    assert_eq!(r.spec().sample_rate, 48_000);
+    let dur = r.duration() as f64 / 48_000.0;
+    assert!((dur - 1.0).abs() < 0.01, "duration {dur}");
+}

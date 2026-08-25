@@ -175,7 +175,7 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
                   </select>
                 </div>
               )}
-              {cfg.format === "wav" && (
+              {(cfg.format === "wav" || cfg.format === "flac") && (
                 <div className="field">
                   <label>Bit depth</label>
                   <select
@@ -188,6 +188,65 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
                   </select>
                 </div>
               )}
+              <div className="field">
+                <label>Sample rate</label>
+                <select
+                  className="select"
+                  value={cfg.target_sample_rate ?? "session"}
+                  onChange={(e) =>
+                    setCfg({
+                      ...cfg,
+                      target_sample_rate:
+                        e.target.value === "session" ? null : Number(e.target.value),
+                    })
+                  }
+                >
+                  <option value="session">
+                    Session ({(view.audio.sample_rate / 1000).toLocaleString("en-US", { maximumFractionDigits: 1 })} kHz)
+                  </option>
+                  <option value={44100}>44.1 kHz</option>
+                  <option value={48000}>48 kHz</option>
+                  <option value={96000}>96 kHz</option>
+                </select>
+              </div>
+              {(cfg.format === "wav" || cfg.format === "flac") && cfg.bit_depth <= 16 && (
+                <div className="field">
+                  <label>Dither</label>
+                  <select
+                    className="select"
+                    value={cfg.dither}
+                    onChange={(e) =>
+                      setCfg({ ...cfg, dither: e.target.value as ExportConfig["dither"] })
+                    }
+                    title="Applied when reducing to 16-bit; Off truncates (not recommended)"
+                  >
+                    <option value="auto">Auto (triangular HP)</option>
+                    <option value="triangular">Triangular</option>
+                    <option value="triangular_hp">Triangular HP</option>
+                    <option value="shibata">Shibata</option>
+                    <option value="off">Off</option>
+                  </select>
+                </div>
+              )}
+            </div>
+
+            <div className="field preset-row">
+              <span className="hint">Preset:</span>
+              <button
+                className="btn cd-preset"
+                title="Red Book CD delivery: WAV · 44.1 kHz · 16-bit · dithered"
+                onClick={() =>
+                  setCfg({
+                    ...cfg,
+                    format: "wav",
+                    bit_depth: 16,
+                    target_sample_rate: 44100,
+                    dither: "auto",
+                  })
+                }
+              >
+                CD (44.1 kHz · 16-bit · dither)
+              </button>
             </div>
 
             <div className="field">

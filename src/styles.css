@@ -1291,3 +1291,7 @@ button.wordmark:hover { background: var(--panel-2); }
   padding: 0 4px;
 }
 .proposal-review .btn-icon:disabled { opacity: .35; }
+
+/* Export presets */
+.preset-row { display: flex; align-items: center; gap: 8px; }
+.cd-preset { height: 26px; padding: 0 10px; font-size: 12px; }

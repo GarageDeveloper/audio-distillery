@@ -188,6 +188,38 @@ pub fn plan_export_with_meta(
     Ok(jobs)
 }
 
+/// The aresample stage shared by both export paths: sample-rate
+/// conversion to the target rate and/or TPDF/noise-shaped dither when a
+/// lossless output reduces to 16-bit. None = nothing to do (bit-exact
+/// path preserved).
+fn resample_filter(cfg: &ExportConfig, session_rate: u32) -> Option<String> {
+    use crate::project::DitherMode;
+    let out_rate = cfg.target_sample_rate.unwrap_or(session_rate);
+    let rate_change = out_rate != session_rate;
+    let reduces_depth =
+        matches!(cfg.format, ExportFormat::Wav | ExportFormat::Flac) && cfg.bit_depth <= 16;
+    let dither = match cfg.dither {
+        DitherMode::Off => None,
+        DitherMode::Auto => reduces_depth.then_some("triangular_hp"),
+        DitherMode::Triangular => reduces_depth.then_some("triangular"),
+        DitherMode::TriangularHp => reduces_depth.then_some("triangular_hp"),
+        DitherMode::Shibata => reduces_depth.then_some("shibata"),
+    };
+    if !rate_change && dither.is_none() {
+        return None;
+    }
+    let mut f = format!("aresample=osr={out_rate}");
+    if rate_change {
+        // Larger kernel + conservative cutoff: better SRC than defaults.
+        f.push_str(":filter_size=128:cutoff=0.96");
+    }
+    if let Some(method) = dither {
+        // Dither triggers on the conversion to the output sample format.
+        f.push_str(&format!(":out_sample_fmt=s16:dither_method={method}"));
+    }
+    Some(f)
+}
+
 fn codec_args(cfg: &ExportConfig) -> Vec<String> {
     match cfg.format {
         ExportFormat::Wav => vec![
@@ -198,7 +230,16 @@ fn codec_args(cfg: &ExportConfig) -> Vec<String> {
                 "pcm_s16le".into()
             },
         ],
-        ExportFormat::Flac => vec!["-c:a".into(), "flac".into()],
+        ExportFormat::Flac => {
+            let mut v = vec!["-c:a".into(), "flac".into()];
+            if cfg.bit_depth == 24 {
+                v.extend(["-sample_fmt".into(), "s32".into()]);
+                v.extend(["-bits_per_raw_sample".into(), "24".into()]);
+            } else {
+                v.extend(["-sample_fmt".into(), "s16".into()]);
+            }
+            v
+        }
         ExportFormat::Mp3 => vec![
             "-c:a".into(),
             "libmp3lame".into(),
@@ -523,8 +564,11 @@ fn export_one_rendered(
         .arg("-ac")
         .arg(channels.to_string())
         .arg("-i")
-        .arg("pipe:0")
-        .args(codec_args(cfg))
+        .arg("pipe:0");
+    if let Some(rf) = resample_filter(cfg, sample_rate) {
+        cmd.arg("-af").arg(rf);
+    }
+    cmd.args(codec_args(cfg))
         .arg(&job.out_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -661,9 +705,12 @@ fn export_one(
         let TimelinePart::File { start: s, end: e, .. } = active[0].2[0] else {
             unreachable!()
         };
-        cmd.arg("-map").arg("0:a:0").arg("-af").arg(format!(
-            "atrim=start_sample={s}:end_sample={e},asetpts=PTS-STARTPTS"
-        ));
+        let mut af = format!("atrim=start_sample={s}:end_sample={e},asetpts=PTS-STARTPTS");
+        if let Some(rf) = resample_filter(cfg, sample_rate) {
+            af.push(',');
+            af.push_str(&rf);
+        }
+        cmd.arg("-map").arg("0:a:0").arg("-af").arg(af);
     } else {
         let layout = if session_channels >= 2 { "stereo" } else { "mono" };
         let mut filter = String::new();
@@ -720,6 +767,13 @@ fn export_one(
             "mix".to_string()
         } else {
             layer_labels.remove(0)
+        };
+        // Output conditioning (SRC + dither) appended to the graph tail.
+        let final_label = if let Some(rf) = resample_filter(cfg, sample_rate) {
+            filter.push_str(&format!("[{final_label}]{rf}[cond];"));
+            "cond".to_string()
+        } else {
+            final_label
         };
         // Drop the trailing semicolon.
         filter.pop();
