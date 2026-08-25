@@ -101,6 +101,15 @@ export function AlbumMetaForm({ meta, onChange, showDiscBreaks }: Props) {
           onChange={(e) => set({ genre: e.target.value })}
         />
       </div>
+      <div className="field">
+        <label>EAN / UPC</label>
+        <input
+          className="text-input mono"
+          value={meta.catalog_ean}
+          placeholder="Barcode — written as CATALOG in CD cue sheets"
+          onChange={(e) => set({ catalog_ean: e.target.value })}
+        />
+      </div>
       {showDiscBreaks && (
         <div className="field">
           <label>Disc breaks</label>

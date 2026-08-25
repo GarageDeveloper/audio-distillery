@@ -544,6 +544,7 @@ fn exported_files_carry_native_tags() {
         genre: "Rock".into(),
         comment: "".into(),
         disc_breaks: vec![3],
+        catalog_ean: String::new(),
         artwork_path: cover.display().to_string(),
     };
 
@@ -936,4 +937,161 @@ fn export_renders_layer_and_track_chains() {
     let _ = &mut jobs_check;
 
     assert_eq!(checksum(&wav_a), before);
+}
+
+/// Tier-1 pro export (#5): dithering a depth reduction and resampling.
+/// A −100 dBFS tone is below half an LSB at 16-bit: truncation (dither
+/// off) yields digital black, dither keeps energy. And a 48 kHz target
+/// resamples the file while preserving its duration.
+#[test]
+fn export_dithers_and_resamples() {
+    let Ok(ffmpeg) = resolve_ffmpeg(&[]) else {
+        eprintln!("ffmpeg not found — dither/SRC test skipped");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let wav = dir.path().join("quiet.wav");
+    // −100 dBFS ≈ 0.33 LSB at 16-bit.
+    let spec = hound::WavSpec {
+        channels: 2,
+        sample_rate: SR,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    let mut w = hound::WavWriter::create(&wav, spec).unwrap();
+    let amp = 10f32.powf(-100.0 / 20.0);
+    for i in 0..SR * 2 {
+        let s = (2.0 * std::f32::consts::PI * 440.0 * i as f32 / SR as f32).sin() * amp;
+        w.write_sample(s).unwrap();
+        w.write_sample(s).unwrap();
+    }
+    w.finalize().unwrap();
+    let (info, peaks) = scan_file(&wav, |_| {}).unwrap();
+    let mut state = ProjectState::new(Project::new(vec![wav.display().to_string()]), info, vec![peaks]);
+    state.add_region(0, SR as u64, None).unwrap();
+    let cancel = AtomicBool::new(false);
+
+    let read16 = |p: &Path| -> Vec<i16> {
+        hound::WavReader::open(p).unwrap().samples::<i16>().map(|s| s.unwrap()).collect()
+    };
+    let run_cfg = |cfg: &ExportConfig| {
+        let jobs = plan_export(&state.tracks(), cfg, &wav).unwrap();
+        let rep = run_export(&ffmpeg, &mix_of(&state), 2, SR, &jobs, cfg, &cancel, |_| {});
+        assert!(rep.errors.is_empty(), "{:?}", rep.errors);
+        jobs
+    };
+
+    // Dither OFF: pure truncation → digital black.
+    let cfg_off = ExportConfig {
+        format: ExportFormat::Wav,
+        bit_depth: 16,
+        dither: still_core::project::DitherMode::Off,
+        dest_dir: dir.path().join("off").display().to_string(),
+        ..Default::default()
+    };
+    let jobs = run_cfg(&cfg_off);
+    let s_off = read16(&jobs[0].out_path);
+    assert!(s_off.iter().all(|&s| s == 0), "expected silence after truncation");
+
+    // Dither AUTO: the tone survives as dithered LSB activity.
+    let cfg_auto = ExportConfig {
+        format: ExportFormat::Wav,
+        bit_depth: 16,
+        dest_dir: dir.path().join("auto").display().to_string(),
+        ..Default::default()
+    };
+    let jobs = run_cfg(&cfg_auto);
+    let s_auto = read16(&jobs[0].out_path);
+    let nonzero = s_auto.iter().filter(|&&s| s != 0).count();
+    assert!(
+        nonzero > s_auto.len() / 20,
+        "dither should keep LSB activity ({nonzero} nonzero)"
+    );
+
+    // SRC to 48 kHz: header rate and duration follow.
+    let cfg_srvarious = ExportConfig {
+        format: ExportFormat::Wav,
+        bit_depth: 24,
+        target_sample_rate: Some(48_000),
+        dest_dir: dir.path().join("srav").display().to_string(),
+        ..Default::default()
+    };
+    let jobs = run_cfg(&cfg_srvarious);
+    let r = hound::WavReader::open(&jobs[0].out_path).unwrap();
+    assert_eq!(r.spec().sample_rate, 48_000);
+    let dur = r.duration() as f64 / 48_000.0;
+    assert!((dur - 1.0).abs() < 0.01, "duration {dur}");
+}
+
+/// Tier-2 pro export (#5): the Red Book image + cue sheet. Track INDEX
+/// offsets are frame-aligned (588 samples), the image is 44.1 kHz / 16-bit
+/// stereo, the total length equals the sum of the frame-padded tracks, and
+/// the cue carries CD-Text + CATALOG.
+#[test]
+fn export_cd_image_and_cue() {
+    let Ok(ffmpeg) = resolve_ffmpeg(&[]) else {
+        eprintln!("ffmpeg not found — CD image test skipped");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let wav = dir.path().join("src.wav");
+    write_wav(&wav, &[(3.0, 0.4)]);
+    let (info, peaks) = scan_file(&wav, |_| {}).unwrap();
+    let mut state = ProjectState::new(Project::new(vec![wav.display().to_string()]), info, vec![peaks]);
+    // Two tracks with deliberately NON-frame-aligned lengths.
+    state.add_region(0, SR as u64 + 123, None).unwrap();
+    state.add_region(SR as u64 + 200, 2 * SR as u64 + 777, None).unwrap();
+    let meta = still_core::AlbumMeta {
+        album: "Barn Sessions".into(),
+        album_artist: "The Copper Stills".into(),
+        catalog_ean: "1234567890128".into(),
+        ..Default::default()
+    };
+    let cfg = ExportConfig {
+        format: ExportFormat::Wav,
+        bit_depth: 16,
+        cd_image: true,
+        dest_dir: dir.path().join("out").display().to_string(),
+        ..Default::default()
+    };
+    let cancel = AtomicBool::new(false);
+    let jobs = plan_export(&state.tracks(), &cfg, &wav).unwrap();
+    let rep = still_core::export::run_export_cd_image(
+        &ffmpeg,
+        &mix_of(&state),
+        2,
+        SR,
+        &jobs,
+        &cfg,
+        &[],
+        &[],
+        &meta,
+        &cancel,
+        |_| {},
+    );
+    assert!(rep.errors.is_empty(), "{:?}", rep.errors);
+    assert_eq!(rep.files.len(), 2);
+
+    let image = &rep.files[0].path;
+    let r = hound::WavReader::open(image).unwrap();
+    assert_eq!(r.spec().sample_rate, 44_100);
+    assert_eq!(r.spec().channels, 2);
+    assert_eq!(r.spec().bits_per_sample, 16);
+    let total = r.duration() as u64;
+    assert_eq!(total % 588, 0, "image not frame-aligned: {total}");
+    // Each track padded up to a frame boundary.
+    let t1 = (SR as u64 + 123).div_ceil(588) * 588;
+    let t2 = (SR as u64 + 577).div_ceil(588) * 588;
+    assert_eq!(total, t1 + t2, "unexpected image length");
+
+    let cue = std::fs::read_to_string(&rep.files[1].path).unwrap();
+    assert!(cue.contains("CATALOG 1234567890128"), "{cue}");
+    assert!(cue.contains("TITLE \"Barn Sessions\""));
+    assert!(cue.contains("PERFORMER \"The Copper Stills\""));
+    assert!(cue.contains("TRACK 01 AUDIO"));
+    assert!(cue.contains("INDEX 01 00:00:00"));
+    // Track 2 starts at t1 samples → t1/588 frames.
+    let f = t1 / 588;
+    let expect = format!("INDEX 01 {:02}:{:02}:{:02}", f / 75 / 60, (f / 75) % 60, f % 75);
+    assert!(cue.contains(&expect), "cue missing {expect}:\n{cue}");
 }

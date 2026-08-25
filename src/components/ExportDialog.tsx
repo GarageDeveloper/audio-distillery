@@ -36,6 +36,13 @@ type Phase = "settings" | "running" | "report";
 
 export function ExportDialog({ view, progress, onClose, onError, onViewChange }: Props) {
   const [cfg, setCfg] = useState<ExportConfig>({ ...view.export_config });
+  /// The Red Book-compatible combination the CD features require.
+  const cdCombo =
+    cfg.format === "wav" && cfg.bit_depth <= 16 && cfg.target_sample_rate === 44100;
+  useEffect(() => {
+    if (!cdCombo && cfg.cd_image) setCfg((c) => ({ ...c, cd_image: false }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cdCombo]);
   // Collapsed by default: metadata is edited any time via the Album… button;
   // this section is just a shortcut.
   const [metaOpen, setMetaOpen] = useState(false);
@@ -155,6 +162,33 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
                   </button>
                 ))}
               </div>
+              <div className="preset-row">
+                <button
+                  className={`btn cd-preset ${cdCombo ? "active" : ""}`}
+                  title="Red Book CD delivery: WAV · 44.1 kHz · 16-bit · dithered"
+                  onClick={() =>
+                    setCfg({
+                      ...cfg,
+                      format: "wav",
+                      bit_depth: 16,
+                      target_sample_rate: 44100,
+                      dither: "auto",
+                    })
+                  }
+                >
+                  CD preset (44.1 kHz · 16-bit · dither)
+                </button>
+                {cdCombo && (
+                  <label className="cd-image-toggle" title="One Red Book WAV image (frame-aligned tracks) plus a .cue sheet with CD-Text — burnable and pressable">
+                    <input
+                      type="checkbox"
+                      checked={cfg.cd_image}
+                      onChange={(e) => setCfg({ ...cfg, cd_image: e.target.checked })}
+                    />
+                    Single image + cue sheet
+                  </label>
+                )}
+              </div>
             </div>
 
             <div className="field-row">
@@ -175,7 +209,7 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
                   </select>
                 </div>
               )}
-              {cfg.format === "wav" && (
+              {(cfg.format === "wav" || cfg.format === "flac") && (
                 <div className="field">
                   <label>Bit depth</label>
                   <select
@@ -188,7 +222,49 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
                   </select>
                 </div>
               )}
+              <div className="field">
+                <label>Sample rate</label>
+                <select
+                  className="select"
+                  value={cfg.target_sample_rate ?? "session"}
+                  onChange={(e) =>
+                    setCfg({
+                      ...cfg,
+                      target_sample_rate:
+                        e.target.value === "session" ? null : Number(e.target.value),
+                    })
+                  }
+                >
+                  <option value="session">
+                    Session ({(view.audio.sample_rate / 1000).toLocaleString("en-US", { maximumFractionDigits: 1 })} kHz)
+                  </option>
+                  <option value={44100}>44.1 kHz</option>
+                  <option value={48000}>48 kHz</option>
+                  <option value={96000}>96 kHz</option>
+                </select>
+              </div>
+              {(cfg.format === "wav" || cfg.format === "flac") && cfg.bit_depth <= 16 && (
+                <div className="field">
+                  <label>Dither</label>
+                  <select
+                    className="select"
+                    value={cfg.dither}
+                    onChange={(e) =>
+                      setCfg({ ...cfg, dither: e.target.value as ExportConfig["dither"] })
+                    }
+                    title="Applied when reducing to 16-bit; Off truncates (not recommended)"
+                  >
+                    <option value="auto">Auto (triangular HP)</option>
+                    <option value="triangular">Triangular</option>
+                    <option value="triangular_hp">Triangular HP</option>
+                    <option value="shibata">Shibata</option>
+                    <option value="off">Off</option>
+                  </select>
+                </div>
+              )}
             </div>
+
+
 
             <div className="field">
               <label>Destination</label>

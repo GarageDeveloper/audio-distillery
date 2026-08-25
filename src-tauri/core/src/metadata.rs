@@ -39,6 +39,10 @@ pub struct AlbumMeta {
     /// Empty = single disc. Example: [7, 13] → tracks 1-6 = disc 1,
     /// 7-12 = disc 2, 13+ = disc 3.
     pub disc_breaks: Vec<u32>,
+    /// EAN/UPC barcode of the release, written as CATALOG in CD cue
+    /// sheets. Empty = omitted.
+    #[serde(default)]
+    pub catalog_ean: String,
     /// Path to a cover image (JPEG/PNG), embedded as front cover in every
     /// exported file that supports pictures (MP4 covr, ID3 APIC, FLAC
     /// picture block; RIFF INFO has none). Empty = no artwork.
@@ -282,6 +286,7 @@ mod tests {
             genre: "Rock".into(),
             comment: "".into(),
             disc_breaks: vec![7, 13],
+            catalog_ean: String::new(),
             artwork_path: String::new(),
         }
     }

@@ -25,6 +25,11 @@ date: string, genre: string, comment: string,
  */
 disc_breaks: Array<number>, 
 /**
+ * EAN/UPC barcode of the release, written as CATALOG in CD cue
+ * sheets. Empty = omitted.
+ */
+catalog_ean: string, 
+/**
  * Path to a cover image (JPEG/PNG), embedded as front cover in every
  * exported file that supports pictures (MP4 covr, ID3 APIC, FLAC
  * picture block; RIFF INFO has none). Empty = no artwork.

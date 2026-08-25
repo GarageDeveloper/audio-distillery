@@ -74,17 +74,50 @@ impl ExportFormat {
     }
 }
 
+/// Dither applied when reducing bit depth on lossless output. `Auto`
+/// picks triangular_hp whenever the output is 16-bit; `Off` truncates
+/// (only correct when no depth reduction happens). Lossy outputs never
+/// dither.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../../src/types/")]
+pub enum DitherMode {
+    Auto,
+    Off,
+    Triangular,
+    TriangularHp,
+    Shibata,
+}
+
+impl Default for DitherMode {
+    fn default() -> Self {
+        DitherMode::Auto
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../src/types/")]
 pub struct ExportConfig {
     pub format: ExportFormat,
     /// Bitrate for lossy formats (kbps).
     pub bitrate_kbps: u32,
-    /// Bit depth for WAV output (16 or 24).
+    /// Bit depth for WAV/FLAC output (16 or 24).
     pub bit_depth: u8,
     pub dest_dir: String,
     /// File naming template, e.g. `{n} - {title}`.
     pub template: String,
+    /// Output sample rate; None = keep the session rate. High-quality
+    /// resampling happens in the encoder pipeline (aresample).
+    #[serde(default)]
+    #[ts(type = "number | null")]
+    pub target_sample_rate: Option<u32>,
+    /// Dither policy for lossless depth reduction.
+    #[serde(default)]
+    pub dither: DitherMode,
+    /// Export a single Red Book image + cue sheet instead of one file per
+    /// track (forces 44.1 kHz / 16-bit / WAV, frame-aligned tracks).
+    #[serde(default)]
+    pub cd_image: bool,
 }
 
 impl Default for ExportConfig {
@@ -95,6 +128,9 @@ impl Default for ExportConfig {
             bit_depth: 16,
             dest_dir: String::new(),
             template: "{n} - {title}".to_string(),
+            target_sample_rate: None,
+            dither: DitherMode::default(),
+            cd_image: false,
         }
     }
 }
