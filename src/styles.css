@@ -1360,3 +1360,4 @@ button.wordmark:hover { background: var(--panel-2); }
   color: var(--text-2);
 }
 .report-lufs.outlier { color: var(--warn); font-weight: 700; }
+.report-tp-hot { color: var(--err); font-weight: 700; }

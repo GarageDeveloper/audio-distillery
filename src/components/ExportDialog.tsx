@@ -398,6 +398,7 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
                 return report.files.map((f) => {
                   const outlier =
                     mean != null && f.lufs_i != null && Math.abs(f.lufs_i - mean) > 1.5;
+                  const hotTp = f.true_peak_db != null && f.true_peak_db > -1;
                   return (
                     <span key={f.path} className="ok report-row" title={f.path}>
                       <span className="report-name">{f.path.split(/[/\\]/).pop()}</span>
@@ -411,7 +412,18 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
                           }
                         >
                           {f.lufs_i.toFixed(1)} LUFS-I
-                          {f.true_peak_db != null && ` · ${f.true_peak_db.toFixed(1)} dBTP`}
+                          {f.true_peak_db != null && (
+                            <span
+                              className={hotTp ? "report-tp-hot" : undefined}
+                              title={
+                                hotTp
+                                  ? "True peak above −1 dBTP — this file will clip on playback or lossy decoding; lower the level or add a limiter"
+                                  : undefined
+                              }
+                            >
+                              {` · ${f.true_peak_db.toFixed(1)} dBTP`}
+                            </span>
+                          )}
                         </span>
                       )}
                     </span>
