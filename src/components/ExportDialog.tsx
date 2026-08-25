@@ -410,7 +410,7 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
                               : "Integrated loudness / max true peak of the delivered file"
                           }
                         >
-                          {f.lufs_i.toFixed(1)} LUFS
+                          {f.lufs_i.toFixed(1)} LUFS-I
                           {f.true_peak_db != null && ` · ${f.true_peak_db.toFixed(1)} dBTP`}
                         </span>
                       )}

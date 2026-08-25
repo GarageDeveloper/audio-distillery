@@ -1355,7 +1355,8 @@ button.wordmark:hover { background: var(--panel-2); }
 .report-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .report-lufs {
   flex: none;
-  font-family: var(--font-mono); font-size: 10px;
-  color: var(--text-3);
+  font-family: var(--font-mono); font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
 }
 .report-lufs.outlier { color: var(--warn); font-weight: 700; }

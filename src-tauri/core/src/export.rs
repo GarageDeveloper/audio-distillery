@@ -307,7 +307,20 @@ pub fn analyze_loudness(ffmpeg: &Path, file: &Path) -> (Option<f64>, Option<f64>
             .and_then(|v| v.parse::<f64>().ok())
             .filter(|v| v.is_finite())
     };
-    (grab("I:"), grab("LRA:"), grab("Peak:"))
+    // "Peak:" appears under BOTH "Sample peak:" and "True peak:" — take the
+    // one from the True peak section specifically.
+    let true_peak = tail
+        .find("True peak:")
+        .map(|i| &tail[i..])
+        .and_then(|sect| {
+            sect.lines()
+                .find(|l| l.trim_start().starts_with("Peak:"))
+                .and_then(|l| l.split(':').nth(1))
+                .and_then(|v| v.trim().split_whitespace().next())
+                .and_then(|v| v.parse::<f64>().ok())
+                .filter(|v| v.is_finite())
+        });
+    (grab("I:"), grab("LRA:"), true_peak)
 }
 
 /// Cut and encode every track with ffmpeg (sample-accurate via `atrim`),
