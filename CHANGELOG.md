@@ -3,6 +3,42 @@
 All notable changes to AudioDistillery are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.0] — 2026-08-26
+
+### Added
+- **Professional export, tiers 1–2** ([#5]): output sample-rate conversion
+  (aresample, large kernel), dither on lossless depth reduction (auto /
+  triangular / triangular HP / Shibata), a one-click CD preset
+  (WAV · 44.1 kHz · 16-bit · dithered), and a Red Book **CD image + cue
+  sheet** export — 588-sample frame-aligned tracks in a single WAV, CD-Text
+  and the album's CATALOG (EAN/UPC field in the metadata) in the .cue.
+- **Mastering-grade metering** ([#2]): live EBU R128 meter in the Chains
+  panel — momentary and short-term bars, integrated LUFS with a
+  calibratable target (Spotify/Apple/YouTube/EBU presets), loudness range
+  and max-hold true peak, tapped right after the master bus on the render
+  thread. Every export now ends with a **loudness report**: LUFS-I and
+  true peak per delivered file (measured on the encoded result), album
+  outliers flagged, true peaks above −1 dBTP in red, CD images measured
+  per cue segment, with a visible "analyzing" phase before the report.
+- **Multitrack stems export** ([#7]): one file per layer per track, one
+  folder per track (`{n} - {title}/{ln} - {layer}` by default, `{layer}`
+  and `{ln}` macros in any template). Stem content is a choice: raw
+  sample-exact cuts (DAW round-trip) or layer mix settings (gain,
+  mute/solo, layer inserts). A layer with no audio under a track still
+  yields a full-length silent stem, keeping the set time-aligned.
+- **"Source" output format** ([#7]): a format choice that mirrors each
+  original file's container, bit depth and sample rate — per layer in
+  stems mode.
+
+### Fixed
+- The load overlay's Cancel button appeared exactly under the pointer
+  after picking a layout, so a stray double-click aborted the analysis;
+  it now arms after a short delay (Esc stays immediate).
+
+[#2]: https://github.com/GarageDeveloper/audio-distillery/issues/2
+[#5]: https://github.com/GarageDeveloper/audio-distillery/issues/5
+[#7]: https://github.com/GarageDeveloper/audio-distillery/issues/7
+
 ## [0.4.0] — 2026-08-25
 
 ### Added
