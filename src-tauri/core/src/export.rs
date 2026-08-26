@@ -50,6 +50,10 @@ pub struct ExportJob {
     /// this job's reference source file at plan time. None = use the
     /// config as-is.
     pub source_fmt: Option<(ExportFormat, u8, Option<u32>)>,
+    /// A window with no audible audio produces a full-length SILENT file
+    /// instead of an error. Stems set this: a layer with no clips under a
+    /// track must still yield a stem, or the set desynchronizes in a DAW.
+    pub silence_ok: bool,
 }
 
 impl ExportJob {
@@ -271,6 +275,7 @@ pub fn plan_export_with_meta(
             },
             artwork: artwork.clone(),
             source_fmt: src_fmt,
+            silence_ok: false,
         });
     }
     Ok(jobs)
@@ -392,6 +397,7 @@ pub fn plan_export_stems(
                 },
                 artwork: artwork.clone(),
                 source_fmt: src_fmt,
+                silence_ok: true,
             });
         }
     }
@@ -1009,7 +1015,7 @@ fn export_one(
                 .any(|p| matches!(p, TimelinePart::File { .. }))
         })
         .collect();
-    if active.is_empty() {
+    if active.is_empty() && !job.silence_ok {
         return Err(StillError::Ffmpeg(
             "the track region covers no audible audio (are all layers muted?)".into(),
         ));
@@ -1034,7 +1040,24 @@ fn export_one(
         && active[0].2.len() == 1
         && matches!(active[0].2[0], TimelinePart::File { .. })
         && (active[0].1 - 1.0).abs() < 1e-6;
-    if single_plain {
+    if active.is_empty() {
+        // Silent stem: full window length, so the stem set stays aligned.
+        let layout = if session_channels >= 2 { "stereo" } else { "mono" };
+        let win = job.end_sample.saturating_sub(job.start_sample);
+        let mut filter = format!(
+            "anullsrc=r={sample_rate}:cl={layout},atrim=end_sample={win},asetpts=PTS-STARTPTS[s0]"
+        );
+        let final_label = if let Some(rf) = resample_filter(cfg, sample_rate) {
+            filter.push_str(&format!(";[s0]{rf}[cond]"));
+            "cond"
+        } else {
+            "s0"
+        };
+        cmd.arg("-filter_complex")
+            .arg(&filter)
+            .arg("-map")
+            .arg(format!("[{final_label}]"));
+    } else if single_plain {
         let TimelinePart::File { start: s, end: e, .. } = active[0].2[0] else {
             unreachable!()
         };

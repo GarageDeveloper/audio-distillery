@@ -1124,8 +1124,10 @@ fn export_stems_multitrack() {
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
     };
+    // The mono layer is only ONE second long: track 2 lies entirely past
+    // its end, exercising the silent-stem path.
     let mut w = hound::WavWriter::create(&mono, spec).unwrap();
-    for i in 0..(2 * SR as usize) {
+    for i in 0..(SR as usize) {
         let v = (0.3 * (i as f32 * 440.0 * 2.0 * std::f32::consts::PI / SR as f32).sin()
             * i16::MAX as f32) as i16;
         w.write_sample(v).unwrap();
@@ -1147,6 +1149,7 @@ fn export_stems_multitrack() {
         pyramids,
     );
     state.add_region(0, SR as u64, None).unwrap();
+    state.add_region(SR as u64, 2 * SR as u64, None).unwrap();
 
     let Ok(ffmpeg) = resolve_ffmpeg(&[]) else {
         eprintln!("ffmpeg not found — stems export test skipped");
@@ -1176,7 +1179,7 @@ fn export_stems_multitrack() {
     // Raw cuts: one job per (track × layer), folder per track.
     let jobs =
         plan_export_stems(&state.tracks(), &cfg, &stereo, &meta, &stem_layers, false).unwrap();
-    assert_eq!(jobs.len(), 2);
+    assert_eq!(jobs.len(), 4, "2 tracks × 2 layers");
     let rel = |j: usize| {
         jobs[j]
             .out_path
@@ -1216,13 +1219,26 @@ fn export_stems_multitrack() {
         .unwrap_or(0);
     assert!(max_err <= 1, "raw stem differs from source (max err {max_err} LSB)");
 
+    // Track 2 is past the mono layer's end: its mono stem must still exist,
+    // FULL length and silent, so the stem set stays time-aligned in a DAW.
+    let silent_job = &jobs[3];
+    assert!(silent_job.out_path.display().to_string().contains("input-3"));
+    let mut r = hound::WavReader::open(&silent_job.out_path).unwrap();
+    assert_eq!(r.duration() as u64, SR as u64, "silent stem must span the window");
+    let peak = r
+        .samples::<i16>()
+        .map(|v| v.unwrap().abs())
+        .max()
+        .unwrap_or(0);
+    assert_eq!(peak, 0, "expected pure silence");
+
     // Mix mode skips a muted layer entirely.
     let mono_id = state.project.layers[1].id;
     state.set_layer_muted(mono_id, true).unwrap();
     let jobs_mix =
         plan_export_stems(&state.tracks(), &cfg, &stereo, &meta, &stem_layers, true).unwrap();
-    assert_eq!(jobs_mix.len(), 1, "muted layer must not produce a stem");
-    assert!(jobs_mix[0].out_path.display().to_string().contains("Room mic"));
+    assert_eq!(jobs_mix.len(), 2, "muted layer must not produce stems");
+    assert!(jobs_mix.iter().all(|j| j.out_path.display().to_string().contains("Room mic")));
 
     // Source format: each stem mirrors its own container.
     assert_eq!(resolve_source_format(&stereo), (ExportFormat::Wav, 16, Some(SR)));
