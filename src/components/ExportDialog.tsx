@@ -25,12 +25,15 @@ const FORMATS: { key: ExportFormat; label: string }[] = [
   { key: "flac", label: "FLAC" },
   { key: "mp3", label: "MP3" },
   { key: "aac", label: "AAC" },
+  { key: "source", label: "Source" },
 ];
+const DEFAULT_TEMPLATE = "{n} - {title}";
+const STEMS_TEMPLATE = "{n} - {title}/{ln} - {layer}";
 const BITRATES = [320, 256, 192, 128];
 // Default bitrate applied when picking a lossy format: MP3 → 320 kbps,
 // AAC → 128 kbps CBR (WaveLab's "iTunes Standard" preset).
 const DEFAULT_BITRATE: Partial<Record<ExportFormat, number>> = { mp3: 320, aac: 128 };
-const EXT: Record<ExportFormat, string> = { wav: "wav", flac: "flac", mp3: "mp3", aac: "m4a" };
+const EXT: Record<ExportFormat, string> = { wav: "wav", flac: "flac", mp3: "mp3", aac: "m4a", source: "wav" };
 
 type Phase = "settings" | "running" | "report";
 
@@ -54,14 +57,31 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
   const [report, setReport] = useState<ExportReport | null>(null);
   // Tracks export in parallel: accumulate the per-track progress events.
   const [perTrack, setPerTrack] = useState<Record<number, number>>({});
+  // Stems mode: the rows (track × layer) are only known from the events.
+  const [stemRows, setStemRows] = useState<Record<number, { title: string; pct: number }>>({});
 
   useEffect(() => {
     // Analysis events reuse the same channel but count measurement steps,
     // not encoded tracks — keep them out of the per-track bars.
     if (progress && !progress.analyzing) {
       setPerTrack((m) => ({ ...m, [progress.track_number]: progress.track_progress }));
+      setStemRows((m) => ({
+        ...m,
+        [progress.track_number]: { title: progress.track_title, pct: progress.track_progress },
+      }));
     }
   }, [progress]);
+
+  // Stems naming: swap the default template both ways, leave any custom
+  // template alone.
+  useEffect(() => {
+    setCfg((c) => {
+      if (c.stems && c.template === DEFAULT_TEMPLATE) return { ...c, template: STEMS_TEMPLATE };
+      if (!c.stems && c.template === STEMS_TEMPLATE) return { ...c, template: DEFAULT_TEMPLATE };
+      return c;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cfg.stems]);
 
   // Multi-disc album still on the default naming: sort tracks into one
   // folder per disc.
@@ -103,8 +123,14 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
       .replace("{titre}", t.title)
       .replace("{album}", view.album_meta.album)
       .replace("{year}", view.album_meta.date.replace(/\D/g, "").slice(0, 4))
-      .replace("{source}", view.audio.path.split(/[/\\]/).pop()?.replace(/\.[^.]+$/, "") ?? "");
-    return `${name}.${EXT[cfg.format]}`;
+      .replace("{source}", view.audio.path.split(/[/\\]/).pop()?.replace(/\.[^.]+$/, "") ?? "")
+      .replace("{ln}", "01")
+      .replace("{layer}", view.layers[0]?.name.replace(/\.[^.]+$/, "") ?? "Layer 1");
+    const ext =
+      cfg.format === "source"
+        ? view.audio.path.split(".").pop()?.toLowerCase() ?? "wav"
+        : EXT[cfg.format];
+    return `${name}.${ext}`;
   };
 
   const start = async () => {
@@ -114,6 +140,7 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
     }
     setPhase("running");
     setPerTrack({});
+    setStemRows({});
     try {
       const r = await api.exportTracks(cfg);
       setReport(r);
@@ -180,17 +207,55 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
                 >
                   CD preset (44.1 kHz · 16-bit · dither)
                 </button>
-                {cdCombo && (
+                {cdCombo && !cfg.stems && (
                   <label className="cd-image-toggle" title="One Red Book WAV image (frame-aligned tracks) plus a .cue sheet with CD-Text — burnable and pressable">
                     <input
                       type="checkbox"
                       checked={cfg.cd_image}
-                      onChange={(e) => setCfg({ ...cfg, cd_image: e.target.checked })}
+                      onChange={(e) =>
+                        setCfg({ ...cfg, cd_image: e.target.checked, stems: false })
+                      }
                     />
                     Single image + cue sheet
                   </label>
                 )}
               </div>
+              {cfg.format === "source" && (
+                <div className="hint">
+                  Mirrors each original file: same container, bit depth and sample rate
+                  {cfg.stems ? " — every stem keeps its own layer's format" : ""}.
+                </div>
+              )}
+            </div>
+
+            <div className="field">
+              <label className="cd-image-toggle stems-toggle" title="One file per layer per track, laid out as one folder per track — for re-importing into a DAW">
+                <input
+                  type="checkbox"
+                  checked={cfg.stems}
+                  onChange={(e) =>
+                    setCfg({
+                      ...cfg,
+                      stems: e.target.checked,
+                      cd_image: e.target.checked ? false : cfg.cd_image,
+                    })
+                  }
+                />
+                Multitrack stems — one file per layer, one folder per track
+              </label>
+              {cfg.stems && (
+                <select
+                  className="select"
+                  value={cfg.stems_apply_mix ? "mix" : "raw"}
+                  onChange={(e) =>
+                    setCfg({ ...cfg, stems_apply_mix: e.target.value === "mix" })
+                  }
+                  title="Raw cuts are untouched slices of each layer; mix settings apply layer gain, mute/solo and layer inserts (never the track or mastering chains)"
+                >
+                  <option value="raw">Raw cuts — untouched layer audio (DAW re-import)</option>
+                  <option value="mix">With mix settings — layer gain/mute/solo + layer inserts</option>
+                </select>
+              )}
             </div>
 
             <div className="field-row">
@@ -224,6 +289,7 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
                   </select>
                 </div>
               )}
+              {cfg.format !== "source" && (
               <div className="field">
                 <label>Sample rate</label>
                 <select
@@ -245,6 +311,7 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
                   <option value={96000}>96 kHz</option>
                 </select>
               </div>
+              )}
               {(cfg.format === "wav" || cfg.format === "flac") && cfg.bit_depth <= 16 && (
                 <div className="field">
                   <label>Dither</label>
@@ -309,7 +376,8 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
                 onChange={(e) => setCfg({ ...cfg, template: e.target.value })}
               />
               <div className="hint">
-                Preview: {preview()} — macros: {"{n} {title} {disc} {album} {year} …"} — a
+                Preview: {preview()} — macros: {"{n} {title} {disc} {album} {year}"}
+                {cfg.stems ? " {layer} {ln}" : ""} … — a
                 {" / "}creates a subfolder (e.g. {"{disc}/{n} - {title}"})
               </div>
             </div>
@@ -319,7 +387,9 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
                 Cancel
               </button>
               <button className="btn btn-primary" onClick={() => void start()}>
-                Export {trackCount} track{trackCount > 1 ? "s" : ""}
+                {cfg.stems
+                  ? `Export ${trackCount * Math.max(view.layers.length, 1)} stems`
+                  : `Export ${trackCount} track${trackCount > 1 ? "s" : ""}`}
               </button>
             </div>
           </>
@@ -329,7 +399,25 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
           <>
             <h2>Exporting…</h2>
             <div className="export-rows">
-              {view.tracks.map((t) => {
+              {cfg.stems
+                ? Object.entries(stemRows)
+                    .sort((a, b) => Number(a[0]) - Number(b[0]))
+                    .map(([num, r]) => {
+                      const state = r.pct >= 1 ? "done" : r.pct > 0 ? "active" : "waiting";
+                      return (
+                        <div key={num} className={`export-row ${state}`}>
+                          <span className="num">{num.padStart(2, "0")}</span>
+                          <span className="name">{r.title}</span>
+                          <span className="bar">
+                            <div style={{ width: `${Math.round(r.pct * 100)}%` }} />
+                          </span>
+                          <span className="st">
+                            {state === "done" ? "done" : `${Math.round(r.pct * 100)}%`}
+                          </span>
+                        </div>
+                      );
+                    })
+                : view.tracks.map((t) => {
                 const pct = perTrack[t.number] ?? 0;
                 const state = pct >= 1 ? "done" : pct > 0 ? "active" : "waiting";
                 return (

@@ -45,6 +45,62 @@ pub struct ExportJob {
     pub tags: Option<TrackTags>,
     /// Validated cover image shared by all jobs.
     pub artwork: Option<Arc<(Vec<u8>, lofty::picture::MimeType)>>,
+    /// Concrete output parameters when the config asks for
+    /// `ExportFormat::Source`: (format, bit depth, sample rate) probed from
+    /// this job's reference source file at plan time. None = use the
+    /// config as-is.
+    pub source_fmt: Option<(ExportFormat, u8, Option<u32>)>,
+}
+
+impl ExportJob {
+    /// The config this job actually encodes with (`Source` resolved).
+    pub fn effective_cfg(&self, cfg: &ExportConfig) -> ExportConfig {
+        match self.source_fmt {
+            Some((format, bit_depth, target_sample_rate)) => ExportConfig {
+                format,
+                bit_depth,
+                target_sample_rate,
+                ..cfg.clone()
+            },
+            None => cfg.clone(),
+        }
+    }
+}
+
+/// One layer's identity for stems planning.
+pub struct StemLayer {
+    /// Display name: the custom layer name, or the source file's stem.
+    pub name: String,
+    /// First source file of the layer (format reference for Source mode).
+    pub source_path: String,
+}
+
+/// Output parameters mirroring `path`'s container: format from the
+/// extension (unknown → WAV), bit depth clamped to the 16/24 the encoders
+/// accept, sample rate as probed. Lossy formats keep the configured
+/// bitrate.
+pub fn resolve_source_format(path: &Path) -> (ExportFormat, u8, Option<u32>) {
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let format = match ext.as_str() {
+        "flac" => ExportFormat::Flac,
+        "mp3" => ExportFormat::Mp3,
+        "m4a" | "aac" | "mp4" => ExportFormat::Aac,
+        _ => ExportFormat::Wav,
+    };
+    let props = lofty::probe::Probe::open(path)
+        .ok()
+        .and_then(|p| p.read().ok())
+        .map(|f| {
+            use lofty::file::AudioFile;
+            let p = f.properties();
+            (p.bit_depth(), p.sample_rate())
+        });
+    let (depth, rate) = props.unwrap_or((None, None));
+    let bit_depth = depth.map(|b| if b >= 24 { 24 } else { 16 }).unwrap_or(24);
+    (format, bit_depth, rate)
 }
 
 /// Progress event for ONE track. Exports run in parallel, so several tracks
@@ -135,7 +191,11 @@ pub fn plan_export_with_meta(
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "audio".into());
-    let ext = cfg.format.extension();
+    let src_fmt = (cfg.format == ExportFormat::Source)
+        .then(|| resolve_source_format(source_path));
+    let ext = src_fmt
+        .map(|(f, _, _)| f.extension())
+        .unwrap_or_else(|| cfg.format.extension());
 
     // Load and validate the cover once (fail the plan early with a clear
     // message rather than per-track during the export).
@@ -210,7 +270,130 @@ pub fn plan_export_with_meta(
                 ))
             },
             artwork: artwork.clone(),
+            source_fmt: src_fmt,
         });
+    }
+    Ok(jobs)
+}
+
+/// Plan a MULTITRACK export (stems): one job per (track × layer), each
+/// rendering a single layer via one-hot volumes. `apply_mix` = false cuts
+/// the layer raw (unity volume; callers pass no chains); true keeps the
+/// resolved per-track layer volume and skips fully muted stems. Templates
+/// gain the `{layer}` (name) and `{ln}` (layer index) macros.
+pub fn plan_export_stems(
+    tracks: &[TrackInfo],
+    cfg: &ExportConfig,
+    source_path: &Path,
+    meta: &AlbumMeta,
+    stem_layers: &[StemLayer],
+    apply_mix: bool,
+) -> Result<Vec<ExportJob>> {
+    if cfg.dest_dir.trim().is_empty() {
+        return Err(StillError::InvalidProject(
+            "no destination folder selected".into(),
+        ));
+    }
+    let dest = PathBuf::from(&cfg.dest_dir);
+    std::fs::create_dir_all(&dest)?;
+    let source_stem = source_path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "audio".into());
+    let artwork = if meta.artwork_path.is_empty() {
+        None
+    } else {
+        Some(Arc::new(load_artwork(Path::new(&meta.artwork_path))?))
+    };
+    let mut used: Vec<PathBuf> = Vec::new();
+    let mut jobs = Vec::new();
+    let mut seq = 0u32;
+    for t in tracks {
+        let numbering = crate::metadata::disc_numbering(
+            &meta.disc_breaks,
+            t.number,
+            tracks.len() as u32,
+        );
+        let ctx = crate::metadata::MacroContext {
+            meta,
+            title: &t.title,
+            source_stem: &source_stem,
+            numbering,
+        };
+        for (li, layer) in stem_layers.iter().enumerate() {
+            let volume = if apply_mix {
+                t.layer_volumes.get(li).copied().unwrap_or(1.0)
+            } else {
+                1.0
+            };
+            if apply_mix && volume <= 0.0 {
+                continue; // fully muted for this track: no stem
+            }
+            let src_fmt = (cfg.format == ExportFormat::Source)
+                .then(|| resolve_source_format(Path::new(&layer.source_path)));
+            let ext = src_fmt
+                .map(|(f, _, _)| f.extension())
+                .unwrap_or_else(|| cfg.format.extension());
+            // Same segment machinery as the mixdown planner: layer macros
+            // are injected AFTER the '/' split so a layer name containing a
+            // slash can never create a directory.
+            let ln = format!("{:02}", li + 1);
+            let segments: Vec<String> = cfg
+                .template
+                .split('/')
+                .map(|seg| {
+                    let seg = seg.replace("{ln}", &ln).replace("{layer}", &layer.name);
+                    render_track_filename(
+                        &crate::metadata::expand_macros(&seg, &ctx),
+                        t.number as usize,
+                        tracks.len(),
+                        &t.title,
+                        &source_stem,
+                    )
+                })
+                .filter(|s| !s.is_empty())
+                .collect();
+            let (base, subdirs) = segments
+                .split_last()
+                .map(|(b, d)| (b.clone(), d.to_vec()))
+                .unwrap_or_else(|| ("Untitled".to_string(), Vec::new()));
+            let parent = subdirs.iter().fold(dest.clone(), |acc, d| acc.join(d));
+            std::fs::create_dir_all(&parent)?;
+            let mut candidate = parent.join(format!("{base}.{ext}"));
+            let mut k = 1;
+            while candidate.exists() || used.contains(&candidate) {
+                candidate = parent.join(format!("{base} ({k}).{ext}"));
+                k += 1;
+            }
+            used.push(candidate.clone());
+            let mut volumes = vec![0.0f32; stem_layers.len()];
+            volumes[li] = volume;
+            seq += 1;
+            jobs.push(ExportJob {
+                // Sequential across all stems: progress events and report
+                // rows need a unique number per file.
+                number: seq,
+                title: format!("{} · {}", t.title, layer.name),
+                start_sample: t.start_sample,
+                end_sample: t.end_sample,
+                out_path: candidate,
+                layer_volumes: volumes,
+                track_chain: Vec::new(),
+                tags: if is_empty_meta(meta) {
+                    None
+                } else {
+                    Some(resolve_tags(
+                        meta,
+                        &t.title,
+                        &source_stem,
+                        t.number,
+                        tracks.len() as u32,
+                    ))
+                },
+                artwork: artwork.clone(),
+                source_fmt: src_fmt,
+            });
+        }
     }
     Ok(jobs)
 }
@@ -249,7 +432,9 @@ fn resample_filter(cfg: &ExportConfig, session_rate: u32) -> Option<String> {
 
 fn codec_args(cfg: &ExportConfig) -> Vec<String> {
     match cfg.format {
-        ExportFormat::Wav => vec![
+        // Source never reaches encoding (resolved at plan time via
+        // ExportJob::effective_cfg); a stray value encodes as WAV.
+        ExportFormat::Wav | ExportFormat::Source => vec![
             "-c:a".into(),
             if cfg.bit_depth == 24 {
                 "pcm_s24le".into()
@@ -459,6 +644,10 @@ pub fn run_export_with_chain(
                 }
                 let job = &jobs[i];
                 emit(i, 0.0);
+                // Resolve ExportFormat::Source into this job's concrete
+                // format/depth/rate before touching any encoder path.
+                let jcfg = job.effective_cfg(cfg);
+                let cfg = &jcfg;
                 let needs_render = !chain.is_empty()
                     || !job.track_chain.is_empty()
                     || lane_chains.iter().any(|c| !c.is_empty());

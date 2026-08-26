@@ -1161,9 +1161,49 @@ pub async fn export_tracks(
         // the UI requires an explicit choice; here we only forbid emptiness.
         s.project.export_config = config.clone();
         let source = PathBuf::from(&s.info.path);
-        let jobs =
-            still_core::export::plan_export_with_meta(&tracks, &config, &source, &s.project.album_meta)
-                .map_err(err)?;
+        let jobs = if config.stems {
+            // Multitrack export: one job per (track × layer). Layer names
+            // follow the UI (custom name, else the source file's stem).
+            let stem_layers: Vec<still_core::export::StemLayer> = s
+                .project
+                .layers
+                .iter()
+                .enumerate()
+                .map(|(i, l)| {
+                    let first = s.info.layers.get(i).and_then(|sc| sc.clips.first());
+                    let name = l.custom_name.clone().unwrap_or_else(|| {
+                        first
+                            .and_then(|c| {
+                                std::path::Path::new(&c.name)
+                                    .file_stem()
+                                    .map(|n| n.to_string_lossy().to_string())
+                            })
+                            .unwrap_or_else(|| format!("Layer {}", i + 1))
+                    });
+                    still_core::export::StemLayer {
+                        name,
+                        source_path: first.map(|c| c.path.clone()).unwrap_or_default(),
+                    }
+                })
+                .collect();
+            still_core::export::plan_export_stems(
+                &tracks,
+                &config,
+                &source,
+                &s.project.album_meta,
+                &stem_layers,
+                config.stems_apply_mix,
+            )
+            .map_err(err)?
+        } else {
+            still_core::export::plan_export_with_meta(
+                &tracks,
+                &config,
+                &source,
+                &s.project.album_meta,
+            )
+            .map_err(err)?
+        };
         let layers: Vec<still_core::LayerMix> = s
             .info
             .layers
@@ -1182,20 +1222,33 @@ pub async fn export_tracks(
                 })
                 .collect()
         };
-        let chain = specs_of(&s.project.mastering_chain);
+        // Stems never go through the track/master chains; raw stems skip
+        // the layer inserts too (untouched cut of the source).
+        let chain = if config.stems {
+            Vec::new()
+        } else {
+            specs_of(&s.project.mastering_chain)
+        };
         // Per-layer chains, index-aligned with `layers`.
-        let lane_chains: Vec<Vec<still_core::MasterPluginSpec>> = s
-            .project
-            .layers
-            .iter()
-            .map(|l| specs_of(&l.inserts))
-            .collect();
-        // Each job renders one region: attach that track's own chain
-        // (jobs and `tracks` are index-aligned by construction).
+        let lane_chains: Vec<Vec<still_core::MasterPluginSpec>> =
+            if config.stems && !config.stems_apply_mix {
+                Vec::new()
+            } else {
+                s.project
+                    .layers
+                    .iter()
+                    .map(|l| specs_of(&l.inserts))
+                    .collect()
+            };
+        // Each mixdown job renders one region: attach that track's own
+        // chain (jobs and `tracks` are index-aligned by construction —
+        // NOT true in stems mode, which carries no track chains at all).
         let mut jobs = jobs;
-        for (job, t) in jobs.iter_mut().zip(&tracks) {
-            if let Some(r) = s.project.regions.iter().find(|r| r.id == t.id) {
-                job.track_chain = specs_of(&r.inserts);
+        if !config.stems {
+            for (job, t) in jobs.iter_mut().zip(&tracks) {
+                if let Some(r) = s.project.regions.iter().find(|r| r.id == t.id) {
+                    job.track_chain = specs_of(&r.inserts);
+                }
             }
         }
         Ok((
@@ -1232,7 +1285,7 @@ pub async fn export_tracks(
         // Progress arrives from several worker threads at once; throttle the
         // stream globally but always let start/end events through.
         let last = std::sync::Mutex::new(Instant::now() - Duration::from_secs(1));
-        if config.cd_image {
+        if config.cd_image && !config.stems {
             return Ok::<ExportReport, still_core::StillError>(
                 still_core::export::run_export_cd_image(
                     &ffmpeg,
