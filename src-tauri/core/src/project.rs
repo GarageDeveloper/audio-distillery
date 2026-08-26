@@ -58,6 +58,10 @@ pub enum ExportFormat {
     Flac,
     Mp3,
     Aac,
+    /// Mirror the ORIGINAL file's format, bit depth and sample rate;
+    /// resolved to a concrete format per job at plan time (in stems mode
+    /// each stem inherits the format of its own source layer).
+    Source,
 }
 
 impl ExportFormat {
@@ -67,6 +71,8 @@ impl ExportFormat {
             ExportFormat::Flac => "flac",
             ExportFormat::Mp3 => "mp3",
             ExportFormat::Aac => "m4a",
+            // Never reaches a file name: Source is resolved at plan time.
+            ExportFormat::Source => "wav",
         }
     }
     pub fn is_lossy(&self) -> bool {
@@ -118,6 +124,15 @@ pub struct ExportConfig {
     /// track (forces 44.1 kHz / 16-bit / WAV, frame-aligned tracks).
     #[serde(default)]
     pub cd_image: bool,
+    /// Multitrack export: one file PER LAYER per track (stems), laid out
+    /// as one folder per track. Mutually exclusive with `cd_image`.
+    #[serde(default)]
+    pub stems: bool,
+    /// Stem content: false = raw cut of the layer (no gain/inserts, DAW
+    /// round-trip fidelity); true = layer mix settings applied (gain,
+    /// mute/solo, layer inserts) but no track/master chain.
+    #[serde(default)]
+    pub stems_apply_mix: bool,
 }
 
 impl Default for ExportConfig {
@@ -131,6 +146,8 @@ impl Default for ExportConfig {
             target_sample_rate: None,
             dither: DitherMode::default(),
             cd_image: false,
+            stems: false,
+            stems_apply_mix: false,
         }
     }
 }

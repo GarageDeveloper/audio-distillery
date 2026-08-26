@@ -1301,6 +1301,7 @@ button.wordmark:hover { background: var(--panel-2); }
   border-color: rgba(224, 136, 58, .28);
 }
 
+.stems-toggle { margin-bottom: 6px; }
 .cd-image-toggle {
   display: inline-flex; align-items: center; gap: 6px;
   font-size: 12px; color: var(--text-2);

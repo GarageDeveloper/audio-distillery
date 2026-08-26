@@ -28,4 +28,15 @@ dither: DitherMode,
  * Export a single Red Book image + cue sheet instead of one file per
  * track (forces 44.1 kHz / 16-bit / WAV, frame-aligned tracks).
  */
-cd_image: boolean, };
+cd_image: boolean, 
+/**
+ * Multitrack export: one file PER LAYER per track (stems), laid out
+ * as one folder per track. Mutually exclusive with `cd_image`.
+ */
+stems: boolean, 
+/**
+ * Stem content: false = raw cut of the layer (no gain/inserts, DAW
+ * round-trip fidelity); true = layer mix settings applied (gain,
+ * mute/solo, layer inserts) but no track/master chain.
+ */
+stems_apply_mix: boolean, };

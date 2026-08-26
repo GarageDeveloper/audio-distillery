@@ -1108,6 +1108,151 @@ fn export_cd_image_and_cue() {
     assert!((l1 - l2).abs() < 0.5, "same material, different LUFS: {l1} vs {l2}");
 }
 
+/// Multitrack stems export (#7): one folder per track, one file per layer
+/// named with the {ln}/{layer} macros; raw cuts are sample-exact copies of
+/// the source slice; mix mode skips muted layers; the Source format
+/// mirrors each layer's own container.
+#[test]
+fn export_stems_multitrack() {
+    let dir = tempfile::tempdir().unwrap();
+    let stereo = dir.path().join("mic-stereo.wav");
+    let mono = dir.path().join("input-3.wav");
+    write_wav(&stereo, &[(2.0, 0.4)]);
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: SR,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    // The mono layer is only ONE second long: track 2 lies entirely past
+    // its end, exercising the silent-stem path.
+    let mut w = hound::WavWriter::create(&mono, spec).unwrap();
+    for i in 0..(SR as usize) {
+        let v = (0.3 * (i as f32 * 440.0 * 2.0 * std::f32::consts::PI / SR as f32).sin()
+            * i16::MAX as f32) as i16;
+        w.write_sample(v).unwrap();
+    }
+    w.finalize().unwrap();
+
+    let (info, pyramids) = still_core::scan_layers(
+        &[vec![(stereo.clone(), None)], vec![(mono.clone(), None)]],
+        &AtomicBool::new(false),
+        |_| {},
+    )
+    .unwrap();
+    let mut state = ProjectState::new(
+        Project::new_layers(vec![
+            vec![stereo.display().to_string()],
+            vec![mono.display().to_string()],
+        ]),
+        info,
+        pyramids,
+    );
+    state.add_region(0, SR as u64, None).unwrap();
+    state.add_region(SR as u64, 2 * SR as u64, None).unwrap();
+
+    let Ok(ffmpeg) = resolve_ffmpeg(&[]) else {
+        eprintln!("ffmpeg not found — stems export test skipped");
+        return;
+    };
+    use still_core::export::{plan_export_stems, resolve_source_format, StemLayer};
+    let stem_layers = vec![
+        StemLayer {
+            name: "Room mic".into(),
+            source_path: stereo.display().to_string(),
+        },
+        StemLayer {
+            name: "input-3".into(),
+            source_path: mono.display().to_string(),
+        },
+    ];
+    let cfg = ExportConfig {
+        format: ExportFormat::Wav,
+        bit_depth: 16,
+        template: "{n} - {title}/{ln} - {layer}".into(),
+        stems: true,
+        dest_dir: dir.path().join("out").display().to_string(),
+        ..Default::default()
+    };
+    let meta = still_core::AlbumMeta::default();
+
+    // Raw cuts: one job per (track × layer), folder per track.
+    let jobs =
+        plan_export_stems(&state.tracks(), &cfg, &stereo, &meta, &stem_layers, false).unwrap();
+    assert_eq!(jobs.len(), 4, "2 tracks × 2 layers");
+    let rel = |j: usize| {
+        jobs[j]
+            .out_path
+            .strip_prefix(dir.path().join("out"))
+            .unwrap()
+            .display()
+            .to_string()
+    };
+    assert_eq!(rel(0), "01 - Track 01/01 - Room mic.wav");
+    assert_eq!(rel(1), "01 - Track 01/02 - input-3.wav");
+    assert_eq!(jobs[0].layer_volumes, vec![1.0, 0.0]);
+    assert_eq!(jobs[1].layer_volumes, vec![0.0, 1.0]);
+
+    let mix = mix_of(&state);
+    let cancel = AtomicBool::new(false);
+    let report = run_export(&ffmpeg, &mix, 2, SR, &jobs, &cfg, &cancel, |_| {});
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+
+    // The stereo raw stem is a sample-exact slice of its source.
+    let out: Vec<i16> = hound::WavReader::open(&jobs[0].out_path)
+        .unwrap()
+        .samples::<i16>()
+        .map(|s| s.unwrap())
+        .collect();
+    let src: Vec<i16> = hound::WavReader::open(&stereo)
+        .unwrap()
+        .samples::<i16>()
+        .take(SR as usize * 2)
+        .map(|s| s.unwrap())
+        .collect();
+    assert_eq!(out.len(), src.len());
+    let max_err = out
+        .iter()
+        .zip(&src)
+        .map(|(a, b)| (a - b).abs())
+        .max()
+        .unwrap_or(0);
+    assert!(max_err <= 1, "raw stem differs from source (max err {max_err} LSB)");
+
+    // Track 2 is past the mono layer's end: its mono stem must still exist,
+    // FULL length and silent, so the stem set stays time-aligned in a DAW.
+    let silent_job = &jobs[3];
+    assert!(silent_job.out_path.display().to_string().contains("input-3"));
+    let mut r = hound::WavReader::open(&silent_job.out_path).unwrap();
+    assert_eq!(r.duration() as u64, SR as u64, "silent stem must span the window");
+    let peak = r
+        .samples::<i16>()
+        .map(|v| v.unwrap().abs())
+        .max()
+        .unwrap_or(0);
+    assert_eq!(peak, 0, "expected pure silence");
+
+    // Mix mode skips a muted layer entirely.
+    let mono_id = state.project.layers[1].id;
+    state.set_layer_muted(mono_id, true).unwrap();
+    let jobs_mix =
+        plan_export_stems(&state.tracks(), &cfg, &stereo, &meta, &stem_layers, true).unwrap();
+    assert_eq!(jobs_mix.len(), 2, "muted layer must not produce stems");
+    assert!(jobs_mix.iter().all(|j| j.out_path.display().to_string().contains("Room mic")));
+
+    // Source format: each stem mirrors its own container.
+    assert_eq!(resolve_source_format(&stereo), (ExportFormat::Wav, 16, Some(SR)));
+    let cfg_src = ExportConfig {
+        format: ExportFormat::Source,
+        ..cfg.clone()
+    };
+    let jobs_src =
+        plan_export_stems(&state.tracks(), &cfg_src, &stereo, &meta, &stem_layers, false)
+            .unwrap();
+    assert_eq!(jobs_src[0].source_fmt, Some((ExportFormat::Wav, 16, Some(SR))));
+    assert!(jobs_src[0].out_path.extension().unwrap() == "wav");
+}
+
 /// Metering (#2): the export report measures the DELIVERED files. A
 /// −20 dBFS 997 Hz correlated stereo sine has a known integrated
 /// loudness (≈ −20.7 LUFS: −23.01 dB RMS/ch, +3.01 dB stereo sum,

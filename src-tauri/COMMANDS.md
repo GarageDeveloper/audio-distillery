@@ -190,7 +190,20 @@ stack sequentially.
 
 Export reports (`ExportedFile`) now carry `lufs_i` / `lra` /
 `true_peak_db`, measured on the DELIVERED files by an ffmpeg ebur128
-analysis pass after encoding.
+analysis pass after encoding (progress events flagged `analyzing`), plus
+`track_measures` (per-cue-segment figures) on a CD image.
+
+### Multitrack stems + Source format (#7)
+
+`ExportConfig` gained `stems` (one file per layer per track, one folder
+per track — mutually exclusive with `cd_image`) and `stems_apply_mix`
+(false = raw cuts, no gain/inserts/chains; true = layer gain/mute/solo +
+layer inserts, never the track/master chains). Naming templates accept
+`{layer}` (layer display name) and `{ln}` (layer index) macros; the
+frontend swaps the default template to `{n} - {title}/{ln} - {layer}`
+when stems are enabled. `ExportFormat` gained `source`: each output
+mirrors its reference source file's container, bit depth and sample rate
+(in stems mode, per layer), resolved at plan time.
 
 ## Playback
 
