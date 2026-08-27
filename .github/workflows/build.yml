@@ -136,6 +136,21 @@ jobs:
             echo "APPLE_API_KEY=$APPLE_API_KEY"
           } >> "$GITHUB_ENV"
 
+      # ASIO input backend (#9), x64 Windows only (the SDK's C++ glue is
+      # not cross-compiled to arm64 here). Steinberg's SDK cannot be
+      # redistributed, so it is fetched at build time; on failure the app
+      # builds without the asio feature (WASAPI only).
+      - name: Fetch ASIO SDK (Windows x64)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          curl.exe -fsSL --retry 3 -o asiosdk.zip https://www.steinberg.net/asiosdk
+          Expand-Archive asiosdk.zip -DestinationPath asiosdk
+          $dir = Get-ChildItem asiosdk -Directory | Select-Object -First 1
+          "CPAL_ASIO_DIR=$($dir.FullName)" | Out-File -Append $env:GITHUB_ENV
+          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -Append $env:GITHUB_ENV
+
       # macOS bundles only the .app here (Tauri's bundle_dmg.sh needs Finder,
       # which hangs headless); the DMG is packaged by dmgbuild below. On tag
       # builds the env exported above makes Tauri sign (hardened runtime) and
@@ -145,7 +160,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          args: --target ${{ matrix.target }}${{ runner.os == 'macOS' && ' --bundles app' || '' }}
+          args: --target ${{ matrix.target }}${{ runner.os == 'macOS' && ' --bundles app' || '' }}${{ env.CPAL_ASIO_DIR != '' && ' --features asio' || '' }}
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
           releaseName: ${{ github.ref_type == 'tag' && format('AudioDistillery {0}', github.ref_name) || '' }}
           releaseDraft: true

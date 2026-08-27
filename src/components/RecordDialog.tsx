@@ -25,6 +25,8 @@ const SETUP_KEY = "still-record-setup";
  * streaming and file writing are backend. */
 export function RecordDialog({ onClose, onError, onRecorded }: Props) {
   const [devices, setDevices] = useState<InputDeviceInfo[]>([]);
+  // Composite key: a card can appear under several hosts (WASAPI + ASIO).
+  const keyOf = (d: { host: string; name: string }) => `${d.host}\u001f${d.name}`;
   const [device, setDevice] = useState<string>("");
   const [lanes, setLanes] = useState<RecordLane[]>([]);
   const [addFirst, setAddFirst] = useState(1);
@@ -38,7 +40,8 @@ export function RecordDialog({ onClose, onError, onRecorded }: Props) {
   const holds = useRef<number[]>([]);
 
   const recording = status?.recording ?? false;
-  const selected = devices.find((d) => d.name === device);
+  const selected = devices.find((d) => keyOf(d) === device);
+  const multiHost = new Set(devices.map((d) => d.host)).size > 1;
   const channels = selected?.channels ?? 0;
   const inputName = (n: number) =>
     selected?.input_names[n - 1] ?? `Input ${n}`;
@@ -47,8 +50,9 @@ export function RecordDialog({ onClose, onError, onRecorded }: Props) {
   const adoptDevices = (list: InputDeviceInfo[]) => {
     setDevices(list);
     setDevice((cur) => {
-      if (cur && list.some((d) => d.name === cur)) return cur;
-      return (list.find((d) => d.is_default) ?? list[0])?.name ?? "";
+      if (cur && list.some((d) => keyOf(d) === cur)) return cur;
+      const def = list.find((d) => d.is_default) ?? list[0];
+      return def ? keyOf(def) : "";
     });
   };
 
@@ -128,7 +132,12 @@ export function RecordDialog({ onClose, onError, onRecorded }: Props) {
     setStarting(true);
     holds.current = [];
     try {
-      const s = await api.recordStart({ device, lanes, dest_dir: destDir });
+      const s = await api.recordStart({
+        host: selected?.host ?? "",
+        device: selected?.name ?? "",
+        lanes,
+        dest_dir: destDir,
+      });
       setStatus(s);
     } catch (e) {
       onError(String(e));
@@ -177,7 +186,8 @@ export function RecordDialog({ onClose, onError, onRecorded }: Props) {
               >
                 {devices.length === 0 && <option value="">No input device found</option>}
                 {devices.map((d) => (
-                  <option key={d.name} value={d.name}>
+                  <option key={keyOf(d)} value={keyOf(d)}>
+                    {multiHost ? `[${d.host}] ` : ""}
                     {d.name} — {d.channels} input{d.channels > 1 ? "s" : ""} @{" "}
                     {(d.sample_rate / 1000).toLocaleString("en-US", {
                       maximumFractionDigits: 1,

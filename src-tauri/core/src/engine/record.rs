@@ -25,6 +25,10 @@ use crate::error::{Result, StillError};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../src/types/")]
 pub struct InputDeviceInfo {
+    /// Audio host exposing the device ("CoreAudio", "WASAPI", "ASIO", …).
+    /// On Windows a pro interface may appear under both WASAPI (often as
+    /// stereo endpoints) and ASIO (full channel count).
+    pub host: String,
     pub name: String,
     /// Channel count of the device's default (mix) input format.
     pub channels: u16,
@@ -48,6 +52,9 @@ pub struct RecordLane {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../src/types/")]
 pub struct RecordConfig {
+    /// Audio host of the device; "" = the platform's default host.
+    #[serde(default)]
+    pub host: String,
     /// Device name; "" = system default input.
     pub device: String,
     /// Lanes in file order; any input, any order, non-contiguous is fine.
@@ -72,12 +79,20 @@ pub struct RecordStatus {
     pub error: Option<String>,
 }
 
-/// Enumerate input devices at their default (mix) format — the Windows
-/// resampler lesson applies to inputs too: we always open the device at
-/// its own rate.
-pub fn list_input_devices() -> Vec<InputDeviceInfo> {
+/// Resolve a host by its cpal name; "" = the platform default.
+fn host_by_name(name: &str) -> Option<cpal::Host> {
+    if name.is_empty() {
+        return Some(cpal::default_host());
+    }
+    cpal::available_hosts()
+        .into_iter()
+        .find(|id| id.name() == name)
+        .and_then(|id| cpal::host_from_id(id).ok())
+}
+
+fn host_input_devices(host: &cpal::Host) -> Vec<InputDeviceInfo> {
     use cpal::traits::{DeviceTrait, HostTrait};
-    let host = cpal::default_host();
+    let host_name = host.id().name().to_string();
     let default_name = host
         .default_input_device()
         .and_then(|d| d.name().ok())
@@ -90,6 +105,7 @@ pub fn list_input_devices() -> Vec<InputDeviceInfo> {
             let name = d.name().ok()?;
             let cfg = d.default_input_config().ok()?;
             Some(InputDeviceInfo {
+                host: host_name.clone(),
                 is_default: name == default_name,
                 channels: cfg.channels(),
                 sample_rate: cfg.sample_rate().0,
@@ -98,6 +114,48 @@ pub fn list_input_devices() -> Vec<InputDeviceInfo> {
             })
         })
         .collect()
+}
+
+/// Non-default hosts worth enumerating (ASIO on Windows). Loading ASIO
+/// drivers is heavy and can touch the hardware, so the fresh list is
+/// cached for the background watcher to reuse.
+#[cfg(feature = "asio")]
+fn extra_host_devices(fresh: bool) -> Vec<InputDeviceInfo> {
+    static CACHE: Mutex<Option<Vec<InputDeviceInfo>>> = Mutex::new(None);
+    let mut cache = CACHE.lock().unwrap();
+    if !fresh {
+        if let Some(list) = cache.as_ref() {
+            return list.clone();
+        }
+    }
+    let default_id = cpal::default_host().id();
+    let list: Vec<InputDeviceInfo> = cpal::available_hosts()
+        .into_iter()
+        .filter(|id| *id != default_id)
+        .filter_map(|id| cpal::host_from_id(id).ok())
+        .flat_map(|h| host_input_devices(&h))
+        .collect();
+    *cache = Some(list.clone());
+    list
+}
+
+#[cfg(not(feature = "asio"))]
+fn extra_host_devices(_fresh: bool) -> Vec<InputDeviceInfo> {
+    Vec::new()
+}
+
+/// Enumerate input devices at their default (mix) format — the Windows
+/// resampler lesson applies to inputs too: we always open the device at
+/// its own rate. The default host is listed first, then extra hosts
+/// (ASIO) when compiled in.
+pub fn list_input_devices() -> Vec<InputDeviceInfo> {
+    list_input_devices_inner(true)
+}
+
+fn list_input_devices_inner(fresh_extra: bool) -> Vec<InputDeviceInfo> {
+    let mut out = host_input_devices(&cpal::default_host());
+    out.extend(extra_host_devices(fresh_extra));
+    out
 }
 
 /// Watch the input-device topology on a dedicated thread and call
@@ -113,23 +171,35 @@ pub fn watch_input_devices(notify: impl Fn(Vec<InputDeviceInfo>) + Send + 'stati
             let (tx, rx) = std::sync::mpsc::channel::<()>();
             #[cfg(target_os = "macos")]
             coreaudio_names::install_devices_listener(tx);
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(target_os = "windows")]
+            wasapi_watch::install_devices_listener(tx);
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             drop(tx);
-            let fallback = if cfg!(target_os = "macos") {
+            let event_driven = cfg!(any(target_os = "macos", target_os = "windows"));
+            let fallback = if event_driven {
                 std::time::Duration::from_secs(30)
             } else {
                 std::time::Duration::from_secs(3)
             };
             let mut last: Option<Vec<InputDeviceInfo>> = None;
             loop {
-                let list = list_input_devices();
+                // Never touch the HAL while a take is rolling: nothing is
+                // allowed to compete with the recording.
+                if WATCH_PAUSED.load(Ordering::SeqCst) {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    while rx.try_recv().is_ok() {}
+                    continue;
+                }
+                // The watcher reuses the cached ASIO snapshot: loading
+                // ASIO drivers repeatedly is not a background activity.
+                let list = list_input_devices_inner(false);
                 if last.as_ref() != Some(&list) {
                     last = Some(list.clone());
                     notify(list);
                 }
                 match rx.recv_timeout(fallback) {
                     Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                        // No listener on this platform: plain slow polling.
+                        // No listener wired: plain slow polling.
                         std::thread::sleep(fallback);
                     }
                     _ => {
@@ -148,6 +218,7 @@ pub fn watch_input_devices(notify: impl Fn(Vec<InputDeviceInfo>) + Send + 'stati
 /// everywhere else — and whenever the driver names nothing — fall back
 /// to "Input N".
 fn input_channel_names(device_name: &str, channels: u16) -> Vec<String> {
+    let _ = &device_name; // only read on macOS
     #[cfg(target_os = "macos")]
     {
         if let Some(names) = coreaudio_names::channel_names(device_name, channels) {
@@ -319,6 +390,92 @@ mod coreaudio_names {
     }
 }
 
+/// Event-driven device-change notifications on Windows: an
+/// `IMMNotificationClient` registered with the MMDevice enumerator wakes
+/// the watcher on add/remove/state/default changes. Lives on its own
+/// MTA thread; enumerator + callback stay alive for the process.
+#[cfg(target_os = "windows")]
+mod wasapi_watch {
+    use std::sync::mpsc::Sender;
+    use std::sync::Mutex;
+    use windows::core::{implement, Result, PCWSTR};
+    use windows::Win32::Foundation::PROPERTYKEY;
+    use windows::Win32::Media::Audio::{
+        EDataFlow, ERole, IMMDeviceEnumerator, IMMNotificationClient,
+        IMMNotificationClient_Impl, MMDeviceEnumerator, DEVICE_STATE,
+    };
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED,
+    };
+
+    #[implement(IMMNotificationClient)]
+    struct Client {
+        tx: Mutex<Sender<()>>,
+    }
+
+    impl Client {
+        fn ping(&self) {
+            if let Ok(tx) = self.tx.lock() {
+                let _ = tx.send(());
+            }
+        }
+    }
+
+    impl IMMNotificationClient_Impl for Client_Impl {
+        fn OnDeviceStateChanged(&self, _id: &PCWSTR, _state: DEVICE_STATE) -> Result<()> {
+            self.ping();
+            Ok(())
+        }
+        fn OnDeviceAdded(&self, _id: &PCWSTR) -> Result<()> {
+            self.ping();
+            Ok(())
+        }
+        fn OnDeviceRemoved(&self, _id: &PCWSTR) -> Result<()> {
+            self.ping();
+            Ok(())
+        }
+        fn OnDefaultDeviceChanged(
+            &self,
+            _flow: EDataFlow,
+            _role: ERole,
+            _id: &PCWSTR,
+        ) -> Result<()> {
+            self.ping();
+            Ok(())
+        }
+        fn OnPropertyValueChanged(&self, _id: &PCWSTR, _key: &PROPERTYKEY) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    pub fn install_devices_listener(tx: Sender<()>) {
+        std::thread::Builder::new()
+            .name("still-mmnotify".into())
+            .spawn(move || unsafe {
+                if CoInitializeEx(None, COINIT_MULTITHREADED).is_err() {
+                    return;
+                }
+                let Ok(enumerator): windows::core::Result<IMMDeviceEnumerator> =
+                    CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+                else {
+                    return;
+                };
+                let client: IMMNotificationClient = Client { tx: Mutex::new(tx) }.into();
+                if enumerator
+                    .RegisterEndpointNotificationCallback(&client)
+                    .is_err()
+                {
+                    return;
+                }
+                // Keep the registration alive forever.
+                loop {
+                    std::thread::park();
+                }
+            })
+            .expect("spawn MM notification thread");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Streaming mono 24-bit WAV writer with periodic header fixups.
 
@@ -387,6 +544,9 @@ impl WavLane {
     }
 }
 
+/// While true, the device watcher stays away from the audio HAL.
+static WATCH_PAUSED: AtomicBool = AtomicBool::new(false);
+
 // ---------------------------------------------------------------------------
 
 struct RecShared {
@@ -439,7 +599,9 @@ impl RecorderHandle {
                 "no recording folder selected".into(),
             ));
         }
-        let host = cpal::default_host();
+        let host = host_by_name(&cfg.host).ok_or_else(|| {
+            StillError::Audio(format!("audio host \"{}\" is not available", cfg.host))
+        })?;
         let device = if cfg.device.is_empty() {
             host.default_input_device()
         } else {
@@ -450,6 +612,25 @@ impl RecorderHandle {
         .ok_or_else(|| {
             StillError::Audio(format!("input device \"{}\" not found", cfg.device))
         })?;
+        // Freeze the device watcher for the whole take.
+        WATCH_PAUSED.store(true, Ordering::SeqCst);
+        let unpause = scopeguard();
+        struct Unpause(bool);
+        fn scopeguard() -> Unpause {
+            Unpause(true)
+        }
+        impl Unpause {
+            fn disarm(mut self) {
+                self.0 = false;
+            }
+        }
+        impl Drop for Unpause {
+            fn drop(&mut self) {
+                if self.0 {
+                    WATCH_PAUSED.store(false, Ordering::SeqCst);
+                }
+            }
+        }
         let sup = device
             .default_input_config()
             .map_err(|e| StillError::Audio(format!("input device unavailable: {e}")))?;
@@ -635,13 +816,16 @@ impl RecorderHandle {
             .map_err(|e| StillError::Audio(e.to_string()))?;
 
         match ready_rx.recv() {
-            Ok(Ok(())) => Ok(Self {
-                shared,
-                thread: Some(thread),
-                sample_rate: rate,
-                folder,
-                files,
-            }),
+            Ok(Ok(())) => {
+                unpause.disarm();
+                Ok(Self {
+                    shared,
+                    thread: Some(thread),
+                    sample_rate: rate,
+                    folder,
+                    files,
+                })
+            }
             Ok(Err(msg)) => {
                 let _ = thread.join();
                 let _ = std::fs::remove_dir_all(&folder);
@@ -679,6 +863,7 @@ impl RecorderHandle {
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
+        WATCH_PAUSED.store(false, Ordering::SeqCst);
         if let Some(e) = self.shared.error.lock().unwrap().clone() {
             return Err(StillError::Audio(format!("recording ended with: {e}")));
         }
@@ -749,6 +934,7 @@ mod tests {
             .collect();
         let n = lanes.len();
         let cfg = RecordConfig {
+            host: String::new(),
             device,
             lanes,
             dest_dir: dir.path().display().to_string(),

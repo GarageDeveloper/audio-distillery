@@ -24,6 +24,18 @@ fn maybe_run_vst3_scan() {
     unsafe { libc::_exit(0) }
 }
 
+/// Hidden mode: `AudioDistillery --list-inputs` prints the input devices
+/// (host, name, channels, rate, port names) as JSON and exits — used to
+/// validate audio enumeration on headless machines (Windows VM checks).
+fn maybe_list_inputs() {
+    if std::env::args().nth(1).as_deref() != Some("--list-inputs") {
+        return;
+    }
+    let list = still_core::list_input_devices();
+    println!("{}", serde_json::to_string_pretty(&list).unwrap_or_default());
+    std::process::exit(0);
+}
+
 /// Persisted list of user-configured extra VST3 scan directories.
 pub(crate) fn scan_paths_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     use tauri::Manager;
@@ -75,6 +87,7 @@ fn spawn_vst3_rescan_if_stale(app: &tauri::AppHandle, cache: std::path::PathBuf)
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     maybe_run_vst3_scan();
+    maybe_list_inputs();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())

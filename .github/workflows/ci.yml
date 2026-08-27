@@ -50,9 +50,29 @@ jobs:
       - name: Fetch ffmpeg sidecar
         run: node scripts/fetch-ffmpeg.mjs
 
+      # ASIO input backend (#9): Steinberg's SDK cannot be redistributed,
+      # so it is fetched at build time. If the download fails the build
+      # simply proceeds without the asio feature.
+      - name: Fetch ASIO SDK (Windows)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          curl.exe -fsSL --retry 3 -o asiosdk.zip https://www.steinberg.net/asiosdk
+          Expand-Archive asiosdk.zip -DestinationPath asiosdk
+          $dir = Get-ChildItem asiosdk -Directory | Select-Object -First 1
+          "CPAL_ASIO_DIR=$($dir.FullName)" | Out-File -Append $env:GITHUB_ENV
+          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -Append $env:GITHUB_ENV
+
       - name: Backend tests (core + app)
         working-directory: src-tauri
-        run: cargo test --workspace
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ] && [ -n "$CPAL_ASIO_DIR" ]; then
+            cargo test --workspace --features asio
+          else
+            cargo test --workspace
+          fi
 
       - name: Frontend tests
         run: npm test
