@@ -16,6 +16,7 @@ import { AlbumMetaForm } from "./components/AlbumMetaForm";
 import { Backdrop } from "./components/Backdrop";
 import { MasteringPanel } from "./components/MasteringPanel";
 import { EmptyState } from "./components/EmptyState";
+import { RecordDialog } from "./components/RecordDialog";
 import { StatusBar } from "./components/StatusBar";
 import { AboutDialog } from "./components/AboutDialog";
 import { usePlayback } from "./hooks/usePlayback";
@@ -60,6 +61,7 @@ export default function App() {
   /// playback run moves the review focus.
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const [dropChoice, setDropChoice] = useState<string[] | null>(null);
+  const [recordOpen, setRecordOpen] = useState(false);
   const [minTrackSecs, setMinTrackSecs] = useState(120);
   const [waveMode, setWaveMode] = useState<"mix" | "layers">("mix");
   const [selection, setSelection] = useState<RegionSpan | null>(null);
@@ -470,6 +472,7 @@ export default function App() {
         waveMode={waveMode}
         onWaveModeChange={setWaveMode}
         onOpen={openFile}
+        onRecord={() => setRecordOpen(true)}
         onAddClips={() => void addClips()}
         onAddTake={() => void addTake()}
         onTogglePlay={() =>
@@ -721,7 +724,7 @@ export default function App() {
               )}
             </>
           ) : (
-            <EmptyState onOpen={openFile} />
+            <EmptyState onOpen={openFile} onRecord={() => setRecordOpen(true)} />
           )}
           {loading.active && (
             <div className="loading-overlay">
@@ -802,6 +805,28 @@ export default function App() {
       />
 
       {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} />}
+
+      {recordOpen && (
+        <RecordDialog
+          onClose={() => setRecordOpen(false)}
+          onError={showError}
+          onRecorded={(paths) => {
+            setRecordOpen(false);
+            if (paths.length === 0) return;
+            if (view) {
+              // A session is open: adding recorded lanes has real
+              // alternatives (append, layers, take) — keep the choice.
+              setDropChoice(paths);
+            } else {
+              // A fresh recording IS a synced multitrack session by
+              // construction: skip the question and land on the
+              // per-layer view, where the take is actually visible.
+              setWaveMode("layers");
+              void loadPaths(paths, "multitrack");
+            }
+          }}
+        />
+      )}
 
       {error && (
         <div className="toast toast-error" onClick={() => setError(null)}>

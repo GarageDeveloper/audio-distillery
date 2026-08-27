@@ -35,6 +35,10 @@ pub use metadata::{resolve_tags, write_tags, AlbumMeta, TrackTags};
 pub use peaks::{merged_base_pyramid, merged_query, PeakPyramid, PeakSlice};
 pub use chain_presets::{ChainPreset, ChainPresetInfo};
 pub use plugins::{create_plugin, list_plugins, PluginFormat, PluginInfo};
+pub use engine::record::{
+    list_input_devices, watch_input_devices, InputDeviceInfo, RecordConfig, RecordLane,
+    RecordStatus, RecorderHandle,
+};
 pub use engine::{LayerPlay, MasterPluginSpec, MeterState, PlaybackState, PlayerHandle, VolumeAutomation};
 pub use project::{
     db_to_linear, read_project, sanitize_regions, save_project, ChainTarget, ExportConfig,

@@ -24,6 +24,7 @@ interface Props {
   onOpen: () => void;
   onAddClips: () => void;
   onAddTake: () => void;
+  onRecord: () => void;
   onTogglePlay: () => void;
   onSave: () => void;
   onSaveAs: () => void;
@@ -78,6 +79,13 @@ export function Toolbar(p: Props) {
       <span className="sep" />
       <button className="btn" onClick={p.onOpen} title="Open an audio file or project (⌘O)">
         Open
+      </button>
+      <button
+        className="btn"
+        onClick={p.onRecord}
+        title="Record a multitrack take from an audio interface"
+      >
+        ● Rec
       </button>
       {p.view && (
         <>

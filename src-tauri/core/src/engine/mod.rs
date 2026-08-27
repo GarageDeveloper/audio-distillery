@@ -18,6 +18,7 @@
 //!   since the latest seek).
 
 pub mod decode;
+pub mod record;
 pub mod render;
 pub mod resample;
 

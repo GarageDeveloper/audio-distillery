@@ -107,6 +107,11 @@ pub fn run() {
             commands::remove_region,
             commands::rename_track,
             commands::set_track_isrc,
+            commands::list_input_devices,
+            commands::get_default_recording_dir,
+            commands::record_start,
+            commands::record_status,
+            commands::record_stop,
             commands::rename_layer,
             commands::set_snap_to_zero,
             commands::set_export_config,
@@ -140,10 +145,16 @@ pub fn run() {
             commands::get_default_export_dir,
         ])
         .setup(|app| {
-            use tauri::Manager;
+            use tauri::{Emitter, Manager};
             if let Ok(dir) = app.path().app_config_dir() {
                 spawn_vst3_rescan_if_stale(app.app_handle(), dir.join("vst3_scan_cache.json"));
             }
+            // Input-device topology watcher: event-driven (CoreAudio
+            // listener on macOS), emits only when the list changes.
+            let handle = app.app_handle().clone();
+            still_core::watch_input_devices(move |list| {
+                let _ = handle.emit("record:devices", &list);
+            });
             Ok(())
         })
         .run(tauri::generate_context!())
