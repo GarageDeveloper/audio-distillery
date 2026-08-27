@@ -54,6 +54,8 @@ pub struct ExportJob {
     /// instead of an error. Stems set this: a layer with no clips under a
     /// track must still yield a stem, or the set desynchronizes in a DAW.
     pub silence_ok: bool,
+    /// Normalized ISRC of the track ("" = none) — cue sheets and DDP.
+    pub isrc: String,
 }
 
 impl ExportJob {
@@ -276,6 +278,7 @@ pub fn plan_export_with_meta(
             artwork: artwork.clone(),
             source_fmt: src_fmt,
             silence_ok: false,
+            isrc: t.isrc.clone(),
         });
     }
     Ok(jobs)
@@ -398,6 +401,7 @@ pub fn plan_export_stems(
                 artwork: artwork.clone(),
                 source_fmt: src_fmt,
                 silence_ok: true,
+                isrc: String::new(),
             });
         }
     }
@@ -511,14 +515,47 @@ pub fn analyze_loudness_segment(
     )
 }
 
+/// Loudness of a slice of a RAW CD image (headerless s16le 44.1 kHz
+/// stereo) — sample positions are frames at 44.1 kHz.
+pub fn analyze_loudness_raw_segment(
+    ffmpeg: &Path,
+    file: &Path,
+    start_sample: u64,
+    end_sample: u64,
+) -> (Option<f64>, Option<f64>, Option<f64>) {
+    analyze_loudness_cmd(
+        ffmpeg,
+        file,
+        &format!("atrim=start_sample={start_sample}:end_sample={end_sample},ebur128=peak=true"),
+        true,
+    )
+}
+
 fn analyze_loudness_af(
     ffmpeg: &Path,
     file: &Path,
     af: &str,
 ) -> (Option<f64>, Option<f64>, Option<f64>) {
-    let out = Command::new(ffmpeg)
-        .arg("-hide_banner")
-        .arg("-nostdin")
+    analyze_loudness_cmd(ffmpeg, file, af, false)
+}
+
+fn analyze_loudness_cmd(
+    ffmpeg: &Path,
+    file: &Path,
+    af: &str,
+    raw_cd_pcm: bool,
+) -> (Option<f64>, Option<f64>, Option<f64>) {
+    let mut cmd = Command::new(ffmpeg);
+    cmd.arg("-hide_banner").arg("-nostdin");
+    if raw_cd_pcm {
+        cmd.arg("-f")
+            .arg("s16le")
+            .arg("-ar")
+            .arg("44100")
+            .arg("-ac")
+            .arg("2");
+    }
+    let out = cmd
         .arg("-i")
         .arg(file)
         .arg("-af")
@@ -1218,6 +1255,7 @@ mod tests {
             mute_overrides: HashMap::new(),
             solo_overrides: HashMap::new(),
             layer_volumes: vec![1.0],
+            isrc: String::new(),
             inserts: Vec::new(),
         }
     }
@@ -1353,6 +1391,51 @@ pub fn run_export_cd_image(
     cancel: &AtomicBool,
     on_progress: impl Fn(ExportProgress) + Send + Sync,
 ) -> ExportReport {
+    run_export_cd_common(
+        ffmpeg, layers, session_channels, sample_rate, jobs, cfg, chain, lane_chains, meta,
+        cancel, &on_progress, false,
+    )
+}
+
+/// Tier-3 pro export (#5): the same rendered Red Book program delivered
+/// as a DDP 2.00 fileset (IMAGE.DAT + DDPID + DDPMS + PQDESCR +
+/// checksums) with a human-readable PQ sheet — what pressing plants
+/// actually ingest. Subcode carries per-track ISRCs and the album EAN.
+#[allow(clippy::too_many_arguments)]
+pub fn run_export_ddp(
+    ffmpeg: &Path,
+    layers: &[LayerMix],
+    session_channels: u16,
+    sample_rate: u32,
+    jobs: &[ExportJob],
+    cfg: &ExportConfig,
+    chain: &[MasterPluginSpec],
+    lane_chains: &[Vec<MasterPluginSpec>],
+    meta: &AlbumMeta,
+    cancel: &AtomicBool,
+    on_progress: impl Fn(ExportProgress) + Send + Sync,
+) -> ExportReport {
+    run_export_cd_common(
+        ffmpeg, layers, session_channels, sample_rate, jobs, cfg, chain, lane_chains, meta,
+        cancel, &on_progress, true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_export_cd_common(
+    ffmpeg: &Path,
+    layers: &[LayerMix],
+    session_channels: u16,
+    sample_rate: u32,
+    jobs: &[ExportJob],
+    cfg: &ExportConfig,
+    chain: &[MasterPluginSpec],
+    lane_chains: &[Vec<MasterPluginSpec>],
+    meta: &AlbumMeta,
+    cancel: &AtomicBool,
+    on_progress: &(impl Fn(ExportProgress) + Send + Sync),
+    ddp: bool,
+) -> ExportReport {
     let mut report = ExportReport {
         files: Vec::new(),
         errors: Vec::new(),
@@ -1372,10 +1455,20 @@ pub fn run_export_cd_image(
     };
     let mut wav_path = dest.join(format!("{base_name}.wav"));
     let mut cue_path = dest.join(format!("{base_name}.cue"));
+    let mut ddp_dir = dest.join(format!("{base_name} DDP"));
     let mut k = 1;
-    while wav_path.exists() || cue_path.exists() {
+    loop {
+        let collides = if ddp {
+            ddp_dir.exists()
+        } else {
+            wav_path.exists() || cue_path.exists()
+        };
+        if !collides {
+            break;
+        }
         wav_path = dest.join(format!("{base_name} ({k}).wav"));
         cue_path = dest.join(format!("{base_name} ({k}).cue"));
+        ddp_dir = dest.join(format!("{base_name} DDP ({k})"));
         k += 1;
     }
 
@@ -1406,11 +1499,15 @@ pub fn run_export_cd_image(
             "aresample=osr={CD_RATE}:out_sample_fmt=s16:dither_method={dither}"
         ))
         .arg("-c:a")
-        .arg("pcm_s16le")
-        .arg(&wav_path)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped());
+        .arg("pcm_s16le");
+    if ddp {
+        // Raw little-endian PCM to stdout, streamed into the fileset's
+        // image (the 150-sector pause is written by the fileset itself).
+        cmd.arg("-f").arg("s16le").arg("pipe:1").stdout(Stdio::piped());
+    } else {
+        cmd.arg(&wav_path).stdout(Stdio::null());
+    }
+    cmd.stdin(Stdio::piped()).stderr(Stdio::piped());
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
@@ -1431,9 +1528,39 @@ pub fn run_export_cd_image(
         buf
     });
 
+    // DDP: a dedicated thread drains ffmpeg's stdout into the image
+    // (hashing as it goes) while the render loop feeds stdin.
+    let copier = if ddp {
+        let mut out = child.stdout.take().expect("stdout piped");
+        let fileset = match ddp_fileset::Fileset::create(&ddp_dir) {
+            Ok(f) => f,
+            Err(e) => {
+                report.errors.push(format!("DDP fileset: {e}"));
+                return report;
+            }
+        };
+        Some(std::thread::spawn(
+            move || -> std::io::Result<ddp_fileset::Fileset> {
+                let mut fileset = fileset;
+                let mut buf = vec![0u8; 256 * 1024];
+                loop {
+                    let n = out.read(&mut buf)?;
+                    if n == 0 {
+                        break;
+                    }
+                    fileset.write_audio(&buf[..n])?;
+                }
+                Ok(fileset)
+            },
+        ))
+    } else {
+        None
+    };
+
     // Per-track render → SRC to 44.1 stereo → frame padding, counting
     // OUTPUT samples exactly for the cue offsets.
-    let mut track_starts: Vec<(u32, String, u64)> = Vec::new(); // number, title, start frame
+    // (number, title, isrc, start frame)
+    let mut track_starts: Vec<(u32, String, String, u64)> = Vec::new();
     let mut image_samples: u64 = 0;
     let mut failed = false;
     use std::io::Write as _;
@@ -1469,6 +1596,7 @@ pub fn run_export_cd_image(
         track_starts.push((
             job.number,
             job.title.clone(),
+            job.isrc.clone(),
             image_samples / CD_FRAME_SAMPLES,
         ));
 
@@ -1585,8 +1713,17 @@ pub fn run_export_cd_image(
     drop(stdin);
     let status = child.wait();
     let err_output = stderr_reader.join().unwrap_or_default();
+    // The copier ends when ffmpeg's stdout closes; collect its fileset.
+    let fileset = copier.map(|h| {
+        h.join()
+            .unwrap_or_else(|_| Err(std::io::Error::other("image writer thread panicked")))
+    });
     if report.cancelled || failed || !status.map(|s| s.success()).unwrap_or(false) {
-        let _ = std::fs::remove_file(&wav_path);
+        if ddp {
+            let _ = std::fs::remove_dir_all(&ddp_dir);
+        } else {
+            let _ = std::fs::remove_file(&wav_path);
+        }
         if !report.cancelled {
             let msg = err_output.trim();
             report.errors.push(if msg.is_empty() {
@@ -1595,6 +1732,118 @@ pub fn run_export_cd_image(
                 msg.to_string()
             });
         }
+        return report;
+    }
+
+    if ddp {
+        let fileset = match fileset.expect("ddp mode always has a copier") {
+            Ok(f) => f,
+            Err(e) => {
+                report.errors.push(format!("DDP image: {e}"));
+                let _ = std::fs::remove_dir_all(&ddp_dir);
+                return report;
+            }
+        };
+        let program_sectors = image_samples / CD_FRAME_SAMPLES;
+        let tracks: Vec<ddp_fileset::Track> = track_starts
+            .iter()
+            .enumerate()
+            .map(|(i, (number, title, isrc, start))| {
+                let end = track_starts
+                    .get(i + 1)
+                    .map(|t| t.3)
+                    .unwrap_or(program_sectors);
+                ddp_fileset::Track {
+                    number: *number,
+                    title: title.clone(),
+                    start_sector: *start,
+                    length_sectors: end.saturating_sub(*start),
+                    isrc: (!isrc.is_empty()).then(|| isrc.clone()),
+                }
+            })
+            .collect();
+        let ean: String = meta
+            .catalog_ean
+            .chars()
+            .filter(|c| c.is_ascii_digit())
+            .collect();
+        let disc = ddp_fileset::Disc {
+            title: if meta.album.trim().is_empty() {
+                base_name.clone()
+            } else {
+                meta.album.trim().to_string()
+            },
+            performer: if meta.album_artist.trim().is_empty() {
+                meta.artist.trim().to_string()
+            } else {
+                meta.album_artist.trim().to_string()
+            },
+            ean: (ean.len() == 12 || ean.len() == 13).then_some(ean),
+            tracks,
+        };
+        if let Err(e) = fileset.finish(&disc) {
+            report.errors.push(format!("DDP fileset: {e}"));
+            let _ = std::fs::remove_dir_all(&ddp_dir);
+            return report;
+        }
+
+        // Loudness on the raw image, program area only (pause skipped).
+        let image_path = ddp_dir.join(ddp_fileset::IMAGE_NAME);
+        let pause = ddp_fileset::PAUSE_SECTORS * CD_FRAME_SAMPLES;
+        let steps = 1 + track_starts.len() as u32;
+        let analyze_progress = |k: u32, title: &str, done: bool| {
+            on_progress(ExportProgress {
+                track_number: k + 1,
+                track_count: steps,
+                track_title: title.to_string(),
+                track_progress: if done { 1.0 } else { 0.0 },
+                completed_tracks: k + done as u32,
+                overall_progress: (k + done as u32) as f32 / steps.max(1) as f32,
+                analyzing: true,
+            });
+        };
+        analyze_progress(0, "DDP image", false);
+        let (lufs_i, lra, true_peak_db) =
+            analyze_loudness_raw_segment(ffmpeg, &image_path, pause, pause + image_samples);
+        analyze_progress(0, "DDP image", true);
+        let track_measures = track_starts
+            .iter()
+            .enumerate()
+            .map(|(i, (number, title, _isrc, start_frame))| {
+                analyze_progress(1 + i as u32, title, false);
+                let start = pause + start_frame * CD_FRAME_SAMPLES;
+                let end = pause
+                    + track_starts
+                        .get(i + 1)
+                        .map(|t| t.3 * CD_FRAME_SAMPLES)
+                        .unwrap_or(image_samples);
+                let (l, lra, tp) = analyze_loudness_raw_segment(ffmpeg, &image_path, start, end);
+                analyze_progress(1 + i as u32, title, true);
+                TrackMeasure {
+                    number: *number,
+                    title: title.clone(),
+                    lufs_i: l,
+                    lra,
+                    true_peak_db: tp,
+                }
+            })
+            .collect();
+        report.files.push(ExportedFile {
+            track_title: "DDP fileset".into(),
+            path: ddp_dir.display().to_string(),
+            lufs_i,
+            lra,
+            true_peak_db,
+            track_measures,
+        });
+        report.files.push(ExportedFile {
+            track_title: "PQ sheet".into(),
+            path: ddp_dir.join("PQ_SHEET.TXT").display().to_string(),
+            lufs_i: None,
+            lra: None,
+            true_peak_db: None,
+            track_measures: Vec::new(),
+        });
         return report;
     }
 
@@ -1619,11 +1868,14 @@ pub fn run_export_cd_image(
         "FILE \"{}\" WAVE\r\n",
         wav_path.file_name().unwrap_or_default().to_string_lossy()
     ));
-    for (number, title, start_frame) in &track_starts {
+    for (number, title, isrc, start_frame) in &track_starts {
         cue.push_str(&format!("  TRACK {number:02} AUDIO\r\n"));
         cue.push_str(&format!("    TITLE \"{}\"\r\n", title.replace('"', "'")));
         if !performer.is_empty() {
             cue.push_str(&format!("    PERFORMER \"{}\"\r\n", performer.replace('"', "'")));
+        }
+        if !isrc.is_empty() {
+            cue.push_str(&format!("    ISRC {isrc}\r\n"));
         }
         cue.push_str(&format!("    INDEX 01 {}\r\n", cue_time(*start_frame)));
     }
@@ -1653,12 +1905,12 @@ pub fn run_export_cd_image(
     let track_measures = track_starts
         .iter()
         .enumerate()
-        .map(|(i, (number, title, start_frame))| {
+        .map(|(i, (number, title, _isrc, start_frame))| {
             analyze_progress(1 + i as u32, title, false);
             let start = start_frame * CD_FRAME_SAMPLES;
             let end = track_starts
                 .get(i + 1)
-                .map(|t| t.2 * CD_FRAME_SAMPLES)
+                .map(|t| t.3 * CD_FRAME_SAMPLES)
                 .unwrap_or(image_samples);
             let (l, lra, tp) = analyze_loudness_segment(ffmpeg, &wav_path, start, end);
             analyze_progress(1 + i as u32, title, true);

@@ -7,7 +7,7 @@ edition = "2021"
 license = "MIT"
 
 [workspace]
-members = ["core"]
+members = ["core", "ddp-fileset"]
 
 [lib]
 name = "still_lib"

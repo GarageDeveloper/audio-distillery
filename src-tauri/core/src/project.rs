@@ -48,6 +48,10 @@ pub struct Region {
     /// mastering chain, active only inside the region's span.
     #[serde(default)]
     pub inserts: Vec<MasteringPluginCfg>,
+    /// Normalized 12-character ISRC of this track ("" = none). Written to
+    /// cue sheets, DDP subcode and the PQ sheet.
+    #[serde(default)]
+    pub isrc: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -124,6 +128,10 @@ pub struct ExportConfig {
     /// track (forces 44.1 kHz / 16-bit / WAV, frame-aligned tracks).
     #[serde(default)]
     pub cd_image: bool,
+    /// Export a DDP 2.00 fileset + PQ sheet (pressing-plant deliverable)
+    /// instead of one file per track. Exclusive with `cd_image`/`stems`.
+    #[serde(default)]
+    pub ddp: bool,
     /// Multitrack export: one file PER LAYER per track (stems), laid out
     /// as one folder per track. Mutually exclusive with `cd_image`.
     #[serde(default)]
@@ -146,6 +154,7 @@ impl Default for ExportConfig {
             target_sample_rate: None,
             dither: DitherMode::default(),
             cd_image: false,
+            ddp: false,
             stems: false,
             stems_apply_mix: false,
         }
@@ -341,6 +350,8 @@ pub struct TrackInfo {
     /// mutes and solos with the track's overrides applied). Index-aligned
     /// with the layer list; this is exactly what export and playback use.
     pub layer_volumes: Vec<f32>,
+    /// Normalized ISRC ("" = none).
+    pub isrc: String,
     /// This track's insert chain (master-bus position, active in its span).
     pub inserts: Vec<MasteringPluginView>,
 }
@@ -749,6 +760,7 @@ impl ProjectState {
             mute_overrides: HashMap::new(),
             solo_overrides: HashMap::new(),
             inserts: Vec::new(),
+            isrc: String::new(),
         });
         Ok(id)
     }
@@ -771,6 +783,7 @@ impl ProjectState {
                     mute_overrides: HashMap::new(),
                     solo_overrides: HashMap::new(),
                     inserts: Vec::new(),
+                    isrc: String::new(),
                 });
                 added += 1;
             }
@@ -889,6 +902,32 @@ impl ProjectState {
         } else {
             Some(name.to_string())
         };
+        Ok(())
+    }
+
+    /// Set (or clear) a track's ISRC. The value is validated and
+    /// normalized (separators stripped, uppercased).
+    pub fn set_track_isrc(&mut self, id: u32, isrc: &str) -> Result<()> {
+        let normalized = ddp_fileset::normalize_isrc(isrc)
+            .map_err(StillError::InvalidProject)?
+            .unwrap_or_default();
+        let region = self
+            .project
+            .regions
+            .iter_mut()
+            .find(|r| r.id == id)
+            .ok_or_else(|| StillError::InvalidMarker(format!("unknown track id {id}")))?;
+        if region.isrc != normalized {
+            let (id, value) = (region.id, normalized);
+            self.push_undo();
+            let region = self
+                .project
+                .regions
+                .iter_mut()
+                .find(|r| r.id == id)
+                .expect("checked above");
+            region.isrc = value;
+        }
         Ok(())
     }
 
@@ -1077,6 +1116,7 @@ impl ProjectState {
                 mute_overrides: r.mute_overrides.clone(),
                 solo_overrides: r.solo_overrides.clone(),
                 layer_volumes: self.effective_volumes(Some(r)),
+                isrc: r.isrc.clone(),
                 inserts: chain_views(&r.inserts),
             })
             .collect()
@@ -1245,6 +1285,7 @@ fn migrate_v1(legacy: LegacyProjectV1) -> Project {
             mute_overrides: HashMap::new(),
             solo_overrides: HashMap::new(),
             inserts: Vec::new(),
+            isrc: String::new(),
         });
     }
     let next_region_id = regions.len() as u32 + 1;
@@ -1705,8 +1746,8 @@ mod tests {
     #[test]
     fn sanitize_drops_degenerate_regions() {
         let mut p = Project::new(vec!["/tmp/x.wav".into()]);
-        p.regions.push(Region { id: 1, start: 0, end: 10 * SEC, title: None, gain_overrides: HashMap::new(), mute_overrides: HashMap::new(), solo_overrides: HashMap::new(), inserts: Vec::new() });
-        p.regions.push(Region { id: 2, start: 200 * SEC, end: 300 * SEC, title: None, gain_overrides: HashMap::new(), mute_overrides: HashMap::new(), solo_overrides: HashMap::new(), inserts: Vec::new() });
+        p.regions.push(Region { id: 1, start: 0, end: 10 * SEC, title: None, gain_overrides: HashMap::new(), mute_overrides: HashMap::new(), solo_overrides: HashMap::new(), inserts: Vec::new(), isrc: String::new() });
+        p.regions.push(Region { id: 2, start: 200 * SEC, end: 300 * SEC, title: None, gain_overrides: HashMap::new(), mute_overrides: HashMap::new(), solo_overrides: HashMap::new(), inserts: Vec::new(), isrc: String::new() });
         sanitize_regions(&mut p, 120 * SEC, SR);
         assert_eq!(p.regions.len(), 1);
     }
@@ -1716,7 +1757,7 @@ mod tests {
     #[test]
     fn migrates_v6_to_v7() {
         let mut p = Project::new(vec!["/tmp/x.wav".into()]);
-        p.regions.push(Region { id: 1, start: 0, end: 10 * SEC, title: None, gain_overrides: HashMap::new(), mute_overrides: HashMap::new(), solo_overrides: HashMap::new(), inserts: Vec::new() });
+        p.regions.push(Region { id: 1, start: 0, end: 10 * SEC, title: None, gain_overrides: HashMap::new(), mute_overrides: HashMap::new(), solo_overrides: HashMap::new(), inserts: Vec::new(), isrc: String::new() });
         p.mastering_chain.push(MasteringPluginCfg {
             id: 1,
             component: "aufx:lpas:appl".into(),

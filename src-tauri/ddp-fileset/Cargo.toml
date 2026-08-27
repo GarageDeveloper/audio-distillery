@@ -1,0 +1,12 @@
+[package]
+name = "ddp-fileset"
+version = "0.1.0"
+description = "Writer for DDP 2.00 filesets (Red Book audio CD masters): DDPID, DDPMS, PQ subcode descriptor, PQ sheet and checksums"
+authors = ["Raphaël Enrici"]
+edition = "2021"
+license = "MIT"
+keywords = ["ddp", "red-book", "cd", "mastering", "audio"]
+categories = ["multimedia::audio", "encoding"]
+
+[dependencies]
+md-5 = "0.10"

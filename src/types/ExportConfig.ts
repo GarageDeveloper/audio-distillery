@@ -30,6 +30,11 @@ dither: DitherMode,
  */
 cd_image: boolean, 
 /**
+ * Export a DDP 2.00 fileset + PQ sheet (pressing-plant deliverable)
+ * instead of one file per track. Exclusive with `cd_image`/`stems`.
+ */
+ddp: boolean, 
+/**
  * Multitrack export: one file PER LAYER per track (stems), laid out
  * as one folder per track. Mutually exclusive with `cd_image`.
  */

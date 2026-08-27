@@ -197,6 +197,18 @@ analysis pass after encoding (progress events flagged `analyzing`), plus
 
 `ExportConfig` gained `stems` (one file per layer per track, one folder
 per track — mutually exclusive with `cd_image`) and `stems_apply_mix`
+(see below), and tier 3 adds `ddp` plus `set_track_isrc`.
+
+### DDP fileset + PQ sheet (tier 3 of #5)
+
+`ExportConfig.ddp` delivers the Red Book master as a **DDP 2.00
+fileset** (IMAGE.DAT + DDPID + DDPMS + PQDESCR + CHECKSUM.MD5 + a
+human-readable PQ_SHEET.TXT) instead of WAV + cue — written by the
+standalone `ddp-fileset` crate (workspace member, MIT, no still-core
+dependency). The image includes the initial 150-sector pause; subcode
+carries per-track ISRCs and the album EAN. `set_track_isrc(id, isrc)`
+stores a validated, normalized ISRC on a region ("" clears); it also
+lands in cue sheets as `ISRC` lines. Continued:
 (false = raw cuts, no gain/inserts/chains; true = layer gain/mute/solo +
 layer inserts, never the track/master chains). Naming templates accept
 `{layer}` (layer display name) and `{ln}` (layer index) macros; the

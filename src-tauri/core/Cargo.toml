@@ -12,6 +12,7 @@ thiserror = "2"
 symphonia = { version = "0.5", features = ["all"] }
 ts-rs = { version = "10", features = ["serde-compat"] }
 lofty = "0.25"
+ddp-fileset = { path = "../ddp-fileset" }
 cpal = "0.15"
 rtrb = "0.3"
 ebur128 = "0.1.10"
