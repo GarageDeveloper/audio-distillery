@@ -1311,14 +1311,39 @@ fn export_ddp_fileset() {
     assert_eq!(&id[8..21], b"1234567890128");
     assert_eq!(&id[87..89], b"CD");
 
-    // DDPMS: D0 length covers pause + program; S0 points at PQDESCR.
+    // DDPMS: D0 length covers pause + program; S0 points at PQDESCR;
+    // the album metadata triggers a third packet declaring CD-Text.
     let ms = std::fs::read(ddp_dir.join("DDPMS")).unwrap();
-    assert_eq!(ms.len(), 256);
+    assert_eq!(ms.len(), 384);
     assert_eq!(&ms[..4], b"VVVM");
     let dsl: u64 = String::from_utf8_lossy(&ms[14..22]).trim().parse().unwrap();
     assert_eq!(dsl, 150 + program, "map disagrees with the image length");
     assert_eq!(&ms[38..40], b"DA");
     assert_eq!(String::from_utf8_lossy(&ms[128 + 30..128 + 38]), "PQ DESCR");
+    assert_eq!(String::from_utf8_lossy(&ms[256 + 30..256 + 36]), "CDTEXT");
+
+    // CD-Text: album and track titles, performer, EAN/ISRC — readable
+    // the way XLD reads them (18-byte packs, text split on NUL).
+    let text = std::fs::read(ddp_dir.join("CDTEXT.BIN")).unwrap();
+    assert_eq!(text.len() % 18, 0);
+    let strings = |ty: u8| -> Vec<String> {
+        let buf: Vec<u8> = text
+            .chunks(18)
+            .filter(|p| p[0] == ty)
+            .flat_map(|p| p[4..16].to_vec())
+            .collect();
+        buf.split(|b| *b == 0)
+            .map(|s| s.iter().map(|b| *b as char).collect())
+            .collect()
+    };
+    let titles = strings(0x80);
+    assert_eq!(titles[0], "Barn Sessions");
+    assert_eq!(titles[1], "Track 01");
+    assert_eq!(titles[2], "Track 02");
+    assert_eq!(strings(0x81)[0], "The Copper Stills");
+    let codes = strings(0x8E);
+    assert_eq!(codes[0], "1234567890128");
+    assert_eq!(codes[1], "FRAB12600001");
 
     // PQ stream: lead-in EAN, track 1 ISRC, positions to the frame.
     let pq = std::fs::read(ddp_dir.join("PQDESCR")).unwrap();
@@ -1367,7 +1392,8 @@ fn export_ddp_fileset() {
 
     // Checksums verify.
     let chk = std::fs::read_to_string(ddp_dir.join("CHECKSUM.MD5")).unwrap();
-    assert!(chk.lines().count() >= 5);
+    assert!(chk.lines().count() >= 6);
+    assert!(chk.contains("CDTEXT.BIN"), "{chk}");
     // PQ sheet exists and quotes the same lead-out time.
     let sheet = std::fs::read_to_string(ddp_dir.join("PQ_SHEET.TXT")).unwrap();
     let lo = 150 + program;

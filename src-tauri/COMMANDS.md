@@ -206,7 +206,9 @@ fileset** (IMAGE.DAT + DDPID + DDPMS + PQDESCR + CHECKSUM.MD5 + a
 human-readable PQ_SHEET.TXT) instead of WAV + cue — written by the
 standalone `ddp-fileset` crate (workspace member, MIT, no still-core
 dependency). The image includes the initial 150-sector pause; subcode
-carries per-track ISRCs and the album EAN. `set_track_isrc(id, isrc)`
+carries per-track ISRCs and the album EAN, and the album/track titles +
+performer ship as a CD-Text stream (CDTEXT.BIN, Latin-1, written
+whenever the metadata has any text). `set_track_isrc(id, isrc)`
 stores a validated, normalized ISRC on a region ("" clears); it also
 lands in cue sheets as `ISRC` lines. Continued:
 (false = raw cuts, no gain/inserts/chains; true = layer gain/mute/solo +

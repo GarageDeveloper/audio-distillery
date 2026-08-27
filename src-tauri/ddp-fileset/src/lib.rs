@@ -12,6 +12,8 @@
 //!   stream (one `D0` audio packet, one `S0` subcode packet here).
 //! - `PQDESCR` — the PQ subcode stream: 64-byte packets giving track and
 //!   index positions in absolute disc time, ISRCs and the UPC/EAN.
+//! - `CDTEXT.BIN` — optional CD-Text (titles, performers, codes) as raw
+//!   18-byte packs, declared by an `S0`/`CDTEXT` map packet.
 //! - `CHECKSUM.MD5` — `md5sum -c`-compatible digests of every file.
 //!
 //! The audio image itself is streamed by the caller through
@@ -152,8 +154,14 @@ fn ddpid_packet(disc: &Disc, map_bytes: u64) -> Vec<u8> {
     p.0
 }
 
-/// The two DDPMS map packets: `D0` (audio image) + `S0` (PQ stream).
-fn ddpms_packets(disc: &Disc, image_name: &str, pq_bytes: u64) -> Vec<u8> {
+/// The DDPMS map packets: `D0` (audio image), `S0` (PQ stream) and,
+/// when present, `S0`/`CDTEXT`.
+fn ddpms_packets(
+    disc: &Disc,
+    image_name: &str,
+    pq_bytes: u64,
+    cdtext_bytes: Option<u64>,
+) -> Vec<u8> {
     let mut out = Vec::with_capacity(256);
 
     // D0 — the audio data stream, pause included.
@@ -180,6 +188,18 @@ fn ddpms_packets(disc: &Disc, image_name: &str, pq_bytes: u64) -> Vec<u8> {
     p.put_num0(71, 3, 17);
     p.put(74, 17, "PQDESCR");
     out.extend_from_slice(&p.0);
+
+    // S0 — the CD-Text lead-in stream, when the disc carries text.
+    if let Some(bytes) = cdtext_bytes {
+        let mut p = Packet::new(128);
+        p.put(0, 4, "VVVM");
+        p.put(4, 2, "S0");
+        p.put_num0(14, 8, bytes);
+        p.put(30, 8, "CDTEXT");
+        p.put_num0(71, 3, 17);
+        p.put(74, 17, CDTEXT_NAME);
+        out.extend_from_slice(&p.0);
+    }
 
     out
 }
@@ -318,6 +338,7 @@ pub struct Fileset {
 }
 
 pub const IMAGE_NAME: &str = "IMAGE.DAT";
+pub const CDTEXT_NAME: &str = "CDTEXT.BIN";
 
 impl Fileset {
     /// Creates the fileset folder and opens the image, writing the
@@ -373,19 +394,30 @@ impl Fileset {
         drop(self.image);
 
         let pq = pq_stream(disc);
-        let ms = ddpms_packets(disc, IMAGE_NAME, pq.len() as u64);
+        let text = cdtext::has_text(disc).then(|| cdtext::cdtext_stream(disc));
+        let ms = ddpms_packets(
+            disc,
+            IMAGE_NAME,
+            pq.len() as u64,
+            text.as_ref().map(|t| t.len() as u64),
+        );
         let id = ddpid_packet(disc, ms.len() as u64);
         let sheet = pq_sheet(disc);
 
         let mut written = vec![self.dir.join(IMAGE_NAME)];
         let mut sums: Vec<(String, String)> =
             vec![(IMAGE_NAME.into(), format!("{:x}", self.hasher.finalize()))];
-        for (name, bytes) in [
+        let text_slice = text.as_deref().unwrap_or_default();
+        let mut files: Vec<(&str, &[u8])> = vec![
             ("DDPID", id.as_slice()),
             ("DDPMS", ms.as_slice()),
             ("PQDESCR", pq.as_slice()),
-            ("PQ_SHEET.TXT", sheet.as_bytes()),
-        ] {
+        ];
+        if text.is_some() {
+            files.push((CDTEXT_NAME, text_slice));
+        }
+        files.push(("PQ_SHEET.TXT", sheet.as_bytes()));
+        for (name, bytes) in files {
             let path = self.dir.join(name);
             fs::write(&path, bytes)?;
             sums.push((name.into(), format!("{:x}", Md5::digest(bytes))));
@@ -402,6 +434,8 @@ impl Fileset {
         Ok(written)
     }
 }
+
+pub mod cdtext;
 
 #[cfg(test)]
 mod tests;

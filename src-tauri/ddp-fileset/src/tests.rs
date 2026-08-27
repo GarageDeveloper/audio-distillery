@@ -64,7 +64,7 @@ fn ddpid_layout() {
 #[test]
 fn ddpms_layout() {
     let d = disc();
-    let ms = ddpms_packets(&d, IMAGE_NAME, 6 * 64);
+    let ms = ddpms_packets(&d, IMAGE_NAME, 6 * 64, None);
     assert_eq!(ms.len(), 256);
     let d0 = &ms[..128];
     assert_eq!(field(d0, 0, 4), "VVVM");
@@ -85,6 +85,15 @@ fn ddpms_layout() {
     assert_eq!(field(s0, 14, 8), format!("{:08}", 6 * 64));
     assert_eq!(field(s0, 30, 8), "PQ DESCR");
     assert_eq!(field(s0, 74, 17).trim(), "PQDESCR");
+
+    // With CD-Text: a third S0 packet declaring CDTEXT.BIN.
+    let ms = ddpms_packets(&d, IMAGE_NAME, 6 * 64, Some(20 * 18));
+    assert_eq!(ms.len(), 384);
+    let s0t = &ms[256..];
+    assert_eq!(field(s0t, 4, 2), "S0");
+    assert_eq!(field(s0t, 14, 8), format!("{:08}", 20 * 18));
+    assert_eq!(field(s0t, 30, 8).trim(), "CDTEXT");
+    assert_eq!(field(s0t, 74, 17).trim(), "CDTEXT.BIN");
 }
 
 /// PQ stream: lead-in with EAN, track 1 index 00 at 00:00:00 and index
@@ -146,7 +155,7 @@ fn writes_a_complete_fileset() {
     let audio = vec![0x55u8; (8 * SECTOR_BYTES) as usize];
     fs_w.write_audio(&audio).unwrap();
     let files = fs_w.finish(&d).unwrap();
-    assert_eq!(files.len(), 6);
+    assert_eq!(files.len(), 7, "{files:?}"); // image, 3 descriptors, CD-Text, sheet, checksums
 
     let image = fs::read(dir.join(IMAGE_NAME)).unwrap();
     assert_eq!(image.len() as u64, (150 + 8) * SECTOR_BYTES);
