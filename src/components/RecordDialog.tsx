@@ -153,11 +153,7 @@ export function RecordDialog({ onClose, onError, onRecorded }: Props) {
   const ss = Math.floor(elapsed % 60);
 
   return (
-    <Backdrop
-      onClose={() => {
-        if (!recording && !starting) onClose();
-      }}
-    >
+    <Backdrop onClose={() => {}}>
       <div className="modal record-modal">
         <div>
           <h2>Record</h2>
@@ -224,6 +220,7 @@ export function RecordDialog({ onClose, onError, onRecorded }: Props) {
                         </select>
                         <input
                           className="text-input lane-name"
+                          data-lane-name={i}
                           value={l.name}
                           placeholder={inputName(l.input)}
                           disabled={starting}
@@ -235,6 +232,18 @@ export function RecordDialog({ onClose, onError, onRecorded }: Props) {
                               )
                             )
                           }
+                          onKeyDown={(e) => {
+                            if (e.key !== "Tab") return;
+                            // Tab walks the layer names, like track renaming.
+                            const next = document.querySelector<HTMLInputElement>(
+                              `[data-lane-name="${e.shiftKey ? i - 1 : i + 1}"]`
+                            );
+                            if (next) {
+                              e.preventDefault();
+                              next.focus();
+                              next.select();
+                            }
+                          }}
                         />
                         <button
                           className="btn btn-icon"
