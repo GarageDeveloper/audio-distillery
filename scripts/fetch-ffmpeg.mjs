@@ -39,20 +39,27 @@ const SOURCES = {
     "https://ffmpeg.martin-riedl.de/redirect/latest/macos/amd64/release/ffmpeg.zip",
     "https://ffmpeg.martin-riedl.de/redirect/latest/macos/amd64/snapshot/ffmpeg.zip",
   ],
+  // BtbN's "latest" release does not always carry the master-latest
+  // aliases (they appear late in their autobuild cycle), so a PINNED
+  // dated autobuild — releases are permanent — backs every alias up.
   "x86_64-pc-windows-msvc": [
     "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-lgpl.zip",
+    "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-27-16-45/ffmpeg-n8.1.2-47-g156bb4d299-win64-lgpl-8.1.zip",
   ],
   "aarch64-pc-windows-msvc": [
     "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-winarm64-lgpl.zip",
+    "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-27-16-45/ffmpeg-n8.1.2-47-g156bb4d299-winarm64-lgpl-8.1.zip",
   ],
   // BtbN first: GitHub's CDN is dependable, and johnvansickle.com
   // occasionally serves an HTML rate-limit page with a 200 status.
   "x86_64-unknown-linux-gnu": [
     "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-linux64-lgpl.tar.xz",
+    "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-27-16-45/ffmpeg-n8.1.2-47-g156bb4d299-linux64-lgpl-8.1.tar.xz",
     "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz",
   ],
   "aarch64-unknown-linux-gnu": [
     "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-linuxarm64-lgpl.tar.xz",
+    "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-27-16-45/ffmpeg-n8.1.2-47-g156bb4d299-linuxarm64-lgpl-8.1.tar.xz",
     "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz",
   ],
 };
