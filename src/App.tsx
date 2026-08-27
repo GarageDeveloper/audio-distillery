@@ -812,10 +812,18 @@ export default function App() {
           onError={showError}
           onRecorded={(paths) => {
             setRecordOpen(false);
-            // The recorded lanes flow into the normal layout choice
-            // (synced multitrack for a fresh session, layers/takes
-            // when one is already open).
-            if (paths.length > 0) setDropChoice(paths);
+            if (paths.length === 0) return;
+            if (view) {
+              // A session is open: adding recorded lanes has real
+              // alternatives (append, layers, take) — keep the choice.
+              setDropChoice(paths);
+            } else {
+              // A fresh recording IS a synced multitrack session by
+              // construction: skip the question and land on the
+              // per-layer view, where the take is actually visible.
+              setWaveMode("layers");
+              void loadPaths(paths, "multitrack");
+            }
           }}
         />
       )}
