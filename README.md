@@ -112,6 +112,10 @@ AudioDistillery is released under the [MIT License](LICENSE).
   (coupler-rs); the VST 3 SDK itself is MIT-licensed by Steinberg since
   version 3.8.
 - **Audio Units** and macOS are technologies of Apple Inc.
+- Windows builds may include **ASIO Interface Technology by Steinberg Media
+  Technologies GmbH** (ASIO is a trademark of Steinberg Media Technologies
+  GmbH). The ASIO SDK is fetched from Steinberg at build time and is never
+  redistributed by this repository.
 - Exports are performed by a bundled [FFmpeg](https://ffmpeg.org) binary
   (separate sidecar process), built and distributed by
   [ffmpeg.martin-riedl.de](https://ffmpeg.martin-riedl.de) under the GPL;

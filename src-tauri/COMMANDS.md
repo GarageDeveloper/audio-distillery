@@ -223,7 +223,13 @@ mirrors its reference source file's container, bit depth and sample rate
 
 Tape-machine tracking from an audio interface, all logic in
 `still-core::engine::record`. `list_input_devices` enumerates inputs at
-their default (mix) format; `get_default_recording_dir` returns
+their default (mix) format across every available host —
+`InputDeviceInfo.host` names it ("CoreAudio", "WASAPI", "ASIO") and
+`RecordConfig.host` selects it (#9: the `asio` cargo feature adds ASIO
+on Windows for true multichannel; Windows device changes wake the
+watcher through an IMMNotificationClient; the watcher freezes during a
+take and never loads ASIO drivers in the background). The hidden
+`AudioDistillery --list-inputs` mode prints the enumeration as JSON; `get_default_recording_dir` returns
 `~/Music/AudioDistillery/Recordings`, and `InputDeviceInfo` carries the
 per-channel `input_names` (CoreAudio element names on macOS — "MIC 1",
 "S/PDIF L"…; "Input N" elsewhere). `record_start(RecordConfig {device,
