@@ -21,6 +21,10 @@ gain_overrides: Record<string, number>, mute_overrides: Record<string, boolean>,
  */
 layer_volumes: Array<number>, 
 /**
+ * Normalized ISRC ("" = none).
+ */
+isrc: string, 
+/**
  * This track's insert chain (master-bus position, active in its span).
  */
 inserts: Array<MasteringPluginView>, };

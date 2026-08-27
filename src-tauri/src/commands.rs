@@ -613,6 +613,14 @@ pub fn rename_track(state: State<'_, AppState>, id: u32, title: String) -> CmdRe
     })
 }
 
+#[tauri::command]
+pub fn set_track_isrc(state: State<'_, AppState>, id: u32, isrc: String) -> CmdResult<ProjectView> {
+    with_session(&state, |s| {
+        s.set_track_isrc(id, &isrc).map_err(err)?;
+        Ok(s.view())
+    })
+}
+
 /// Rebuild the engine's master-insert chain from the project recipe:
 /// ensure every configured plugin has a live instance (created on the MAIN
 /// thread with its saved state), push ordered proxies to the engine, then
@@ -1285,8 +1293,30 @@ pub async fn export_tracks(
         // Progress arrives from several worker threads at once; throttle the
         // stream globally but always let start/end events through.
         let last = std::sync::Mutex::new(Instant::now() - Duration::from_secs(1));
-        if config.cd_image && !config.stems {
-            return Ok::<ExportReport, still_core::StillError>(
+        if (config.cd_image || config.ddp) && !config.stems {
+            let emit = |p: still_core::export::ExportProgress| {
+                let force = p.track_progress == 0.0 || p.track_progress == 1.0;
+                let mut last = last.lock().unwrap();
+                if force || last.elapsed() >= Duration::from_millis(60) {
+                    *last = Instant::now();
+                    let _ = app2.emit("export:progress", &p);
+                }
+            };
+            let report = if config.ddp {
+                still_core::export::run_export_ddp(
+                    &ffmpeg,
+                    &layers,
+                    session_channels,
+                    sample_rate,
+                    &jobs,
+                    &config,
+                    &chain,
+                    &lane_chains,
+                    &meta,
+                    &cancel,
+                    emit,
+                )
+            } else {
                 still_core::export::run_export_cd_image(
                     &ffmpeg,
                     &layers,
@@ -1298,16 +1328,10 @@ pub async fn export_tracks(
                     &lane_chains,
                     &meta,
                     &cancel,
-                    |p| {
-                        let force = p.track_progress == 0.0 || p.track_progress == 1.0;
-                        let mut last = last.lock().unwrap();
-                        if force || last.elapsed() >= Duration::from_millis(60) {
-                            *last = Instant::now();
-                            let _ = app2.emit("export:progress", &p);
-                        }
-                    },
-                ),
-            );
+                    emit,
+                )
+            };
+            return Ok::<ExportReport, still_core::StillError>(report);
         }
         Ok::<ExportReport, still_core::StillError>(still_core::export::run_export_with_chain(
             &ffmpeg,

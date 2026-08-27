@@ -1253,6 +1253,155 @@ fn export_stems_multitrack() {
     assert!(jobs_src[0].out_path.extension().unwrap() == "wav");
 }
 
+/// Tier-3 pro export (#5): the DDP 2.00 fileset. Structure parses, the
+/// PQ stream agrees with the map to the frame, per-track ISRCs and the
+/// EAN land in the subcode, and the image's program area null-compares
+/// against the WAV produced by the cue path from the same session.
+#[test]
+fn export_ddp_fileset() {
+    let Ok(ffmpeg) = resolve_ffmpeg(&[]) else {
+        eprintln!("ffmpeg not found — DDP test skipped");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let wav = dir.path().join("src.wav");
+    write_wav(&wav, &[(3.0, 0.4)]);
+    let (info, peaks) = scan_file(&wav, |_| {}).unwrap();
+    let mut state =
+        ProjectState::new(Project::new(vec![wav.display().to_string()]), info, vec![peaks]);
+    state.add_region(0, SR as u64 + 123, None).unwrap();
+    state.add_region(SR as u64 + 200, 2 * SR as u64 + 777, None).unwrap();
+    let t1 = state.tracks()[0].id;
+    state.set_track_isrc(t1, "fr-ab1-26-00001").unwrap();
+    assert_eq!(state.tracks()[0].isrc, "FRAB12600001");
+    assert!(state.set_track_isrc(t1, "not an isrc").is_err());
+
+    let meta = still_core::AlbumMeta {
+        album: "Barn Sessions".into(),
+        album_artist: "The Copper Stills".into(),
+        catalog_ean: "1234567890128".into(),
+        ..Default::default()
+    };
+    let cfg = ExportConfig {
+        format: ExportFormat::Wav,
+        bit_depth: 16,
+        dest_dir: dir.path().join("out").display().to_string(),
+        ..Default::default()
+    };
+    let cancel = AtomicBool::new(false);
+    let jobs = still_core::export::plan_export_with_meta(&state.tracks(), &cfg, &wav, &meta).unwrap();
+    assert_eq!(jobs[0].isrc, "FRAB12600001");
+
+    let rep = still_core::export::run_export_ddp(
+        &ffmpeg, &mix_of(&state), 2, SR, &jobs, &cfg, &[], &[], &meta, &cancel, |_| {},
+    );
+    assert!(rep.errors.is_empty(), "{:?}", rep.errors);
+    let ddp_dir = std::path::PathBuf::from(&rep.files[0].path);
+    assert!(ddp_dir.is_dir());
+
+    // Expected geometry: same frame-padded lengths as the cue path.
+    let t1_len = (SR as u64 + 123).div_ceil(588);
+    let t2_len = (SR as u64 + 577).div_ceil(588);
+    let program = t1_len + t2_len;
+
+    // DDPID: level + EAN + CD.
+    let id = std::fs::read(ddp_dir.join("DDPID")).unwrap();
+    assert_eq!(id.len(), 128);
+    assert_eq!(&id[..8], b"DDP 2.00");
+    assert_eq!(&id[8..21], b"1234567890128");
+    assert_eq!(&id[87..89], b"CD");
+
+    // DDPMS: D0 length covers pause + program; S0 points at PQDESCR;
+    // the album metadata triggers a third packet declaring CD-Text.
+    let ms = std::fs::read(ddp_dir.join("DDPMS")).unwrap();
+    assert_eq!(ms.len(), 384);
+    assert_eq!(&ms[..4], b"VVVM");
+    let dsl: u64 = String::from_utf8_lossy(&ms[14..22]).trim().parse().unwrap();
+    assert_eq!(dsl, 150 + program, "map disagrees with the image length");
+    assert_eq!(&ms[38..40], b"DA");
+    assert_eq!(String::from_utf8_lossy(&ms[128 + 30..128 + 38]), "PQ DESCR");
+    assert_eq!(String::from_utf8_lossy(&ms[256 + 30..256 + 36]), "CDTEXT");
+
+    // CD-Text: album and track titles, performer, EAN/ISRC — readable
+    // the way XLD reads them (18-byte packs, text split on NUL).
+    let text = std::fs::read(ddp_dir.join("CDTEXT.BIN")).unwrap();
+    assert_eq!(text.len() % 18, 0);
+    let strings = |ty: u8| -> Vec<String> {
+        let buf: Vec<u8> = text
+            .chunks(18)
+            .filter(|p| p[0] == ty)
+            .flat_map(|p| p[4..16].to_vec())
+            .collect();
+        buf.split(|b| *b == 0)
+            .map(|s| s.iter().map(|b| *b as char).collect())
+            .collect()
+    };
+    let titles = strings(0x80);
+    assert_eq!(titles[0], "Barn Sessions");
+    assert_eq!(titles[1], "Track 01");
+    assert_eq!(titles[2], "Track 02");
+    assert_eq!(strings(0x81)[0], "The Copper Stills");
+    let codes = strings(0x8E);
+    assert_eq!(codes[0], "1234567890128");
+    assert_eq!(codes[1], "FRAB12600001");
+
+    // PQ stream: lead-in EAN, track 1 ISRC, positions to the frame.
+    let pq = std::fs::read(ddp_dir.join("PQDESCR")).unwrap();
+    assert_eq!(pq.len() % 64, 0);
+    let pk: Vec<&[u8]> = pq.chunks(64).collect();
+    // lead-in, 01/00, 01/01, 02/01, AA/01.
+    assert_eq!(pk.len(), 5);
+    assert_eq!(String::from_utf8_lossy(&pk[0][32..45]), "1234567890128");
+    assert_eq!(String::from_utf8_lossy(&pk[1][20..32]), "FRAB12600001");
+    assert_eq!(String::from_utf8_lossy(&pk[2][10..16]), "000200");
+    let msf = |sector: u64| {
+        format!(
+            "{:02}{:02}{:02}",
+            sector / 75 / 60,
+            (sector / 75) % 60,
+            sector % 75
+        )
+    };
+    assert_eq!(String::from_utf8_lossy(&pk[3][10..16]), msf(150 + t1_len));
+    assert_eq!(&pk[4][4..6], b"AA");
+    assert_eq!(String::from_utf8_lossy(&pk[4][10..16]), msf(150 + program));
+
+    // Image: pause is digital black, program null-compares against the
+    // cue path's WAV rendered from the very same session.
+    let image = std::fs::read(ddp_dir.join("IMAGE.DAT")).unwrap();
+    assert_eq!(image.len() as u64, (150 + program) * 2352);
+    assert!(image[..150 * 2352].iter().all(|b| *b == 0), "pause not silent");
+
+    let cfg_cue = ExportConfig { cd_image: true, ..cfg.clone() };
+    let rep2 = still_core::export::run_export_cd_image(
+        &ffmpeg, &mix_of(&state), 2, SR, &jobs, &cfg_cue, &[], &[], &meta, &cancel, |_| {},
+    );
+    assert!(rep2.errors.is_empty(), "{:?}", rep2.errors);
+    let mut r = hound::WavReader::open(&rep2.files[0].path).unwrap();
+    let wav_samples: Vec<i16> = r.samples::<i16>().map(|v| v.unwrap()).collect();
+    let img_samples: Vec<i16> = image[150 * 2352..]
+        .chunks_exact(2)
+        .map(|b| i16::from_le_bytes([b[0], b[1]]))
+        .collect();
+    assert_eq!(img_samples.len(), wav_samples.len());
+    assert_eq!(img_samples, wav_samples, "DDP image and WAV image differ");
+
+    // Cue sheet carries the ISRC too.
+    let cue = std::fs::read_to_string(&rep2.files[1].path).unwrap();
+    assert!(cue.contains("ISRC FRAB12600001"), "{cue}");
+
+    // Checksums verify.
+    let chk = std::fs::read_to_string(ddp_dir.join("CHECKSUM.MD5")).unwrap();
+    assert!(chk.lines().count() >= 6);
+    assert!(chk.contains("CDTEXT.BIN"), "{chk}");
+    // PQ sheet exists and quotes the same lead-out time.
+    let sheet = std::fs::read_to_string(ddp_dir.join("PQ_SHEET.TXT")).unwrap();
+    let lo = 150 + program;
+    let expect = format!("{:02}:{:02}:{:02} (lead-out)", lo / 75 / 60, (lo / 75) % 60, lo % 75);
+    assert!(sheet.contains(&expect), "{sheet}");
+    assert!(sheet.contains("FRAB12600001"), "{sheet}");
+}
+
 /// Metering (#2): the export report measures the DELIVERED files. A
 /// −20 dBFS 997 Hz correlated stereo sine has a known integrated
 /// loudness (≈ −20.7 LUFS: −23.01 dB RMS/ch, +3.01 dB stereo sum,

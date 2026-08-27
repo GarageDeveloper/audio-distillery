@@ -43,7 +43,8 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
   const cdCombo =
     cfg.format === "wav" && cfg.bit_depth <= 16 && cfg.target_sample_rate === 44100;
   useEffect(() => {
-    if (!cdCombo && cfg.cd_image) setCfg((c) => ({ ...c, cd_image: false }));
+    if (!cdCombo && (cfg.cd_image || cfg.ddp))
+      setCfg((c) => ({ ...c, cd_image: false, ddp: false }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cdCombo]);
   // Collapsed by default: metadata is edited any time via the Album… button;
@@ -156,6 +157,24 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
 
   const trackCount = view.tracks.length;
 
+  // Per-track ISRC drafts (committed on blur; backend validates).
+  const [isrcDraft, setIsrcDraft] = useState<Record<number, string>>({});
+  const commitIsrc = (id: number) => {
+    const t = view.tracks.find((x) => x.id === id);
+    const draft = isrcDraft[id];
+    if (t === undefined || draft === undefined || draft === t.isrc) return;
+    api
+      .setTrackIsrc(id, draft)
+      .then((v) => {
+        onViewChange(v);
+        setIsrcDraft((m) => {
+          const { [id]: _, ...rest } = m;
+          return rest;
+        });
+      })
+      .catch((e) => onError(String(e)));
+  };
+
   return (
     <Backdrop
       onClose={() => {
@@ -208,16 +227,23 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
                   CD preset (44.1 kHz · 16-bit · dither)
                 </button>
                 {cdCombo && !cfg.stems && (
-                  <label className="cd-image-toggle" title="One Red Book WAV image (frame-aligned tracks) plus a .cue sheet with CD-Text — burnable and pressable">
-                    <input
-                      type="checkbox"
-                      checked={cfg.cd_image}
-                      onChange={(e) =>
-                        setCfg({ ...cfg, cd_image: e.target.checked, stems: false })
-                      }
-                    />
-                    Single image + cue sheet
-                  </label>
+                  <select
+                    className="select cd-deliverable"
+                    value={cfg.ddp ? "ddp" : cfg.cd_image ? "cue" : "tracks"}
+                    onChange={(e) =>
+                      setCfg({
+                        ...cfg,
+                        cd_image: e.target.value === "cue",
+                        ddp: e.target.value === "ddp",
+                        stems: false,
+                      })
+                    }
+                    title="How the Red Book master is delivered"
+                  >
+                    <option value="tracks">Separate track files</option>
+                    <option value="cue">Single image + cue sheet (burning)</option>
+                    <option value="ddp">DDP fileset + PQ sheet (pressing plant)</option>
+                  </select>
                 )}
               </div>
               {cfg.format === "source" && (
@@ -238,6 +264,7 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
                       ...cfg,
                       stems: e.target.checked,
                       cd_image: e.target.checked ? false : cfg.cd_image,
+                      ddp: e.target.checked ? false : cfg.ddp,
                     })
                   }
                 />
@@ -334,6 +361,36 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
             </div>
 
 
+
+            {(cfg.ddp || cfg.cd_image) && (
+              <div className="field">
+                <label>ISRC per track</label>
+                <div className="isrc-grid">
+                  {view.tracks.map((t) => (
+                    <label key={t.id} className="isrc-row" title="International Standard Recording Code — written into the CD subcode (DDP) and the cue sheet. Leave empty if you don't have one.">
+                      <span className="isrc-name">
+                        {String(t.number).padStart(2, "0")} · {t.title}
+                      </span>
+                      <input
+                        className="text-input mono isrc-input"
+                        placeholder="CC-XXX-YY-NNNNN"
+                        value={isrcDraft[t.id] ?? t.isrc}
+                        onChange={(e) =>
+                          setIsrcDraft((m) => ({ ...m, [t.id]: e.target.value }))
+                        }
+                        onBlur={() => commitIsrc(t.id)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                        }}
+                      />
+                    </label>
+                  ))}
+                </div>
+                <div className="hint">
+                  Optional — stored in the project, embedded in the {cfg.ddp ? "DDP subcode and PQ sheet" : "cue sheet"}.
+                </div>
+              </div>
+            )}
 
             <div className="field">
               <label>Destination</label>

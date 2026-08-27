@@ -77,6 +77,8 @@ export const api = {
     invoke<ProjectView>("rename_layer", { id, name }),
   renameTrack: (id: number, title: string) =>
     invoke<ProjectView>("rename_track", { id, title }),
+  setTrackIsrc: (id: number, isrc: string) =>
+    invoke<ProjectView>("set_track_isrc", { id, isrc }),
   setSnapToZero: (enabled: boolean) =>
     invoke<ProjectView>("set_snap_to_zero", { enabled }),
   setExportConfig: (config: ExportConfig) =>
