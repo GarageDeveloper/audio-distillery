@@ -4,4 +4,9 @@ export type InputDeviceInfo = { name: string,
 /**
  * Channel count of the device's default (mix) input format.
  */
-channels: number, sample_rate: number, is_default: boolean, };
+channels: number, sample_rate: number, is_default: boolean, 
+/**
+ * Human names of each input, index-aligned with 1..=channels
+ * ("Input N" when the platform/driver names nothing).
+ */
+input_names: Array<string>, };

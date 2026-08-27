@@ -224,12 +224,15 @@ mirrors its reference source file's container, bit depth and sample rate
 Tape-machine tracking from an audio interface, all logic in
 `still-core::engine::record`. `list_input_devices` enumerates inputs at
 their default (mix) format; `get_default_recording_dir` returns
-`~/Music/AudioDistillery/Recordings`. `record_start(RecordConfig
-{device, first_input, layer_count, dest_dir})` maps device inputs
-incrementally onto lanes (input N → lane 1, N+1 → lane 2, …), creates a
-fresh "Take N" folder and streams one mono 24-bit WAV per lane at the
-device rate — headers are fixed up every ~2 s so a crash never loses
-more than the last flush. `record_status` polls elapsed time, per-lane
+`~/Music/AudioDistillery/Recordings`, and `InputDeviceInfo` carries the
+per-channel `input_names` (CoreAudio element names on macOS — "MIC 1",
+"S/PDIF L"…; "Input N" elsewhere). `record_start(RecordConfig {device,
+lanes, dest_dir})` takes an explicit lane list — each `RecordLane
+{input, name}` maps ANY device input onto a lane, in any order; the
+lane name becomes the file name (and thus the layer name once loaded).
+A fresh "Take N" folder is created and one mono 24-bit WAV streams per
+lane at the device rate — headers are fixed up every ~2 s so a crash
+never loses more than the last flush. `record_status` polls elapsed time, per-lane
 peaks and the dropped-frame counter; `record_stop` finalizes and
 returns the file paths, which the frontend feeds into the usual layout
 choice (synced multitrack). The cpal stream lives on a dedicated

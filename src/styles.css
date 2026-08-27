@@ -1341,6 +1341,22 @@ button.wordmark:hover { background: var(--panel-2); }
 .record-lane-fill.hot { background: var(--err); }
 .record-dropped { color: var(--err); font-size: 12px; font-weight: 600; }
 .record-btn.recording { background: var(--err); border-color: var(--err); }
+.record-btn.arming { opacity: .7; animation: record-pulse 1.2s ease-in-out infinite; }
+.lane-list {
+  display: flex; flex-direction: column; gap: 4px;
+  max-height: 220px; overflow-y: auto; margin-bottom: 6px;
+}
+.lane-row { display: flex; align-items: center; gap: 6px; }
+.lane-row.missing .lane-input { color: var(--err); border-color: var(--err); }
+.lane-num { font-family: var(--font-mono); font-size: 10px; color: var(--text-3); width: 18px; flex: none; }
+.lane-input { flex: 1; min-width: 0; }
+.lane-name { flex: 1; min-width: 0; font-size: 12px; }
+.lane-add { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-2); }
+.lane-add .select { flex: 1; min-width: 0; }
+.record-lane-num {
+  width: 110px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 10.5px;
+}
 .cd-image-toggle {
   display: inline-flex; align-items: center; gap: 6px;
   font-size: 12px; color: var(--text-2);

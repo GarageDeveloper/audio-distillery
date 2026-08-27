@@ -30,6 +30,19 @@ pub struct InputDeviceInfo {
     pub channels: u16,
     pub sample_rate: u32,
     pub is_default: bool,
+    /// Human names of each input, index-aligned with 1..=channels
+    /// ("Input N" when the platform/driver names nothing).
+    pub input_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../src/types/")]
+pub struct RecordLane {
+    /// Device input feeding this lane, 1-based.
+    pub input: u16,
+    /// Layer name — becomes the file name (and thus the layer's display
+    /// name once loaded). "" = named after the input.
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -37,10 +50,8 @@ pub struct InputDeviceInfo {
 pub struct RecordConfig {
     /// Device name; "" = system default input.
     pub device: String,
-    /// First device input to record, 1-based (e.g. 3 = input 3 → lane 1).
-    pub first_input: u16,
-    /// Number of consecutive inputs / files to record.
-    pub layer_count: u16,
+    /// Lanes in file order; any input, any order, non-contiguous is fine.
+    pub lanes: Vec<RecordLane>,
     /// Base folder; a fresh "Take N" subfolder is created inside.
     pub dest_dir: String,
 }
@@ -82,10 +93,149 @@ pub fn list_input_devices() -> Vec<InputDeviceInfo> {
                 is_default: name == default_name,
                 channels: cfg.channels(),
                 sample_rate: cfg.sample_rate().0,
+                input_names: input_channel_names(&name, cfg.channels()),
                 name,
             })
         })
         .collect()
+}
+
+/// Human names of a device's input channels. On macOS CoreAudio exposes
+/// per-element names (interfaces label them "MIC 1", "SPDIF L", …);
+/// everywhere else — and whenever the driver names nothing — fall back
+/// to "Input N".
+fn input_channel_names(device_name: &str, channels: u16) -> Vec<String> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(names) = coreaudio_names::channel_names(device_name, channels) {
+            return names;
+        }
+    }
+    (1..=channels).map(|n| format!("Input {n}")).collect()
+}
+
+/// Minimal CoreAudio property queries (the framework is already linked
+/// through cpal). Only reads: device list, names, input element names.
+#[cfg(target_os = "macos")]
+mod coreaudio_names {
+    use std::ffi::c_void;
+
+    #[repr(C)]
+    struct PropertyAddress {
+        selector: u32,
+        scope: u32,
+        element: u32,
+    }
+
+    #[link(name = "CoreAudio", kind = "framework")]
+    extern "C" {
+        fn AudioObjectGetPropertyDataSize(
+            object: u32,
+            address: *const PropertyAddress,
+            qualifier_size: u32,
+            qualifier: *const c_void,
+            size: *mut u32,
+        ) -> i32;
+        fn AudioObjectGetPropertyData(
+            object: u32,
+            address: *const PropertyAddress,
+            qualifier_size: u32,
+            qualifier: *const c_void,
+            size: *mut u32,
+            data: *mut c_void,
+        ) -> i32;
+    }
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFStringGetCString(s: *const c_void, buf: *mut u8, len: isize, encoding: u32) -> u8;
+        fn CFRelease(cf: *const c_void);
+    }
+
+    const SYSTEM_OBJECT: u32 = 1; // kAudioObjectSystemObject
+    const UTF8: u32 = 0x0800_0100; // kCFStringEncodingUTF8
+    const fn fourcc(s: &[u8; 4]) -> u32 {
+        u32::from_be_bytes(*s)
+    }
+    const DEVICES: u32 = fourcc(b"dev#"); // kAudioHardwarePropertyDevices
+    const NAME: u32 = fourcc(b"lnam"); // kAudioObjectPropertyName
+    const ELEMENT_NAME: u32 = fourcc(b"lchn"); // kAudioObjectPropertyElementName
+    const SCOPE_GLOBAL: u32 = fourcc(b"glob");
+    const SCOPE_INPUT: u32 = fourcc(b"inpt");
+    const ELEMENT_MAIN: u32 = 0;
+
+    unsafe fn cf_to_string(cf: *const c_void) -> Option<String> {
+        if cf.is_null() {
+            return None;
+        }
+        let mut buf = [0u8; 512];
+        let ok = CFStringGetCString(cf, buf.as_mut_ptr(), buf.len() as isize, UTF8);
+        CFRelease(cf);
+        if ok == 0 {
+            return None;
+        }
+        let end = buf.iter().position(|b| *b == 0).unwrap_or(0);
+        Some(String::from_utf8_lossy(&buf[..end]).to_string())
+    }
+
+    unsafe fn object_string(object: u32, selector: u32, scope: u32, element: u32) -> Option<String> {
+        let addr = PropertyAddress { selector, scope, element };
+        let mut cf: *const c_void = std::ptr::null();
+        let mut size = std::mem::size_of::<*const c_void>() as u32;
+        let status = AudioObjectGetPropertyData(
+            object,
+            &addr,
+            0,
+            std::ptr::null(),
+            &mut size,
+            &mut cf as *mut _ as *mut c_void,
+        );
+        if status != 0 {
+            return None;
+        }
+        cf_to_string(cf)
+    }
+
+    pub fn channel_names(device_name: &str, channels: u16) -> Option<Vec<String>> {
+        unsafe {
+            // Enumerate device IDs, match by name.
+            let addr = PropertyAddress {
+                selector: DEVICES,
+                scope: SCOPE_GLOBAL,
+                element: ELEMENT_MAIN,
+            };
+            let mut size = 0u32;
+            if AudioObjectGetPropertyDataSize(SYSTEM_OBJECT, &addr, 0, std::ptr::null(), &mut size)
+                != 0
+            {
+                return None;
+            }
+            let count = size as usize / std::mem::size_of::<u32>();
+            let mut ids = vec![0u32; count];
+            if AudioObjectGetPropertyData(
+                SYSTEM_OBJECT,
+                &addr,
+                0,
+                std::ptr::null(),
+                &mut size,
+                ids.as_mut_ptr() as *mut c_void,
+            ) != 0
+            {
+                return None;
+            }
+            let device = ids.into_iter().find(|id| {
+                object_string(*id, NAME, SCOPE_GLOBAL, ELEMENT_MAIN).as_deref()
+                    == Some(device_name)
+            })?;
+            let names: Vec<String> = (1..=channels as u32)
+                .map(|el| {
+                    object_string(device, ELEMENT_NAME, SCOPE_INPUT, el)
+                        .filter(|n| !n.trim().is_empty())
+                        .unwrap_or_else(|| format!("Input {el}"))
+                })
+                .collect();
+            Some(names)
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -193,12 +343,12 @@ impl RecorderHandle {
     /// live (or with the device's error).
     pub fn start(cfg: &RecordConfig) -> Result<Self> {
         use cpal::traits::{DeviceTrait, HostTrait};
-        if cfg.layer_count == 0 {
+        if cfg.lanes.is_empty() {
             return Err(StillError::InvalidProject(
                 "at least one input must be recorded".into(),
             ));
         }
-        if cfg.first_input == 0 {
+        if cfg.lanes.iter().any(|l| l.input == 0) {
             return Err(StillError::InvalidProject(
                 "inputs are numbered from 1".into(),
             ));
@@ -224,20 +374,28 @@ impl RecorderHandle {
             .map_err(|e| StillError::Audio(format!("input device unavailable: {e}")))?;
         let dev_ch = sup.channels() as usize;
         let rate = sup.sample_rate().0;
-        let first = cfg.first_input as usize;
-        let lanes = cfg.layer_count as usize;
-        if first + lanes - 1 > dev_ch {
+        let lanes = cfg.lanes.len();
+        if let Some(bad) = cfg.lanes.iter().find(|l| l.input as usize > dev_ch) {
             return Err(StillError::Audio(format!(
-                "the device exposes {dev_ch} input(s) — cannot record inputs {first}..{}",
-                first + lanes - 1
+                "the device exposes {dev_ch} input(s) — input {} does not exist",
+                bad.input
             )));
         }
+        // 0-based device channel per lane, in file order.
+        let inputs: Vec<usize> = cfg.lanes.iter().map(|l| l.input as usize - 1).collect();
 
         let folder = take_folder(Path::new(cfg.dest_dir.trim())).map_err(StillError::Io)?;
         let mut writers = Vec::with_capacity(lanes);
         let mut files = Vec::with_capacity(lanes);
-        for i in 0..lanes {
-            let path = folder.join(format!("input-{:02}.wav", first + i));
+        for (i, lane) in cfg.lanes.iter().enumerate() {
+            // The file name IS the layer name once loaded as multitrack.
+            let base = crate::naming::sanitize_filename(lane.name.trim());
+            let base = if base.is_empty() {
+                format!("Input {:02}", lane.input)
+            } else {
+                base
+            };
+            let path = folder.join(format!("{:02} - {base}.wav", i + 1));
             writers.push(WavLane::create(&path, rate).map_err(StillError::Io)?);
             files.push(path);
         }
@@ -255,7 +413,7 @@ impl RecorderHandle {
         let (mut producer, mut consumer) = rtrb::RingBuffer::<f32>::new(capacity);
 
         let shared_cb = shared.clone();
-        let first0 = first - 1;
+        let cb_inputs = inputs.clone();
         let mut on_input = move |frames: &[f32]| {
             // `frames` is interleaved with dev_ch channels; keep lanes.
             for frame in frames.chunks_exact(dev_ch) {
@@ -263,8 +421,8 @@ impl RecorderHandle {
                     shared_cb.dropped.fetch_add(1, Ordering::Relaxed);
                     continue;
                 }
-                for (lane, level) in shared_cb.levels.iter().enumerate() {
-                    let v = frame[first0 + lane];
+                for (ch, level) in cb_inputs.iter().zip(shared_cb.levels.iter()) {
+                    let v = frame[*ch];
                     let _ = producer.push(v);
                     let a = v.abs();
                     let _ = level.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |bits| {
@@ -349,7 +507,7 @@ impl RecorderHandle {
                 // Drain loop: ring → lane files, header fixup every ~2 s.
                 let fixup_every = (rate as u64) * 2;
                 let mut since_fixup = 0u64;
-                let mut fail = |msg: String, shared: &Arc<RecShared>| {
+                let fail = |msg: String, shared: &Arc<RecShared>| {
                     *shared.error.lock().unwrap() = Some(msg);
                     shared.stop.store(true, Ordering::SeqCst);
                 };
@@ -495,10 +653,23 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let devices = list_input_devices();
         assert!(!devices.is_empty(), "no input device on this machine");
+        // STILL_TEST_INPUT_DEVICE / STILL_TEST_INPUTS ("1,22,3") pick a
+        // specific interface and a non-linear lane mapping.
+        let device = std::env::var("STILL_TEST_INPUT_DEVICE").unwrap_or_default();
+        let lanes: Vec<RecordLane> = std::env::var("STILL_TEST_INPUTS")
+            .unwrap_or_else(|_| "1".into())
+            .split(',')
+            .filter_map(|v| v.trim().parse::<u16>().ok())
+            .enumerate()
+            .map(|(i, input)| RecordLane {
+                input,
+                name: format!("Lane {}", i + 1),
+            })
+            .collect();
+        let n = lanes.len();
         let cfg = RecordConfig {
-            device: String::new(),
-            first_input: 1,
-            layer_count: 1,
+            device,
+            lanes,
             dest_dir: dir.path().display().to_string(),
         };
         let handle = RecorderHandle::start(&cfg).unwrap();
@@ -508,10 +679,37 @@ mod tests {
         assert!(st.elapsed_seconds > 0.5, "elapsed {}", st.elapsed_seconds);
         assert_eq!(st.dropped_frames, 0);
         let files = handle.stop().unwrap();
-        assert_eq!(files.len(), 1);
-        let r = hound::WavReader::open(&files[0]).unwrap();
-        assert_eq!(r.spec().bits_per_sample, 24);
-        assert!(r.duration() > r.spec().sample_rate, "less than 1 s recorded");
+        assert_eq!(files.len(), n);
+        let mut durations = Vec::new();
+        for f in &files {
+            let r = hound::WavReader::open(f).unwrap();
+            assert_eq!(r.spec().bits_per_sample, 24);
+            assert!(r.duration() > r.spec().sample_rate, "less than 1 s in {f:?}");
+            durations.push(r.duration());
+        }
+        assert!(
+            durations.windows(2).all(|w| w[0] == w[1]),
+            "lanes not sample-synced: {durations:?}"
+        );
+        eprintln!("recorded {files:?}");
+    }
+
+    /// Print the input devices this machine exposes (manual check).
+    #[test]
+    #[ignore]
+    fn print_input_devices() {
+        for d in list_input_devices() {
+            eprintln!(
+                "{}{} — {} ch @ {} Hz",
+                d.name,
+                if d.is_default { " (default)" } else { "" },
+                d.channels,
+                d.sample_rate
+            );
+            for (i, n) in d.input_names.iter().enumerate() {
+                eprintln!("   {:02}: {n}", i + 1);
+            }
+        }
     }
 
     /// "Take N" folders never collide.
