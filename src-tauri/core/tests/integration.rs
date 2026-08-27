@@ -1187,6 +1187,8 @@ fn export_stems_multitrack() {
             .unwrap()
             .display()
             .to_string()
+            // Windows separators: the LAYOUT is what's asserted here.
+            .replace('\\', "/")
     };
     assert_eq!(rel(0), "01 - Track 01/01 - Room mic.wav");
     assert_eq!(rel(1), "01 - Track 01/02 - input-3.wav");

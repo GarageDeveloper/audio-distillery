@@ -6,7 +6,7 @@
 // Sources (static, no system dependencies):
 //   macOS   : ffmpeg.martin-riedl.de (release channel, snapshot fallback)
 //   Windows : BtbN FFmpeg-Builds (LGPL variant)
-//   Linux   : johnvansickle.com static builds
+//   Linux   : BtbN FFmpeg-Builds (GitHub CDN), johnvansickle fallback
 import { execSync } from "node:child_process";
 import {
   chmodSync,
@@ -45,10 +45,14 @@ const SOURCES = {
   "aarch64-pc-windows-msvc": [
     "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-winarm64-lgpl.zip",
   ],
+  // BtbN first: GitHub's CDN is dependable, and johnvansickle.com
+  // occasionally serves an HTML rate-limit page with a 200 status.
   "x86_64-unknown-linux-gnu": [
+    "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-linux64-lgpl.tar.xz",
     "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz",
   ],
   "aarch64-unknown-linux-gnu": [
+    "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-linuxarm64-lgpl.tar.xz",
     "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz",
   ],
 };
