@@ -22,7 +22,7 @@ use ts_rs::TS;
 
 use crate::error::{Result, StillError};
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../src/types/")]
 pub struct InputDeviceInfo {
     pub name: String,
@@ -100,6 +100,49 @@ pub fn list_input_devices() -> Vec<InputDeviceInfo> {
         .collect()
 }
 
+/// Watch the input-device topology on a dedicated thread and call
+/// `notify` with the fresh list whenever it CHANGES (first call
+/// included). On macOS a CoreAudio property listener wakes the thread
+/// the instant a device is plugged or unplugged; a slow re-check keeps
+/// every platform honest. Enumeration never touches the caller's
+/// thread, so the UI stays fluid.
+pub fn watch_input_devices(notify: impl Fn(Vec<InputDeviceInfo>) + Send + 'static) {
+    std::thread::Builder::new()
+        .name("still-devwatch".into())
+        .spawn(move || {
+            let (tx, rx) = std::sync::mpsc::channel::<()>();
+            #[cfg(target_os = "macos")]
+            coreaudio_names::install_devices_listener(tx);
+            #[cfg(not(target_os = "macos"))]
+            drop(tx);
+            let fallback = if cfg!(target_os = "macos") {
+                std::time::Duration::from_secs(30)
+            } else {
+                std::time::Duration::from_secs(3)
+            };
+            let mut last: Option<Vec<InputDeviceInfo>> = None;
+            loop {
+                let list = list_input_devices();
+                if last.as_ref() != Some(&list) {
+                    last = Some(list.clone());
+                    notify(list);
+                }
+                match rx.recv_timeout(fallback) {
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        // No listener on this platform: plain slow polling.
+                        std::thread::sleep(fallback);
+                    }
+                    _ => {
+                        // Coalesce bursts (unplug fires several events).
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                        while rx.try_recv().is_ok() {}
+                    }
+                }
+            }
+        })
+        .expect("spawn device watcher");
+}
+
 /// Human names of a device's input channels. On macOS CoreAudio exposes
 /// per-element names (interfaces label them "MIC 1", "SPDIF L", …);
 /// everywhere else — and whenever the driver names nothing — fall back
@@ -129,6 +172,12 @@ mod coreaudio_names {
 
     #[link(name = "CoreAudio", kind = "framework")]
     extern "C" {
+        fn AudioObjectAddPropertyListener(
+            object: u32,
+            address: *const PropertyAddress,
+            listener: extern "C" fn(u32, u32, *const PropertyAddress, *mut c_void) -> i32,
+            client_data: *mut c_void,
+        ) -> i32;
         fn AudioObjectGetPropertyDataSize(
             object: u32,
             address: *const PropertyAddress,
@@ -193,6 +242,38 @@ mod coreaudio_names {
             return None;
         }
         cf_to_string(cf)
+    }
+
+    /// Signal `tx` whenever the system's device list changes. The HAL
+    /// delivers notifications on its own thread; the sender lives behind
+    /// a Mutex (leaked once per process) to stay Sync.
+    pub fn install_devices_listener(tx: std::sync::mpsc::Sender<()>) {
+        extern "C" fn on_change(
+            _object: u32,
+            _count: u32,
+            _addresses: *const PropertyAddress,
+            data: *mut c_void,
+        ) -> i32 {
+            let tx = unsafe { &*(data as *const std::sync::Mutex<std::sync::mpsc::Sender<()>>) };
+            if let Ok(tx) = tx.lock() {
+                let _ = tx.send(());
+            }
+            0
+        }
+        let addr = PropertyAddress {
+            selector: DEVICES,
+            scope: SCOPE_GLOBAL,
+            element: ELEMENT_MAIN,
+        };
+        let leaked: &'static _ = Box::leak(Box::new(std::sync::Mutex::new(tx)));
+        unsafe {
+            AudioObjectAddPropertyListener(
+                SYSTEM_OBJECT,
+                &addr,
+                on_change,
+                leaked as *const _ as *mut c_void,
+            );
+        }
     }
 
     pub fn channel_names(device_name: &str, channels: u16) -> Option<Vec<String>> {

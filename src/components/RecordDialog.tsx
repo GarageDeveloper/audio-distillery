@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
 import type { InputDeviceInfo } from "../types/InputDeviceInfo";
@@ -27,7 +28,9 @@ export function RecordDialog({ onClose, onError, onRecorded }: Props) {
   const [device, setDevice] = useState<string>("");
   const [lanes, setLanes] = useState<RecordLane[]>([]);
   const [addFirst, setAddFirst] = useState(1);
-  const [addCount, setAddCount] = useState(1);
+  // Kept as text so backspace/delete behave; parsed when used.
+  const [addCount, setAddCount] = useState("1");
+  const addCountN = Math.max(1, parseInt(addCount, 10) || 1);
   const [destDir, setDestDir] = useState("");
   const [status, setStatus] = useState<RecordStatus | null>(null);
   const [starting, setStarting] = useState(false);
@@ -41,20 +44,16 @@ export function RecordDialog({ onClose, onError, onRecorded }: Props) {
     selected?.input_names[n - 1] ?? `Input ${n}`;
   const invalidLanes = channels > 0 && lanes.some((l) => l.input > channels);
 
-  const refreshDevices = () =>
-    api
-      .listInputDevices()
-      .then((list) => {
-        setDevices(list);
-        setDevice((cur) => {
-          if (cur && list.some((d) => d.name === cur)) return cur;
-          return (list.find((d) => d.is_default) ?? list[0])?.name ?? "";
-        });
-      })
-      .catch(() => {});
+  const adoptDevices = (list: InputDeviceInfo[]) => {
+    setDevices(list);
+    setDevice((cur) => {
+      if (cur && list.some((d) => d.name === cur)) return cur;
+      return (list.find((d) => d.is_default) ?? list[0])?.name ?? "";
+    });
+  };
 
   useEffect(() => {
-    void refreshDevices();
+    api.listInputDevices().then(adoptDevices).catch(() => {});
     api
       .getDefaultRecordingDir()
       .then((d) => setDestDir((cur) => cur || d))
@@ -73,14 +72,16 @@ export function RecordDialog({ onClose, onError, onRecorded }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Hot-plug: re-enumerate while the dialog sits open (a plugged or
-  // unplugged interface shows up without restarting anything).
+  // Hot-plug: the backend watcher (CoreAudio listener + off-thread
+  // enumeration) pushes an event ONLY when the topology changes — no
+  // polling, nothing on the UI thread.
   useEffect(() => {
-    if (recording) return;
-    const t = window.setInterval(() => void refreshDevices(), 3000);
-    return () => window.clearInterval(t);
+    const un = listen<InputDeviceInfo[]>("record:devices", (e) => adoptDevices(e.payload));
+    return () => {
+      void un.then((f) => f());
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recording]);
+  }, []);
 
   useEffect(() => {
     if (!recording) return;
@@ -114,7 +115,7 @@ export function RecordDialog({ onClose, onError, onRecorded }: Props) {
 
   const addBatch = () => {
     const fresh: RecordLane[] = [];
-    for (let i = 0; i < addCount; i++) {
+    for (let i = 0; i < addCountN; i++) {
       const input = addFirst + i;
       if (channels > 0 && input > channels) break;
       fresh.push({ input, name: inputName(input) });
@@ -257,9 +258,10 @@ export function RecordDialog({ onClose, onError, onRecorded }: Props) {
                   max={Math.max(channels, 1)}
                   value={addCount}
                   disabled={starting}
-                  onChange={(e) => setAddCount(Math.max(1, Number(e.target.value) || 1))}
+                  onChange={(e) => setAddCount(e.target.value)}
+                  onBlur={() => setAddCount(String(addCountN))}
                 />
-                <span>lane{addCount > 1 ? "s" : ""} from</span>
+                <span>lane{addCountN > 1 ? "s" : ""} from</span>
                 <select
                   className="select"
                   value={addFirst}
