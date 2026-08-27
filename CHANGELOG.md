@@ -3,6 +3,30 @@
 All notable changes to AudioDistillery are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.0] — 2026-08-27
+
+### Added
+- **Multitrack recording** ([#8]): AudioDistillery is now the recorder
+  too. Pick an interface (inputs listed by their real driver names on
+  macOS — "MIC/LINE 1", "S/PDIF L", …), build the lane list — add a
+  linear batch from any starting input, then repoint or rename any lane,
+  non-contiguous mappings welcome — and track: one sample-synced mono
+  24-bit WAV per lane at the device's native rate, streamed to a fresh
+  "Take N" folder with headers fixed up every couple of seconds so a
+  crash never loses the take beyond its last flush. Per-lane meters, a
+  dropped-frame counter and an elapsed-time display while tracking;
+  lane names become layer names, and a fresh take opens straight into
+  the synced-multitrack layers view. Device hot-plug is detected
+  event-driven (native CoreAudio listener) without restarting the app.
+  Input monitoring and record-path plugins stay out of scope for now —
+  reliability first.
+
+### Fixed
+- Windows CI path assertion in the stems test, and the Linux ffmpeg
+  sidecar now downloads from BtbN's GitHub-hosted builds first.
+
+[#8]: https://github.com/GarageDeveloper/audio-distillery/issues/8
+
 ## [0.6.0] — 2026-08-28
 
 ### Added
