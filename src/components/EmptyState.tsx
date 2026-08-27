@@ -1,8 +1,9 @@
 interface Props {
   onOpen: () => void;
+  onRecord: () => void;
 }
 
-export function EmptyState({ onOpen }: Props) {
+export function EmptyState({ onOpen, onRecord }: Props) {
   return (
     <div className="empty-state">
       <svg className="empty-wave" width="320" height="64" viewBox="0 0 320 64">
@@ -24,9 +25,14 @@ export function EmptyState({ onOpen }: Props) {
       </svg>
       <h1>Drop your audio files here</h1>
       <div className="sub">or press Open — WAV, FLAC, MP3, AIFF · or a .still project</div>
-      <button className="btn btn-primary" onClick={onOpen}>
-        Open a file…
-      </button>
+      <div className="empty-actions">
+        <button className="btn btn-primary" onClick={onOpen}>
+          Open a file…
+        </button>
+        <button className="btn" onClick={onRecord} title="Record a multitrack take from an audio interface">
+          ● Record…
+        </button>
+      </div>
     </div>
   );
 }

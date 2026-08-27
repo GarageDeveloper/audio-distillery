@@ -16,6 +16,8 @@ pub struct AppState {
     pub scan_cancel: Arc<AtomicBool>,
     pub editors: EditorRegistry,
     pub chain: ChainHost,
+    /// Live multitrack recorder (tape machine, #8). None = idle.
+    pub recorder: Mutex<Option<still_core::RecorderHandle>>,
 }
 
 impl AppState {
@@ -28,6 +30,7 @@ impl AppState {
             scan_cancel: Arc::new(AtomicBool::new(false)),
             editors: EditorRegistry::default(),
             chain: ChainHost::default(),
+            recorder: Mutex::new(None),
         }
     }
 }

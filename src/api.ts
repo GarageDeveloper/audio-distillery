@@ -5,6 +5,9 @@ import type { ProjectView } from "./types/ProjectView";
 import type { PeakSlice } from "./types/PeakSlice";
 import type { PlaybackState } from "./types/PlaybackState";
 import type { ExportConfig } from "./types/ExportConfig";
+import type { InputDeviceInfo } from "./types/InputDeviceInfo";
+import type { RecordConfig } from "./types/RecordConfig";
+import type { RecordStatus } from "./types/RecordStatus";
 import type { ExportReport } from "./types/ExportReport";
 import type { SilenceParams } from "./types/SilenceParams";
 import type { AlbumMeta } from "./types/AlbumMeta";
@@ -115,6 +118,12 @@ export const api = {
   redo: () => invoke<ProjectView>("redo"),
   detectSilences: (params: SilenceParams, layerId: number | null) =>
     invoke<RegionSpan[]>("detect_silences", { params, layerId }),
+  listInputDevices: () => invoke<InputDeviceInfo[]>("list_input_devices"),
+  getDefaultRecordingDir: () => invoke<string>("get_default_recording_dir"),
+  recordStart: (config: RecordConfig) =>
+    invoke<RecordStatus>("record_start", { config }),
+  recordStatus: () => invoke<RecordStatus | null>("record_status"),
+  recordStop: () => invoke<string[]>("record_stop"),
   exportTracks: (config: ExportConfig) =>
     invoke<ExportReport>("export_tracks", { config }),
   cancelExport: () => invoke<void>("cancel_export"),

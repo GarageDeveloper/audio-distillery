@@ -28,6 +28,8 @@ pub enum StillError {
     ScanCancelled,
     #[error("Audio playback error: {0}")]
     Playback(String),
+    #[error("Audio input error: {0}")]
+    Audio(String),
 }
 
 pub type Result<T> = std::result::Result<T, StillError>;

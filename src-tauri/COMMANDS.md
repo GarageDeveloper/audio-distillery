@@ -219,6 +219,22 @@ when stems are enabled. `ExportFormat` gained `source`: each output
 mirrors its reference source file's container, bit depth and sample rate
 (in stems mode, per layer), resolved at plan time.
 
+### Multitrack recording (#8)
+
+Tape-machine tracking from an audio interface, all logic in
+`still-core::engine::record`. `list_input_devices` enumerates inputs at
+their default (mix) format; `get_default_recording_dir` returns
+`~/Music/AudioDistillery/Recordings`. `record_start(RecordConfig
+{device, first_input, layer_count, dest_dir})` maps device inputs
+incrementally onto lanes (input N → lane 1, N+1 → lane 2, …), creates a
+fresh "Take N" folder and streams one mono 24-bit WAV per lane at the
+device rate — headers are fixed up every ~2 s so a crash never loses
+more than the last flush. `record_status` polls elapsed time, per-lane
+peaks and the dropped-frame counter; `record_stop` finalizes and
+returns the file paths, which the frontend feeds into the usual layout
+choice (synced multitrack). The cpal stream lives on a dedicated
+thread (callback = copy into a ring buffer, nothing else).
+
 ## Playback
 
 | Command | Parameters | Returns |

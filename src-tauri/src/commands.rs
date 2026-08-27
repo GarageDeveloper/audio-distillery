@@ -613,6 +613,55 @@ pub fn rename_track(state: State<'_, AppState>, id: u32, title: String) -> CmdRe
     })
 }
 
+// ---------------------------------------------------------------------------
+// Multitrack recording (#8) — tape machine: enumerate inputs, arm, track,
+// stop. All logic lives in still-core; these are thin pass-throughs.
+
+#[tauri::command]
+pub fn list_input_devices() -> CmdResult<Vec<still_core::InputDeviceInfo>> {
+    Ok(still_core::list_input_devices())
+}
+
+#[tauri::command]
+pub fn get_default_recording_dir() -> CmdResult<String> {
+    Ok(dirs_next_audio_dir().join("Recordings").display().to_string())
+}
+
+#[tauri::command]
+pub fn record_start(
+    state: State<'_, AppState>,
+    config: still_core::RecordConfig,
+) -> CmdResult<still_core::RecordStatus> {
+    let mut rec = state.recorder.lock().unwrap();
+    if rec.is_some() {
+        return Err("a recording is already running".into());
+    }
+    // Tracking and playback share no state, but a quiet transport avoids
+    // confusion (and feedback loops through open monitors).
+    let _ = state.player.pause();
+    let handle = still_core::RecorderHandle::start(&config).map_err(err)?;
+    let status = handle.status();
+    *rec = Some(handle);
+    Ok(status)
+}
+
+#[tauri::command]
+pub fn record_status(state: State<'_, AppState>) -> CmdResult<Option<still_core::RecordStatus>> {
+    Ok(state.recorder.lock().unwrap().as_ref().map(|r| r.status()))
+}
+
+#[tauri::command]
+pub fn record_stop(state: State<'_, AppState>) -> CmdResult<Vec<String>> {
+    let handle = state
+        .recorder
+        .lock()
+        .unwrap()
+        .take()
+        .ok_or_else(|| "no recording is running".to_string())?;
+    let files = handle.stop().map_err(err)?;
+    Ok(files.iter().map(|p| p.display().to_string()).collect())
+}
+
 #[tauri::command]
 pub fn set_track_isrc(state: State<'_, AppState>, id: u32, isrc: String) -> CmdResult<ProjectView> {
     with_session(&state, |s| {
