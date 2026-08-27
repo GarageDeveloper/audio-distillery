@@ -3,6 +3,29 @@
 All notable changes to AudioDistillery are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.0] — 2026-08-28
+
+### Added
+- **DDP delivery** ([#5], tier 3 — issue complete): export the Red Book
+  master as a **DDP 2.00 fileset**, the deliverable pressing plants
+  ingest — IMAGE.DAT (2352-byte sectors, initial 2-second pause
+  included), DDPID, DDPMS, PQ subcode stream, **CD-Text** (album/track
+  titles, performer, EAN, ISRCs — visible in any DDP player) and
+  `md5sum -c`-compatible checksums, plus a human-readable
+  **PQ_SHEET.TXT**. Written by a new standalone MIT crate,
+  [`ddp-fileset`], with no dependency on the app. The integration test
+  null-compares the image against the cue path's WAV and checks
+  PQ/DDPMS agreement to the frame.
+- **Per-track ISRC**: edited in the export dialog (validated and
+  normalized), stored in the project, embedded in the DDP subcode, the
+  PQ sheet and cue sheets (`ISRC` lines).
+- The CD deliverable is now an explicit choice: separate track files,
+  single image + cue sheet (burning), or DDP fileset + PQ sheet
+  (pressing plant).
+
+[#5]: https://github.com/GarageDeveloper/audio-distillery/issues/5
+[`ddp-fileset`]: src-tauri/ddp-fileset
+
 ## [0.5.0] — 2026-08-26
 
 ### Added
