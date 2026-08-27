@@ -234,9 +234,14 @@ export function RecordDialog({ onClose, onError, onRecorded }: Props) {
                           }
                           onKeyDown={(e) => {
                             if (e.key !== "Tab") return;
-                            // Tab walks the layer names, like track renaming.
+                            // Tab cycles through the layer names (wrapping
+                            // at both ends), like track renaming.
+                            const n = lanes.length;
+                            const target = e.shiftKey
+                              ? (i - 1 + n) % n
+                              : (i + 1) % n;
                             const next = document.querySelector<HTMLInputElement>(
-                              `[data-lane-name="${e.shiftKey ? i - 1 : i + 1}"]`
+                              `[data-lane-name="${target}"]`
                             );
                             if (next) {
                               e.preventDefault();
