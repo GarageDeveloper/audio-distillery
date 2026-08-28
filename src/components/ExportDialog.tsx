@@ -246,6 +246,13 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
                   </select>
                 )}
               </div>
+              {cdCombo && !cfg.stems && (cfg.cd_image || cfg.ddp) && (
+                <div className="hint">
+                  Track gaps: {(view.album_gap_ms / 1000).toFixed(1)} s default between
+                  titles (edit in Album…, override any boundary in the track list) —
+                  pressed into the image exactly as heard in the Album program.
+                </div>
+              )}
               {cfg.format === "source" && (
                 <div className="hint">
                   Mirrors each original file: same container, bit depth and sample rate

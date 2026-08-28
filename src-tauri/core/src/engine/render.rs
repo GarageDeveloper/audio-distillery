@@ -282,6 +282,79 @@ mod tests {
         VolumeAutomation { default, spans }
     }
 
+    /// A ramp file read with `offset` starts exactly at source[offset]
+    /// — the album program's mid-file track starts depend on it.
+    #[test]
+    fn file_offset_plays_mid_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("ramp.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: SR,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&a, spec).unwrap();
+        for i in 0..SR as i64 {
+            w.write_sample((i % 20_000) as i16).unwrap();
+        }
+        w.finalize().unwrap();
+
+        let offset = 12_345u64;
+        let n = 4_096u64;
+        let mut d = LayerDecoder::new(
+            vec![PlayItem::File { path: a, samples: n, offset }],
+            1,
+        );
+        let mut out = vec![0.0f32; n as usize];
+        d.read(&mut out, n as usize);
+        for (k, v) in out.iter().enumerate() {
+            let expect = ((offset + k as u64) % 20_000) as f32 / i16::MAX as f32;
+            assert!(
+                (v - expect).abs() < 1.0e-4,
+                "sample {k}: {v} vs {expect}"
+            );
+        }
+    }
+
+    /// An album program (slice + gap + slice) renders dithered-free
+    /// silence in the gap and resumes sample-accurately.
+    #[test]
+    fn album_program_renders_silence_between_tracks() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.wav");
+        write_wav(&a, 1.0, 0.5, 1);
+        let n = 1_000u64;
+        let d = LayerDecoder::new(
+            vec![
+                PlayItem::File { path: a.clone(), samples: n, offset: 100 },
+                PlayItem::Silence { samples: n },
+                PlayItem::File { path: a, samples: n, offset: 5_000 },
+            ],
+            1,
+        );
+        let mut r = Renderer::new(
+            vec![d],
+            automation(vec![1.0], vec![]),
+            SR,
+            1,
+            3 * n,
+        );
+        let mut out = Vec::with_capacity(3 * n as usize);
+        let mut block = vec![0.0f32; 512];
+        while out.len() < 3 * n as usize {
+            let got = r.render_block(&mut block, 512);
+            if got == 0 {
+                break;
+            }
+            out.extend_from_slice(&block[..got]);
+        }
+        assert_eq!(out.len(), 3 * n as usize);
+        assert!(out[..n as usize].iter().all(|v| (v - 0.5).abs() < 0.01));
+        assert!(out[n as usize..2 * n as usize].iter().all(|v| *v == 0.0));
+        assert!(out[2 * n as usize..].iter().all(|v| (v - 0.5).abs() < 0.01));
+    }
+
     #[test]
     fn mixes_two_layers_with_volumes() {
         let dir = tempfile::tempdir().unwrap();
@@ -290,8 +363,8 @@ mod tests {
         write_wav(&a, 1.0, 0.5, 2);
         write_wav(&b, 1.0, 0.25, 1); // mono → upmixed
         let n = SR as u64;
-        let d1 = LayerDecoder::new(vec![PlayItem::File { path: a, samples: n }], 2);
-        let d2 = LayerDecoder::new(vec![PlayItem::File { path: b, samples: n }], 2);
+        let d1 = LayerDecoder::new(vec![PlayItem::File { path: a, samples: n, offset: 0 }], 2);
+        let d2 = LayerDecoder::new(vec![PlayItem::File { path: b, samples: n, offset: 0 }], 2);
         let mut r = Renderer::new(
             vec![d1, d2],
             automation(vec![1.0, 1.0], vec![]),
@@ -317,9 +390,9 @@ mod tests {
         let half = SR as u64 / 2;
         let d = LayerDecoder::new(
             vec![
-                PlayItem::File { path: a.clone(), samples: half },
+                PlayItem::File { path: a.clone(), samples: half, offset: 0 },
                 PlayItem::Silence { samples: half },
-                PlayItem::File { path: a, samples: half },
+                PlayItem::File { path: a, samples: half, offset: 0 },
             ],
             1,
         );
@@ -343,7 +416,7 @@ mod tests {
         let a = dir.path().join("a.wav");
         write_wav(&a, 2.0, 0.5, 1);
         let n = 2 * SR as u64;
-        let d = LayerDecoder::new(vec![PlayItem::File { path: a, samples: n }], 1);
+        let d = LayerDecoder::new(vec![PlayItem::File { path: a, samples: n, offset: 0 }], 1);
         // Track region [1s, 2s) mutes the layer.
         let auto = automation(vec![1.0], vec![(1.0, 2.0, vec![0.0])]);
         let mut r = Renderer::new(vec![d], auto, SR, 1, n);
@@ -375,7 +448,7 @@ mod tests {
         let a = dir.path().join("a.wav");
         write_wav(&a, 1.0, 0.8, 1);
         let n = SR as u64;
-        let d = LayerDecoder::new(vec![PlayItem::File { path: a, samples: n }], 1);
+        let d = LayerDecoder::new(vec![PlayItem::File { path: a, samples: n, offset: 0 }], 1);
         let mut r = Renderer::new(vec![d], automation(vec![1.0], vec![]), SR, 1, n);
         r.master_sections
             .push(InsertSection::new(None, vec![Box::new(Half)]));
@@ -391,7 +464,7 @@ mod tests {
         let a = dir.path().join("a.wav");
         write_wav(&a, 0.1, 0.5, 1);
         let n = (0.1 * SR as f32) as u64;
-        let d = LayerDecoder::new(vec![PlayItem::File { path: a, samples: n }], 1);
+        let d = LayerDecoder::new(vec![PlayItem::File { path: a, samples: n, offset: 0 }], 1);
         let mut r = Renderer::new(vec![d], automation(vec![1.0], vec![]), SR, 1, n);
         let mut out = vec![0.0f32; BLOCK_FRAMES];
         let mut rendered = 0u64;
@@ -453,7 +526,7 @@ mod tests {
         let a = dir.path().join("a.wav");
         write_wav(&a, 1.0, 0.0, 1); // silence: only the probes' `add` shows
         let n = SR as u64;
-        let d = LayerDecoder::new(vec![PlayItem::File { path: a.clone(), samples: n }], 1);
+        let d = LayerDecoder::new(vec![PlayItem::File { path: a.clone(), samples: n, offset: 0 }], 1);
         let mut r = Renderer::new(vec![d], automation(vec![1.0], vec![]), SR, 1, n);
 
         let span = (BLOCK_FRAMES as u64 * 2, BLOCK_FRAMES as u64 * 4);
@@ -496,8 +569,8 @@ mod tests {
         write_wav(&a, 0.5, 0.0, 1);
         write_wav(&b, 0.5, 0.0, 1);
         let n = (0.5 * SR as f32) as u64;
-        let da = LayerDecoder::new(vec![PlayItem::File { path: a, samples: n }], 1);
-        let db = LayerDecoder::new(vec![PlayItem::File { path: b, samples: n }], 1);
+        let da = LayerDecoder::new(vec![PlayItem::File { path: a, samples: n, offset: 0 }], 1);
+        let db = LayerDecoder::new(vec![PlayItem::File { path: b, samples: n, offset: 0 }], 1);
         // Layer 0 gain 1.0, layer 1 muted (0.0).
         let mut r = Renderer::new(vec![da, db], automation(vec![1.0, 0.0], vec![]), SR, 1, n);
         let (p0, c0, _) = probe(0.5);

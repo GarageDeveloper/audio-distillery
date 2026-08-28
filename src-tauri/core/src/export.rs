@@ -56,6 +56,9 @@ pub struct ExportJob {
     pub silence_ok: bool,
     /// Normalized ISRC of the track ("" = none) — cue sheets and DDP.
     pub isrc: String,
+    /// Album gap rendered BEFORE this track in continuous deliverables
+    /// (CD image, DDP), in Red Book sectors. Per-file exports ignore it.
+    pub gap_before_sectors: u64,
 }
 
 impl ExportJob {
@@ -279,6 +282,7 @@ pub fn plan_export_with_meta(
             source_fmt: src_fmt,
             silence_ok: false,
             isrc: t.isrc.clone(),
+            gap_before_sectors: (t.gap_before_effective_ms as u64 * 75 + 500) / 1000,
         });
     }
     Ok(jobs)
@@ -402,6 +406,7 @@ pub fn plan_export_stems(
                 source_fmt: src_fmt,
                 silence_ok: true,
                 isrc: String::new(),
+                gap_before_sectors: 0,
             });
         }
     }
@@ -847,6 +852,7 @@ fn build_track_renderer(
                 items.push(PlayItem::File {
                     path: PathBuf::from(&c.path),
                     samples: c.duration_samples,
+                    offset: 0,
                 });
                 cursor = c.start_sample + c.duration_samples;
             }
@@ -1256,6 +1262,8 @@ mod tests {
             solo_overrides: HashMap::new(),
             layer_volumes: vec![1.0],
             isrc: String::new(),
+            gap_before_ms: None,
+            gap_before_effective_ms: 0,
             inserts: Vec::new(),
         }
     }
@@ -1559,8 +1567,8 @@ fn run_export_cd_common(
 
     // Per-track render → SRC to 44.1 stereo → frame padding, counting
     // OUTPUT samples exactly for the cue offsets.
-    // (number, title, isrc, start frame)
-    let mut track_starts: Vec<(u32, String, String, u64)> = Vec::new();
+    // (number, title, isrc, start frame, pregap sectors)
+    let mut track_starts: Vec<(u32, String, String, u64, u64)> = Vec::new();
     let mut image_samples: u64 = 0;
     let mut failed = false;
     use std::io::Write as _;
@@ -1593,11 +1601,23 @@ fn run_export_cd_common(
                 break;
             }
         };
+        // Album gap: silence between the previous track and this one —
+        // pushed BEFORE this track's start entry, so cue INDEX 01, the
+        // DDP table and the loudness segments all shift together.
+        if job.gap_before_sectors > 0 {
+            let zeros = vec![0.0f32; (job.gap_before_sectors * CD_FRAME_SAMPLES) as usize * 2];
+            if !push(&mut stdin, &zeros) {
+                failed = true;
+                break;
+            }
+            image_samples += job.gap_before_sectors * CD_FRAME_SAMPLES;
+        }
         track_starts.push((
             job.number,
             job.title.clone(),
             job.isrc.clone(),
             image_samples / CD_FRAME_SAMPLES,
+            job.gap_before_sectors,
         ));
 
         let mut resampler = (sample_rate != CD_RATE)
@@ -1748,10 +1768,12 @@ fn run_export_cd_common(
         let tracks: Vec<ddp_fileset::Track> = track_starts
             .iter()
             .enumerate()
-            .map(|(i, (number, title, isrc, start))| {
+            .map(|(i, (number, title, isrc, start, gap))| {
+                // A track's audio ends where the NEXT track's pregap
+                // starts — the pause belongs to the following title.
                 let end = track_starts
                     .get(i + 1)
-                    .map(|t| t.3)
+                    .map(|t| t.3 - t.4)
                     .unwrap_or(program_sectors);
                 ddp_fileset::Track {
                     number: *number,
@@ -1759,6 +1781,7 @@ fn run_export_cd_common(
                     start_sector: *start,
                     length_sectors: end.saturating_sub(*start),
                     isrc: (!isrc.is_empty()).then(|| isrc.clone()),
+                    pregap_sectors: *gap,
                 }
             })
             .collect();
@@ -1809,13 +1832,13 @@ fn run_export_cd_common(
         let track_measures = track_starts
             .iter()
             .enumerate()
-            .map(|(i, (number, title, _isrc, start_frame))| {
+            .map(|(i, (number, title, _isrc, start_frame, _gap))| {
                 analyze_progress(1 + i as u32, title, false);
                 let start = pause + start_frame * CD_FRAME_SAMPLES;
                 let end = pause
                     + track_starts
                         .get(i + 1)
-                        .map(|t| t.3 * CD_FRAME_SAMPLES)
+                        .map(|t| (t.3 - t.4) * CD_FRAME_SAMPLES)
                         .unwrap_or(image_samples);
                 let (l, lra, tp) = analyze_loudness_raw_segment(ffmpeg, &image_path, start, end);
                 analyze_progress(1 + i as u32, title, true);
@@ -1868,7 +1891,7 @@ fn run_export_cd_common(
         "FILE \"{}\" WAVE\r\n",
         wav_path.file_name().unwrap_or_default().to_string_lossy()
     ));
-    for (number, title, isrc, start_frame) in &track_starts {
+    for (number, title, isrc, start_frame, gap) in &track_starts {
         cue.push_str(&format!("  TRACK {number:02} AUDIO\r\n"));
         cue.push_str(&format!("    TITLE \"{}\"\r\n", title.replace('"', "'")));
         if !performer.is_empty() {
@@ -1876,6 +1899,11 @@ fn run_export_cd_common(
         }
         if !isrc.is_empty() {
             cue.push_str(&format!("    ISRC {isrc}\r\n"));
+        }
+        // Real Red Book pregap: INDEX 00 opens the pause, INDEX 01 the
+        // downbeat - players count the gap down, rippers show it.
+        if *gap > 0 {
+            cue.push_str(&format!("    INDEX 00 {}\r\n", cue_time(start_frame - gap)));
         }
         cue.push_str(&format!("    INDEX 01 {}\r\n", cue_time(*start_frame)));
     }
@@ -1905,12 +1933,13 @@ fn run_export_cd_common(
     let track_measures = track_starts
         .iter()
         .enumerate()
-        .map(|(i, (number, title, _isrc, start_frame))| {
+        .map(|(i, (number, title, _isrc, start_frame, _gap))| {
             analyze_progress(1 + i as u32, title, false);
             let start = start_frame * CD_FRAME_SAMPLES;
+            // Audio only: stop where the next track's pregap begins.
             let end = track_starts
                 .get(i + 1)
-                .map(|t| t.3 * CD_FRAME_SAMPLES)
+                .map(|t| (t.3 - t.4) * CD_FRAME_SAMPLES)
                 .unwrap_or(image_samples);
             let (l, lra, tp) = analyze_loudness_segment(ffmpeg, &wav_path, start, end);
             analyze_progress(1 + i as u32, title, true);

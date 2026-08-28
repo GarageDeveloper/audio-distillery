@@ -12,6 +12,7 @@ fn disc() -> Disc {
                 start_sector: 0,
                 length_sectors: 14816,
                 isrc: Some("FRAB12600001".into()),
+                pregap_sectors: 0,
             },
             Track {
                 number: 2,
@@ -19,6 +20,7 @@ fn disc() -> Disc {
                 start_sector: 14816,
                 length_sectors: 10883,
                 isrc: None,
+                pregap_sectors: 0,
             },
         ],
     }

@@ -52,6 +52,10 @@ pub struct Region {
     /// cue sheets, DDP subcode and the PQ sheet.
     #[serde(default)]
     pub isrc: String,
+    /// Album gap BEFORE this track, in ms. None = the project's default
+    /// (`album_gap_ms`); Some(0) = segue. Meaningless on the first track.
+    #[serde(default)]
+    pub gap_before_ms: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -208,6 +212,11 @@ pub struct Project {
     pub layers: Vec<Layer>,
     pub regions: Vec<Region>,
     pub snap_to_zero: bool,
+    /// Default silence between consecutive album titles, in ms — shapes
+    /// the album program (target timeline, CD/DDP), overridable per
+    /// boundary via `Region.gap_before_ms`.
+    #[serde(default = "default_album_gap_ms")]
+    pub album_gap_ms: u32,
     pub export_config: ExportConfig,
     /// Album metadata written to exported files (format-agnostic; lofty
     /// maps it to each container's native tags).
@@ -243,6 +252,7 @@ impl Project {
         let next_layer_id = layers.len() as u32 + 1;
         Self {
             version: PROJECT_VERSION,
+            album_gap_ms: default_album_gap_ms(),
             layers,
             regions: Vec::new(),
             snap_to_zero: false,
@@ -263,6 +273,10 @@ impl Project {
     pub fn source_groups(&self) -> Vec<Vec<SourceRef>> {
         self.layers.iter().map(|l| l.sources.clone()).collect()
     }
+}
+
+fn default_album_gap_ms() -> u32 {
+    2_000
 }
 
 fn default_next_plugin_id() -> u32 {
@@ -352,6 +366,11 @@ pub struct TrackInfo {
     pub layer_volumes: Vec<f32>,
     /// Normalized ISRC ("" = none).
     pub isrc: String,
+    /// Raw per-boundary override (None = following the album default).
+    #[ts(type = "number | null")]
+    pub gap_before_ms: Option<u32>,
+    /// Resolved gap actually applied before this track (0 for track 1).
+    pub gap_before_effective_ms: u32,
     /// This track's insert chain (master-bus position, active in its span).
     pub inserts: Vec<MasteringPluginView>,
 }
@@ -384,6 +403,9 @@ pub struct ProjectView {
     pub layers: Vec<LayerView>,
     pub tracks: Vec<TrackInfo>,
     pub snap_to_zero: bool,
+    pub album_gap_ms: u32,
+    /// The derived TARGET timeline (tracks + resolved gaps in album time).
+    pub album: crate::album::AlbumLayout,
     pub export_config: ExportConfig,
     pub project_path: Option<String>,
     pub album_meta: AlbumMeta,
@@ -944,6 +966,7 @@ impl ProjectState {
             solo_overrides: HashMap::new(),
             inserts: Vec::new(),
             isrc: String::new(),
+            gap_before_ms: None,
         });
         Ok(id)
     }
@@ -973,6 +996,7 @@ impl ProjectState {
                     solo_overrides: HashMap::new(),
                     inserts: Vec::new(),
                     isrc: String::new(),
+                    gap_before_ms: None,
                 });
                 added += 1;
             }
@@ -1155,6 +1179,37 @@ impl ProjectState {
                 .find(|r| r.id == id)
                 .expect("checked above");
             region.isrc = value;
+        }
+        Ok(())
+    }
+
+    /// Default album gap (clamped 0..=30 s). Not undoable, like
+    /// `snap_to_zero`. Returns the applied value.
+    pub fn set_album_gap_ms(&mut self, ms: u32) -> u32 {
+        let ms = ms.min(30_000);
+        self.project.album_gap_ms = ms;
+        ms
+    }
+
+    /// Per-boundary gap override (None clears it back to the default).
+    /// Undoable; clamped like the default.
+    pub fn set_track_gap_before(&mut self, id: u32, ms: Option<u32>) -> Result<()> {
+        let ms = ms.map(|v| v.min(30_000));
+        let region = self
+            .project
+            .regions
+            .iter()
+            .find(|r| r.id == id)
+            .ok_or_else(|| StillError::InvalidMarker(format!("unknown track id {id}")))?;
+        if region.gap_before_ms != ms {
+            self.push_undo();
+            let region = self
+                .project
+                .regions
+                .iter_mut()
+                .find(|r| r.id == id)
+                .expect("checked above");
+            region.gap_before_ms = ms;
         }
         Ok(())
     }
@@ -1345,6 +1400,12 @@ impl ProjectState {
                 solo_overrides: r.solo_overrides.clone(),
                 layer_volumes: self.effective_volumes(Some(r)),
                 isrc: r.isrc.clone(),
+                gap_before_ms: r.gap_before_ms,
+                gap_before_effective_ms: if i == 0 {
+                    0
+                } else {
+                    r.gap_before_ms.unwrap_or(self.project.album_gap_ms)
+                },
                 inserts: chain_views(&r.inserts),
             })
             .collect()
@@ -1389,6 +1450,8 @@ impl ProjectState {
             layers,
             tracks: self.tracks(),
             snap_to_zero: self.project.snap_to_zero,
+            album_gap_ms: self.project.album_gap_ms,
+            album: self.album_layout(),
             export_config: self.project.export_config.clone(),
             project_path: self
                 .project_path
@@ -1514,6 +1577,7 @@ fn migrate_v1(legacy: LegacyProjectV1) -> Project {
             solo_overrides: HashMap::new(),
             inserts: Vec::new(),
             isrc: String::new(),
+            gap_before_ms: None,
         });
     }
     let next_region_id = regions.len() as u32 + 1;
@@ -1555,6 +1619,7 @@ struct LegacyProjectV4 {
 fn migrate_v4(legacy: LegacyProjectV4) -> Project {
     Project {
         version: PROJECT_VERSION,
+        album_gap_ms: default_album_gap_ms(),
         layers: legacy
             .layers
             .into_iter()
@@ -1725,6 +1790,7 @@ mod tests {
             solo_overrides: HashMap::new(),
             inserts: Vec::new(),
             isrc: String::new(),
+            gap_before_ms: None,
         };
         let mut regions = vec![
             mk(0, 5 * SEC),            // before: untouched
@@ -1823,6 +1889,40 @@ mod tests {
         // One undo step removes both added tracks.
         s.undo();
         assert_eq!(s.tracks().len(), 1);
+    }
+
+    #[test]
+    fn gap_override_is_undoable_and_resolves() {
+        let mut s = state(120);
+        s.add_region(10 * SEC, 40 * SEC, None).unwrap();
+        s.add_region(50 * SEC, 80 * SEC, None).unwrap();
+        let t2 = s.tracks()[1].id;
+        assert_eq!(s.tracks()[0].gap_before_effective_ms, 0, "track 1 has no gap");
+        assert_eq!(s.tracks()[1].gap_before_effective_ms, 2_000, "default");
+        s.set_track_gap_before(t2, Some(0)).unwrap();
+        assert_eq!(s.tracks()[1].gap_before_effective_ms, 0, "segue override");
+        s.set_album_gap_ms(1_500);
+        assert_eq!(s.tracks()[1].gap_before_effective_ms, 0, "override wins");
+        assert!(s.undo().applied);
+        assert_eq!(s.tracks()[1].gap_before_effective_ms, 1_500, "back to default");
+        assert!(s.set_track_gap_before(999, Some(0)).is_err());
+    }
+
+    #[test]
+    fn v7_projects_get_default_gaps() {
+        let mut p = Project::new(vec!["/tmp/x.wav".into()]);
+        p.version = 7;
+        let mut v: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+        v.as_object_mut().unwrap().remove("album_gap_ms");
+        let dir = std::env::temp_dir().join(format!("still-v7-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("p.still");
+        std::fs::write(&path, serde_json::to_string(&v).unwrap()).unwrap();
+        let loaded = read_project(&path).unwrap();
+        assert_eq!(loaded.version, PROJECT_VERSION);
+        assert_eq!(loaded.album_gap_ms, 2_000);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -2129,8 +2229,8 @@ mod tests {
     #[test]
     fn sanitize_drops_degenerate_regions() {
         let mut p = Project::new(vec!["/tmp/x.wav".into()]);
-        p.regions.push(Region { id: 1, start: 0, end: 10 * SEC, title: None, gain_overrides: HashMap::new(), mute_overrides: HashMap::new(), solo_overrides: HashMap::new(), inserts: Vec::new(), isrc: String::new() });
-        p.regions.push(Region { id: 2, start: 200 * SEC, end: 300 * SEC, title: None, gain_overrides: HashMap::new(), mute_overrides: HashMap::new(), solo_overrides: HashMap::new(), inserts: Vec::new(), isrc: String::new() });
+        p.regions.push(Region { id: 1, start: 0, end: 10 * SEC, title: None, gain_overrides: HashMap::new(), mute_overrides: HashMap::new(), solo_overrides: HashMap::new(), inserts: Vec::new(), isrc: String::new(), gap_before_ms: None });
+        p.regions.push(Region { id: 2, start: 200 * SEC, end: 300 * SEC, title: None, gain_overrides: HashMap::new(), mute_overrides: HashMap::new(), solo_overrides: HashMap::new(), inserts: Vec::new(), isrc: String::new(), gap_before_ms: None });
         sanitize_regions(&mut p, 120 * SEC, SR);
         assert_eq!(p.regions.len(), 1);
     }
@@ -2140,7 +2240,7 @@ mod tests {
     #[test]
     fn migrates_v6_to_v7() {
         let mut p = Project::new(vec!["/tmp/x.wav".into()]);
-        p.regions.push(Region { id: 1, start: 0, end: 10 * SEC, title: None, gain_overrides: HashMap::new(), mute_overrides: HashMap::new(), solo_overrides: HashMap::new(), inserts: Vec::new(), isrc: String::new() });
+        p.regions.push(Region { id: 1, start: 0, end: 10 * SEC, title: None, gain_overrides: HashMap::new(), mute_overrides: HashMap::new(), solo_overrides: HashMap::new(), inserts: Vec::new(), isrc: String::new(), gap_before_ms: None });
         p.mastering_chain.push(MasteringPluginCfg {
             id: 1,
             component: "aufx:lpas:appl".into(),

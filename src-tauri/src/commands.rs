@@ -90,12 +90,17 @@ fn playlists_of(info: &still_core::AudioInfo) -> Vec<still_core::LayerPlay> {
             let mut cursor = 0u64;
             for c in &scanned.clips {
                 if c.start_sample > cursor {
-                    playlist.push((None, (c.start_sample - cursor) as f64 / sr));
+                    playlist.push(still_core::PlayEntry {
+                        path: None,
+                        seconds: (c.start_sample - cursor) as f64 / sr,
+                        source_offset: 0,
+                    });
                 }
-                playlist.push((
-                    Some(PathBuf::from(&c.path)),
-                    c.duration_samples as f64 / sr,
-                ));
+                playlist.push(still_core::PlayEntry {
+                    path: Some(PathBuf::from(&c.path)),
+                    seconds: c.duration_samples as f64 / sr,
+                    source_offset: 0,
+                });
                 cursor = c.start_sample + c.duration_samples;
             }
             still_core::LayerPlay { playlist }
@@ -121,6 +126,91 @@ fn automation_of(s: &ProjectState) -> still_core::VolumeAutomation {
 /// playback thread — it applies immediately and follows the playhead.
 fn sync_playback(state: &State<'_, AppState>, s: &ProjectState) {
     let _ = state.player.set_automation(automation_of(s));
+    reload_program_if_album(state, s);
+}
+
+/// The ALBUM program: per-layer playlists in album time (gaps between
+/// titles, slices cut from the source files) + automation remapped onto
+/// album spans.
+fn album_program(
+    s: &ProjectState,
+) -> (Vec<still_core::LayerPlay>, f64, still_core::VolumeAutomation) {
+    let sr = s.info.sample_rate.max(1) as f64;
+    let tracks = s.tracks();
+    let layout = s.album_layout();
+    let spans: Vec<(u64, u64)> = tracks
+        .iter()
+        .map(|t| (t.start_sample, t.end_sample))
+        .collect();
+    let layers: Vec<still_core::LayerPlay> =
+        still_core::album_playlists(&s.info, &layout, &spans)
+            .into_iter()
+            .map(|items| still_core::LayerPlay {
+                playlist: items
+                    .into_iter()
+                    .map(|item| match item {
+                        still_core::AlbumItem::Gap { samples } => still_core::PlayEntry {
+                            path: None,
+                            seconds: samples as f64 / sr,
+                            source_offset: 0,
+                        },
+                        still_core::AlbumItem::Slice {
+                            path,
+                            source_offset,
+                            samples,
+                        } => still_core::PlayEntry {
+                            path: Some(PathBuf::from(path)),
+                            seconds: samples as f64 / sr,
+                            source_offset,
+                        },
+                    })
+                    .collect(),
+            })
+            .collect();
+    // Per-track resolved volumes remapped to ALBUM spans.
+    let automation = still_core::VolumeAutomation {
+        default: s.effective_volumes(None),
+        spans: layout
+            .tracks
+            .iter()
+            .zip(&tracks)
+            .map(|(a, t)| {
+                (
+                    a.start_sample as f64 / sr,
+                    (a.start_sample + a.length_samples) as f64 / sr,
+                    t.layer_volumes.clone(),
+                )
+            })
+            .collect(),
+    };
+    (layers, layout.total_samples as f64 / sr, automation)
+}
+
+/// Swap the loaded program to match the CURRENT mode, resuming near the
+/// current position. Called by every mutation that reshapes the album.
+fn reload_program_if_album(state: &State<'_, AppState>, s: &ProjectState) {
+    if !state.album_mode.load(Ordering::SeqCst) {
+        return;
+    }
+    if s.tracks().is_empty() {
+        // The album program vanished: force the edit program back in.
+        state.album_mode.store(false, Ordering::SeqCst);
+        let _ = state.player.load_session(
+            playlists_of(&s.info),
+            s.info.duration_seconds,
+            automation_of(s),
+            s.info.sample_rate,
+            s.info.channels.max(1) as usize,
+        );
+        let _ = sync_engine_inserts(state, s);
+        return;
+    }
+    let pos = state.player.state().position_seconds;
+    let (layers, total, automation) = album_program(s);
+    let _ = state
+        .player
+        .set_program(layers, total, automation, pos.min(total));
+    let _ = sync_engine_inserts(state, s);
 }
 
 /// Scan layer groups and install them as the current session.
@@ -130,6 +220,7 @@ async fn load_session(
     groups: Vec<Vec<String>>,
     project: Option<(Project, PathBuf)>,
 ) -> CmdResult<ProjectView> {
+    force_edit_mode(&state);
     let refs: Vec<Vec<still_core::SourceRef>> = groups
         .iter()
         .map(|g| g.iter().cloned().map(still_core::SourceRef::sequential).collect())
@@ -200,6 +291,11 @@ pub async fn load_multitrack(
 }
 
 /// Rescan with new groups while keeping the current project recipe.
+/// Any full session (re)load runs the EDIT program: drop album mode.
+fn force_edit_mode(state: &State<'_, AppState>) {
+    state.album_mode.store(false, Ordering::SeqCst);
+}
+
 async fn rescan_with_groups(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -207,6 +303,7 @@ async fn rescan_with_groups(
     update: impl FnOnce(&mut ProjectState),
 ) -> CmdResult<ProjectView> {
     let (info, peaks) = scan_sources(&app, &state, &groups).await?;
+    force_edit_mode(&state);
     with_session(&state, |s| {
         update(s);
         s.set_audio(info, peaks);
@@ -499,6 +596,7 @@ pub fn remove_layer(
         let before: Vec<u32> = s.all_chain_cfgs().map(|c| c.id).collect();
         s.remove_layer(id).map_err(err)?;
         s.forget_structural_undo();
+        force_edit_mode(&state);
         let _ = state.player.load_session(
             playlists_of(&s.info),
             s.info.duration_seconds,
@@ -769,6 +867,103 @@ pub fn set_track_isrc(state: State<'_, AppState>, id: u32, isrc: String) -> CmdR
     })
 }
 
+#[tauri::command]
+pub fn set_album_gap(state: State<'_, AppState>, gap_ms: u32) -> CmdResult<ProjectView> {
+    with_session(&state, |s| {
+        s.set_album_gap_ms(gap_ms);
+        reload_program_if_album(&state, s);
+        Ok(s.view())
+    })
+}
+
+#[tauri::command]
+pub fn set_track_gap(
+    state: State<'_, AppState>,
+    id: u32,
+    gap_ms: Option<u32>,
+) -> CmdResult<ProjectView> {
+    with_session(&state, |s| {
+        s.set_track_gap_before(id, gap_ms).map_err(err)?;
+        reload_program_if_album(&state, s);
+        Ok(s.view())
+    })
+}
+
+/// Toggle between the EDIT program (the source timeline) and the ALBUM
+/// program (tracks + gaps, i.e. the target timeline). One player, two
+/// programs; the position maps to the equivalent spot when possible.
+#[tauri::command]
+pub fn set_play_mode(state: State<'_, AppState>, album: bool) -> CmdResult<PlaybackState> {
+    with_session(&state, |s| {
+        let was = state.album_mode.load(Ordering::SeqCst);
+        if was == album {
+            return Ok(state.player.state());
+        }
+        let tracks = s.tracks();
+        if album && tracks.is_empty() {
+            return Err("No tracks yet — the album program is empty.".to_string());
+        }
+        let sr = s.info.sample_rate.max(1) as f64;
+        let pos = state.player.state().position_seconds;
+        let pos_samples = (pos * sr) as u64;
+        let layout = s.album_layout();
+        state.album_mode.store(album, Ordering::SeqCst);
+        if album {
+            // Source position → album position: inside a track maps
+            // exactly; outside jumps to the next track's start.
+            let mut target = 0u64;
+            for (a, t) in layout.tracks.iter().zip(&tracks) {
+                if pos_samples >= t.end_sample {
+                    continue;
+                }
+                target = if pos_samples >= t.start_sample {
+                    a.start_sample + (pos_samples - t.start_sample)
+                } else {
+                    a.start_sample
+                };
+                break;
+            }
+            let (layers, total, automation) = album_program(s);
+            state
+                .player
+                .set_program(layers, total, automation, target as f64 / sr)
+                .map_err(err)?;
+        } else {
+            // Album position → source position: inside a track maps
+            // exactly; inside a gap lands on the next track.
+            let mut target = 0u64;
+            for (a, t) in layout.tracks.iter().zip(&tracks) {
+                let a_end = a.start_sample + a.length_samples;
+                if pos_samples >= a_end {
+                    continue;
+                }
+                target = if pos_samples >= a.start_sample {
+                    t.start_sample + (pos_samples - a.start_sample)
+                } else {
+                    t.start_sample
+                };
+                break;
+            }
+            state
+                .player
+                .set_program(
+                    playlists_of(&s.info),
+                    s.info.duration_seconds,
+                    automation_of(s),
+                    target as f64 / sr,
+                )
+                .map_err(err)?;
+        }
+        sync_engine_inserts(&state, s)?;
+        Ok(state.player.state())
+    })
+}
+
+#[tauri::command]
+pub fn play_mode(state: State<'_, AppState>) -> CmdResult<bool> {
+    Ok(state.album_mode.load(Ordering::SeqCst))
+}
+
 /// Rebuild the engine's master-insert chain from the project recipe:
 /// ensure every configured plugin has a live instance (created on the MAIN
 /// thread with its saved state), push ordered proxies to the engine, then
@@ -822,6 +1017,18 @@ fn rebuild_chain(
 /// the always-on mastering chain. Also called after region edits so the
 /// spans follow the track boundaries.
 fn sync_engine_inserts(state: &State<'_, AppState>, s: &ProjectState) -> CmdResult<()> {
+    // In album mode, track chains gate on ALBUM spans (the engine's
+    // position runs in album time); gaps activate no track section.
+    let album = state.album_mode.load(Ordering::SeqCst);
+    let layout = album.then(|| s.album_layout());
+    let album_span = |id: u32| -> Option<(u64, u64)> {
+        layout.as_ref().and_then(|l| {
+            l.tracks
+                .iter()
+                .find(|t| t.id == id)
+                .map(|t| (t.start_sample, t.start_sample + t.length_samples))
+        })
+    };
     let mut sections: Vec<(Option<(u64, u64)>, Vec<Box<dyn BlockProcessor>>)> = Vec::new();
     let mut regions: Vec<&still_core::project::Region> = s
         .project
@@ -832,7 +1039,15 @@ fn sync_engine_inserts(state: &State<'_, AppState>, s: &ProjectState) -> CmdResu
     regions.sort_by_key(|r| r.start);
     for r in regions {
         let ids: Vec<u32> = r.inserts.iter().map(|c| c.id).collect();
-        sections.push((Some((r.start, r.end)), state.chain.inserts_for(&ids)));
+        let span = if album {
+            match album_span(r.id) {
+                Some(sp) => sp,
+                None => continue, // region not in the album program
+            }
+        } else {
+            (r.start, r.end)
+        };
+        sections.push((Some(span), state.chain.inserts_for(&ids)));
     }
     let master_ids: Vec<u32> = s.project.mastering_chain.iter().map(|c| c.id).collect();
     sections.push((None, state.chain.inserts_for(&master_ids)));
@@ -1240,6 +1455,7 @@ pub fn undo(app: AppHandle, state: State<'_, AppState>) -> CmdResult<ProjectView
         if report.audio_changed {
             // A clip-structure step restored a different timeline: the
             // player must reload the whole program, not just resync.
+            force_edit_mode(&state);
             let _ = state.player.load_session(
                 playlists_of(&s.info),
                 s.info.duration_seconds,
@@ -1263,6 +1479,7 @@ pub fn redo(app: AppHandle, state: State<'_, AppState>) -> CmdResult<ProjectView
         if report.audio_changed {
             // A clip-structure step restored a different timeline: the
             // player must reload the whole program, not just resync.
+            force_edit_mode(&state);
             let _ = state.player.load_session(
                 playlists_of(&s.info),
                 s.info.duration_seconds,

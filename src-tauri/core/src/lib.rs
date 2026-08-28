@@ -21,6 +21,8 @@ pub mod project;
 pub mod vst3;
 pub mod silence;
 
+pub mod album;
+pub use album::{album_layout, album_playlists, AlbumItem, AlbumLayout, AlbumTrack};
 pub use audio::{
     clip_segments, layer_parts, scan_file, scan_files, scan_layers, snap_to_zero_crossing,
     AudioInfo, ClipInfo, ScannedLayer, TimelinePart, SUPPORTED_EXTENSIONS,
@@ -39,7 +41,10 @@ pub use engine::record::{
     list_input_devices, mic_permission, request_mic_access, watch_input_devices,
     InputDeviceInfo, RecordConfig, RecordLane, RecordStatus, RecorderHandle,
 };
-pub use engine::{LayerPlay, MasterPluginSpec, MeterState, PlaybackState, PlayerHandle, VolumeAutomation};
+pub use engine::{
+    LayerPlay, MasterPluginSpec, MeterState, PlaybackState, PlayEntry, PlayerHandle,
+    VolumeAutomation,
+};
 pub use project::{
     db_to_linear, read_project, ripple_regions, sanitize_regions, save_project, ChainTarget,
     ClipRemoval, ExportConfig, ExportFormat, Layer, LayerView, MasteringPluginCfg,

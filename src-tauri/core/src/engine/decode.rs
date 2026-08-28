@@ -12,9 +12,11 @@ use symphonia::core::units::Time;
 use crate::audio::{open, Opened};
 
 /// One playlist item: a file or a silent gap, with its length in samples.
+/// `offset` skips into the file — 0 plays it from the top; the album
+/// program uses it to start mid-file (a track cut inside a clip).
 #[derive(Debug, Clone)]
 pub enum PlayItem {
-    File { path: PathBuf, samples: u64 },
+    File { path: PathBuf, samples: u64, offset: u64 },
     Silence { samples: u64 },
 }
 
@@ -101,15 +103,18 @@ impl LayerDecoder {
         if self.opened.is_some() {
             return true;
         }
-        let PlayItem::File { path, .. } = &self.items[self.item_idx] else {
+        let PlayItem::File { path, offset, .. } = &self.items[self.item_idx] else {
             return false;
         };
+        let offset = *offset;
         let Ok(mut o) = open(path) else {
             return false;
         };
         self.src_channels = o.channels.max(1) as usize;
-        if self.item_pos > 0 {
-            let secs = self.item_pos as f64 / o.sample_rate.max(1) as f64;
+        // In-file position = the item's offset plus playback progress.
+        let target = offset + self.item_pos;
+        if target > 0 {
+            let secs = target as f64 / o.sample_rate.max(1) as f64;
             let seeked = o.format.seek(
                 SeekMode::Accurate,
                 SeekTo::Time {
@@ -120,7 +125,7 @@ impl LayerDecoder {
             o.decoder.reset();
             // Decode-and-discard from the packet boundary to the exact frame.
             let landed = seeked.map(|s| s.actual_ts).unwrap_or(0);
-            let mut to_skip = self.item_pos.saturating_sub(landed);
+            let mut to_skip = target.saturating_sub(landed);
             self.opened = Some(o);
             while to_skip > 0 {
                 let Some(frames) = self.decode_packet() else { break };
