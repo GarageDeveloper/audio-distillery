@@ -69,6 +69,8 @@ export default function App() {
   const [pendingStart, setPendingStart] = useState<number | null>(null);
   const [selectedTrack, setSelectedTrack] = useState<number | null>(null);
   const [selectedClip, setSelectedClip] = useState<number | null>(null);
+  /** Open clip menu: clip index + anchor local to the waveform holder. */
+  const [clipMenu, setClipMenu] = useState<{ index: number; x: number; y: number } | null>(null);
   const [viewport, setViewport] = useState<Viewport>({ start: 0, spp: 1 });
   const [waveWidth, setWaveWidth] = useState(1000);
   const [theme, setTheme] = useState<Theme>(
@@ -328,11 +330,33 @@ export default function App() {
   }, [selection, view]);
 
   // Keyboard shortcuts.
+  /** True when no room is left for a track inside this clip's span —
+   * the largest free hole is under the 200 ms minimum. */
+  const clipFullyTracked = useCallback((v: ProjectView, index: number): boolean => {
+    const clip = v.audio.clips[index];
+    if (!clip) return false;
+    const s = clip.start_sample;
+    const e = s + clip.duration_samples;
+    const segs = v.tracks
+      .filter((t) => t.end_sample > s && t.start_sample < e)
+      .map((t) => [Math.max(t.start_sample, s), Math.min(t.end_sample, e)] as const)
+      .sort((a, b) => a[0] - b[0]);
+    let cursor = s;
+    let largestHole = 0;
+    for (const [a, b] of segs) {
+      largestHole = Math.max(largestHole, a - cursor);
+      cursor = Math.max(cursor, b);
+    }
+    largestHole = Math.max(largestHole, e - cursor);
+    return largestHole < v.audio.sample_rate * 0.2;
+  }, []);
+
   /** Delete a clip (ripple). The rescan streams load:progress, so the
    * usual loading overlay narrates it. */
   const removeClip = useCallback(
     async (index: number) => {
       setSelectedClip(null);
+      setClipMenu(null);
       setLoading({ active: true, progress: 0, fileName: "Updating timeline…" });
       try {
         const v = await api.removeClip(index);
@@ -382,6 +406,7 @@ export default function App() {
         setSelection(null);
         setProposals(null);
         setSelectedClip(null);
+        setClipMenu(null);
       } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
         e.preventDefault();
         const delta = (e.key === "ArrowLeft" ? -1 : 1) * (e.shiftKey ? 30 : 5);
@@ -499,6 +524,7 @@ export default function App() {
   useEffect(() => {
     if (view && selectedClip != null && selectedClip >= view.audio.clips.length) {
       setSelectedClip(null);
+      setClipMenu(null);
     }
   }, [view, selectedClip]);
 
@@ -553,6 +579,7 @@ export default function App() {
         <div className="wave-area">
           {view ? (
             <>
+              <div className="waveform-holder">
               <Waveform
                 view={view}
                 viewport={viewport}
@@ -575,7 +602,11 @@ export default function App() {
                   void apply(() => api.moveRegionEdgePreview(id, edge, pos))
                 }
                 onSelectTrack={setSelectedTrack}
-                onSelectClip={setSelectedClip}
+                onSelectClip={(i) => {
+                  setSelectedClip(i);
+                  if (i == null) setClipMenu(null);
+                }}
+                onOpenClipMenu={(index, x, y) => setClipMenu({ index, x, y })}
                 onShiftClick={onShiftClick}
                 onToggleLayerCollapsed={(id, c) =>
                   void apply(() => api.setLayerCollapsed(id, c))
@@ -585,26 +616,27 @@ export default function App() {
                   void apply(() => api.removeRegion(id));
                 }}
               />
-              <Minimap
-                view={view}
-                viewport={viewport}
-                width={waveWidth}
-                playheadSample={playheadSample}
-                onViewportChange={onViewportChange}
-              />
-              {selectedClip != null &&
-                !selection &&
-                !proposals &&
-                view.audio.clips[selectedClip] && (
-                  <div className="proposal-bar clip-bar">
-                    <span className="clip-bar-name" title={view.audio.clips[selectedClip].path}>
-                      {view.audio.clips[selectedClip].name}
-                    </span>
+              {clipMenu && view.audio.clips[clipMenu.index] && (
+                <>
+                  <div className="clip-menu-veil" onPointerDown={() => setClipMenu(null)} />
+                  <div
+                    className="clip-menu"
+                    style={{ left: Math.max(8, clipMenu.x - 160), top: clipMenu.y }}
+                  >
+                    <div className="clip-menu-name" title={view.audio.clips[clipMenu.index].path}>
+                      {view.audio.clips[clipMenu.index].name}
+                    </div>
                     <button
-                      className="btn"
-                      title="Create a track spanning exactly this clip, titled after the file"
+                      className="clip-menu-item"
+                      disabled={clipFullyTracked(view, clipMenu.index)}
+                      title={
+                        clipFullyTracked(view, clipMenu.index)
+                          ? "This clip is already covered by tracks"
+                          : "Create a track spanning exactly this clip, titled after the file"
+                      }
                       onClick={() => {
-                        const idx = selectedClip;
+                        const idx = clipMenu.index;
+                        setClipMenu(null);
                         setSelectedClip(null);
                         void apply(() => api.clipsToTracks([idx]));
                       }}
@@ -612,17 +644,23 @@ export default function App() {
                       Make track
                     </button>
                     <button
-                      className="btn"
+                      className="clip-menu-item danger"
                       title="Remove this clip from the timeline — later clips and markers close the gap (undoable). Source files are never touched."
-                      onClick={() => void removeClip(selectedClip)}
+                      onClick={() => void removeClip(clipMenu.index)}
                     >
                       Delete clip (⌫)
                     </button>
-                    <button className="btn" onClick={() => setSelectedClip(null)}>
-                      Clear
-                    </button>
                   </div>
-                )}
+                </>
+              )}
+              </div>
+              <Minimap
+                view={view}
+                viewport={viewport}
+                width={waveWidth}
+                playheadSample={playheadSample}
+                onViewportChange={onViewportChange}
+              />
               {selection && !proposals && (
                 <div className="proposal-bar">
                   <input

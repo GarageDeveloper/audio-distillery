@@ -43,6 +43,9 @@ interface Props {
   onMoveEdge: (id: number, edge: RegionEdge, sample: number) => void;
   onSelectTrack: (id: number | null) => void;
   onSelectClip: (index: number | null) => void;
+  /** The clip's ⋯ menu chip was clicked: open the menu anchored at
+   * (x, y) — coordinates local to the waveform wrap. */
+  onOpenClipMenu: (index: number, x: number, y: number) => void;
   /** Shift-click: complete a selection from the App-held anchor. */
   onShiftClick: (sample: number) => void;
   onRemoveRegion: (id: number) => void;
@@ -90,6 +93,7 @@ export function Waveform(p: Props) {
   const clipRects = useRef<{ x: number; y: number; w: number; h: number; index: number }[]>([]);
   /** Sample of the clip boundary an edge drag is currently snapped to. */
   const snappedAt = useRef<number | null>(null);
+  const clipMenuRects = useRef<{ x: number; y: number; w: number; h: number; index: number }[]>([]);
   // Drag auto-scroll at the viewport edges.
   const autoScrollRaf = useRef<number | null>(null);
   const lastPointerX = useRef(0);
@@ -476,7 +480,32 @@ export function Waveform(p: Props) {
         ctx.restore();
         clipRects.current.push({ x: bx, y: by, w: bw, h: bh, index: ci });
       });
+      // ⋯ menu chip at each clip's top-right corner.
+      clipMenuRects.current = [];
+      view.audio.clips.forEach((clip, ci) => {
+        const x0 = sampleToX(clip.start_sample, vp);
+        const x1 = sampleToX(clip.start_sample + clip.duration_samples, vp);
+        if (x1 < 0 || x0 > w) return;
+        if (Math.min(x1, w) - Math.max(x0, 0) < 60) return;
+        const cw = 24;
+        const chh = 17;
+        const cx = Math.min(x1, w) - cw - 6;
+        const cy = RULER_H + 6;
+        const selected = ci === propsRef.current.selectedClip;
+        ctx.fillStyle = selected ? css("--copper-hi") : clipColor;
+        ctx.globalAlpha = selected ? 1 : 0.85;
+        ctx.beginPath();
+        ctx.roundRect(cx, cy, cw, chh, 5);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = css("--wave-bg");
+        ctx.font = "700 12px ui-monospace, Menlo, Consolas, monospace";
+        ctx.fillText("⋯", cx + 6, cy + chh / 2 + 1);
+        clipMenuRects.current.push({ x: cx, y: cy, w: cw, h: chh, index: ci });
+      });
       ctx.restore();
+    } else {
+      clipMenuRects.current = [];
     }
 
     // Silence-detection proposals (ghost regions). Candidates rejected by
@@ -936,6 +965,16 @@ export function Waveform(p: Props) {
             return;
           }
         }
+        // Clip ⋯ menu chip: select the clip and open its menu.
+        const menuChip = clipMenuRects.current.find(
+          (r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h
+        );
+        if (menuChip) {
+          propsRef.current.onSelectClip(menuChip.index);
+          propsRef.current.onOpenClipMenu(menuChip.index, menuChip.x, menuChip.y + menuChip.h + 4);
+          draw();
+          return;
+        }
         // Clip name badge: explicit clip selection (no drag started).
         const badge = clipRects.current.find(
           (r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h
@@ -1067,7 +1106,7 @@ export function Waveform(p: Props) {
         );
         if (badge) {
           propsRef.current.onSelectClip(badge.index);
-          propsRef.current.onSelectTrack(null);
+          propsRef.current.onOpenClipMenu(badge.index, x, y);
           draw();
           return;
         }

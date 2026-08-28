@@ -1349,12 +1349,28 @@ button.wordmark:hover { background: var(--panel-2); }
 }
 .mic-perm.denied { color: var(--err); font-weight: 600; }
 .mic-perm-actions { display: flex; gap: 6px; }
-.clip-bar { display: flex; align-items: center; gap: 8px; }
-.clip-bar-name {
-  font-family: var(--font-mono); font-size: 12px; font-weight: 700;
-  color: var(--text-1); min-width: 0; overflow: hidden; text-overflow: ellipsis;
-  white-space: nowrap;
+.waveform-holder { position: relative; flex: 1; min-height: 0; display: flex; }
+.waveform-holder > .waveform-wrap { flex: 1; }
+.clip-menu-veil { position: fixed; inset: 0; z-index: 40; }
+.clip-menu {
+  position: absolute; z-index: 41; min-width: 190px; max-width: 300px;
+  background: var(--panel, var(--wave-bg)); border: 1px solid var(--clip);
+  border-radius: 8px; padding: 4px; box-shadow: 0 8px 28px rgba(0,0,0,.35);
+  display: flex; flex-direction: column; gap: 2px;
 }
+.clip-menu-name {
+  font-family: var(--font-mono); font-size: 11px; font-weight: 700;
+  color: var(--text-2); padding: 5px 8px 3px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  border-bottom: 1px solid var(--clip); margin-bottom: 2px;
+}
+.clip-menu-item {
+  all: unset; cursor: pointer; font-size: 12.5px; color: var(--text-1);
+  padding: 6px 8px; border-radius: 5px;
+}
+.clip-menu-item:hover:not(:disabled) { background: var(--err-dim); background: color-mix(in srgb, var(--clip) 18%, transparent); }
+.clip-menu-item:disabled { opacity: .4; cursor: default; }
+.clip-menu-item.danger { color: var(--err); }
 .lane-list {
   display: flex; flex-direction: column; gap: 4px;
   max-height: 220px; overflow-y: auto; margin-bottom: 6px;
