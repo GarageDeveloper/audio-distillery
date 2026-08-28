@@ -587,6 +587,20 @@ export default function App() {
     if (phase === "master") setMasterPulse(false);
   }, [phase]);
 
+  // Entering a phase sets its DEFAULT program: Edit listens to the
+  // source timeline, Master to the album. Only on the transition — the
+  // user can still switch programs freely inside a phase (clicking a
+  // source surface in Master, or the Album chip in Edit).
+  useEffect(() => {
+    if (!view) return;
+    if (phase === "master" && playMode !== "album" && view.album.tracks.length > 0) {
+      enterAlbum(null);
+    } else if (phase === "edit" && playMode === "album") {
+      exitAlbum();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
+
   /// The Master phase's "album readiness": what still stands between
   /// this session and a pressed album. Display-only, derived from view.
   const readiness = useMemo(() => {
