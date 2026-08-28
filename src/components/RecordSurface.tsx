@@ -234,6 +234,23 @@ export function RecordSurface({ hasSession, onImport, onError, onRecorded }: Pro
 
   return (
     <div className="record-surface">
+      {!recording && (
+        <button className="record-import" onClick={onImport}>
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M12 15V4" />
+            <path d="M7.5 8.5 12 4l4.5 4.5" />
+            <path d="M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15" />
+          </svg>
+          <span className="record-import-text">
+            <strong>{hasSession ? "Add audio files" : "Start from existing audio"}</strong>
+            <span className="record-import-sub">
+              Drop WAV, FLAC, MP3 or AIFF anywhere — or click to choose files
+              {hasSession ? ". You'll pick how they land: clips, layers or a take." : "."}
+            </span>
+          </span>
+        </button>
+      )}
+      <div className="record-main">
       <div className="record-setup">
         <div className="field">
           <label>Interface</label>
@@ -459,21 +476,6 @@ export function RecordSurface({ hasSession, onImport, onError, onRecorded }: Pro
         )}
       </div>
 
-      <div className={`record-side ${hasSession ? "" : "fresh"}`}>
-        {!recording && (
-          <button className="record-import" onClick={onImport}>
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <path d="M12 15V4" />
-              <path d="M7.5 8.5 12 4l4.5 4.5" />
-              <path d="M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15" />
-            </svg>
-            <strong>{hasSession ? "Add audio files" : "Start from existing audio"}</strong>
-            <span className="record-import-sub">
-              Drop WAV, FLAC, MP3 or AIFF anywhere — or click to choose files
-              {hasSession ? ". You'll pick how they land: clips, layers or a take." : "."}
-            </span>
-          </button>
-        )}
       <div className={`record-clock-panel ${recording ? "rolling" : ""}`}>
         <div className="record-clock" title={recording ? status?.folder : undefined}>
           {recording && <span className="record-dot" />}
