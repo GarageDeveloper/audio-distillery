@@ -46,7 +46,7 @@ fn main() {
     player
         .load_session(
             vec![still_core::LayerPlay {
-                playlist: vec![(Some(wav.clone()), 3.0)],
+                playlist: vec![still_core::PlayEntry { path: Some(wav.clone()), seconds: 3.0, source_offset: 0 }],
             }],
             3.0,
             still_core::VolumeAutomation {
