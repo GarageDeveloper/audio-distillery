@@ -617,14 +617,14 @@ export function Waveform(p: Props) {
         ctx.strokeStyle = css("--copper-hi");
         ctx.setLineDash([3, 3]);
         ctx.beginPath();
-        ctx.moveTo(x, RULER_H);
+        ctx.moveTo(x, trackTop);
         ctx.lineTo(x, h);
         ctx.stroke();
         ctx.restore();
         ctx.fillStyle = css("--copper-hi");
         ctx.font = "700 10px ui-monospace, Menlo, Consolas, monospace";
         ctx.textAlign = "left";
-        ctx.fillText("start?", x + 5, RULER_H + FLAG_H / 2);
+        ctx.fillText("start?", x + 5, trackTop + FLAG_H / 2);
       }
     }
 
@@ -646,14 +646,14 @@ export function Waveform(p: Props) {
         ctx.strokeStyle = markerColor;
         ctx.lineWidth = emph ? 3 : 1;
         ctx.beginPath();
-        ctx.moveTo(x, RULER_H);
+        ctx.moveTo(x, trackTop);
         ctx.lineTo(x, h);
         ctx.stroke();
         ctx.restore();
 
         // Dovetail flag on the inside of the region.
         const dir = edge === "start" ? 1 : -1;
-        const fy = RULER_H;
+        const fy = trackTop;
         const grad = ctx.createLinearGradient(0, fy, 0, fy + FLAG_H);
         grad.addColorStop(0, css("--marker-flag-a"));
         grad.addColorStop(1, css("--marker-flag-b"));
