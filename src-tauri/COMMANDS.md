@@ -244,6 +244,20 @@ returns the file paths, which the frontend feeds into the usual layout
 choice (synced multitrack). The cpal stream lives on a dedicated
 thread (callback = copy into a ring buffer, nothing else).
 
+### Clip editing (M1)
+
+`remove_clip(clip_index)` removes a BASE-layer clip and ripples: later
+clips on every layer and the markers shift left, aligned take clips on
+other layers disappear with it, straddling clips stay in place
+(sources are read-only). The rescan happens BEFORE any mutation, and
+the operation is fully undoable — the undo snapshot was widened to
+optionally carry layers + scanned audio, restored synchronously
+(`UndoReport.audio_changed` tells the command layer to reload the
+player). Region-only edits still snapshot regions alone.
+`clips_to_tracks(clip_indices?)` creates one region per base clip
+(file stem as title, overlaps trimmed, one undo step) — it powers the
+"as album tracks" import option and the per-clip "Make track" action.
+
 ## Playback
 
 | Command | Parameters | Returns |
