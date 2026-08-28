@@ -98,6 +98,9 @@ export function Waveform(p: Props) {
   /** Sample of the clip boundary an edge drag is currently snapped to. */
   const snappedAt = useRef<number | null>(null);
   const clipMenuRects = useRef<{ x: number; y: number; w: number; h: number; index: number }[]>([]);
+  /** Edge-flag hit zones: grabbing the flag drags the edge — no need to
+   * hunt the 1 px line. */
+  const flagRects = useRef<{ x: number; y: number; w: number; h: number; id: number; edge: RegionEdge }[]>([]);
   // Drag auto-scroll at the viewport edges.
   const autoScrollRaf = useRef<number | null>(null);
   const lastPointerX = useRef(0);
@@ -630,6 +633,7 @@ export function Waveform(p: Props) {
 
     // Region edge markers ("barrel label" flags: start opens →, end closes ←).
     const markerColor = css("--marker");
+    flagRects.current = [];
     for (const t of regions) {
       for (const edge of ["start", "end"] as RegionEdge[]) {
         const sample = edge === "start" ? t.start_sample : t.end_sample;
@@ -676,6 +680,14 @@ export function Waveform(p: Props) {
           fy + FLAG_H / 2 + 1
         );
         ctx.textAlign = "left";
+        flagRects.current.push({
+          x: dir === 1 ? x : x - FLAG_W,
+          y: fy,
+          w: FLAG_W,
+          h: FLAG_H,
+          id: t.id,
+          edge,
+        });
 
         if (isDragged) {
           const tc = formatTimecode(sample / sr);
@@ -1005,7 +1017,13 @@ export function Waveform(p: Props) {
           draw();
           return;
         }
-        const edge = edgeAt(x);
+        // Grabbing an edge FLAG drags that edge — the generous target.
+        const flag = flagRects.current.find(
+          (r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h
+        );
+        const edge = flag
+          ? edges().find((e) => e.id === flag.id && e.edge === flag.edge) ?? null
+          : edgeAt(x);
         if (edge) {
           drag.current = { type: "edge", id: edge.id, edge: edge.edge, pos: edge.sample, moved: false };
           propsRef.current.onSelectTrack(edge.id);
@@ -1073,7 +1091,12 @@ export function Waveform(p: Props) {
           }
           return;
         }
-        const edge = edgeAt(x);
+        const flag = flagRects.current.find(
+          (r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h
+        );
+        const edge = flag
+          ? { id: flag.id, edge: flag.edge, sample: 0 }
+          : edgeAt(x);
         const prev = hoverEdge.current;
         if (edge?.id !== prev?.id || edge?.edge !== prev?.edge) {
           hoverEdge.current = edge;
