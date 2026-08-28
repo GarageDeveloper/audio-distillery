@@ -36,3 +36,21 @@ describe("zoomAt", () => {
     expect(zoomed.spp).toBe(50);
   });
 });
+
+import { edgeScrollVelocity } from "./viewport";
+
+describe("edgeScrollVelocity", () => {
+  it("is zero in the middle and ramps in the zones", () => {
+    expect(edgeScrollVelocity(500, 1000, 40, 18)).toBe(0);
+    expect(edgeScrollVelocity(40, 1000, 40, 18) === 0).toBe(true);
+    expect(edgeScrollVelocity(0, 1000, 40, 18)).toBe(-18);
+    expect(edgeScrollVelocity(20, 1000, 40, 18)).toBeCloseTo(-9);
+    expect(edgeScrollVelocity(1000, 1000, 40, 18)).toBe(18);
+    expect(edgeScrollVelocity(980, 1000, 40, 18)).toBeCloseTo(9);
+  });
+  it("saturates beyond the edges and disables on tiny widths", () => {
+    expect(edgeScrollVelocity(-50, 1000, 40, 18)).toBe(-18);
+    expect(edgeScrollVelocity(1100, 1000, 40, 18)).toBe(18);
+    expect(edgeScrollVelocity(10, 60, 40, 18)).toBe(0);
+  });
+});

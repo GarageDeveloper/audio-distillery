@@ -248,6 +248,7 @@ pub async fn add_clips(
         Ok(groups)
     })?;
     rescan_with_groups(app, state, groups.clone(), move |s| {
+        s.forget_structural_undo();
         s.project.layers[0].sources = groups[0].clone();
     })
     .await
@@ -290,11 +291,64 @@ pub async fn add_take(
     })?;
     let _ = take_start;
     rescan_with_groups(app, state, groups.clone(), move |s| {
+        s.forget_structural_undo();
         for (i, g) in groups.iter().enumerate() {
             s.project.layers[i].sources = g.clone();
         }
     })
     .await
+}
+
+/// Remove one clip of the BASE layer, rippling everything after it:
+/// later clips (on every layer) and the markers shift left, aligned
+/// take clips on other layers disappear with it. Fully undoable — the
+/// snapshot carries the pre-removal layers and scanned audio.
+#[tauri::command]
+pub async fn remove_clip(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    clip_index: usize,
+) -> CmdResult<ProjectView> {
+    let (plan, before) = with_session(&state, |s| {
+        let plan = s.plan_remove_clip(clip_index).map_err(err)?;
+        let before: Vec<u32> = s.all_chain_cfgs().map(|c| c.id).collect();
+        Ok((plan, before))
+    })?;
+    // Scan first: a failed or cancelled scan leaves the session untouched
+    // (no snapshot pushed, no recipe mutated).
+    let groups = plan.groups.clone();
+    let _ = rescan_with_groups(app.clone(), state.clone(), groups, move |s| {
+        s.apply_remove_clip(&plan);
+    })
+    .await?;
+    // A dropped layer may have owned insert instances: resync the hosts.
+    with_session(&state, |s| {
+        resync_chains_after_edit(&app, &state, s, &before);
+        Ok(s.view())
+    })
+}
+
+/// One track per clip of the base layer (all clips, or the given ones),
+/// titled with the source file names.
+#[tauri::command]
+pub fn clips_to_tracks(
+    state: State<'_, AppState>,
+    clip_indices: Option<Vec<usize>>,
+) -> CmdResult<ProjectView> {
+    with_session(&state, |s| {
+        let added = s
+            .clips_to_tracks(clip_indices.as_deref())
+            .map_err(err)?;
+        if clip_indices.is_some() && added == 0 {
+            return Err(
+                "No room for a track over this clip — it overlaps existing tracks \
+                 or is shorter than 200 ms."
+                    .to_string(),
+            );
+        }
+        sync_playback(&state, s);
+        Ok(s.view())
+    })
 }
 
 /// Add each given file as a new synced LAYER of the existing session.
@@ -329,6 +383,7 @@ pub async fn add_layers(
         Ok((groups, new_layers))
     })?;
     rescan_with_groups(app, state, groups, move |s| {
+        s.forget_structural_undo();
         s.project.layers.extend(new_layers);
     })
     .await
@@ -443,6 +498,7 @@ pub fn remove_layer(
     with_session(&state, |s| {
         let before: Vec<u32> = s.all_chain_cfgs().map(|c| c.id).collect();
         s.remove_layer(id).map_err(err)?;
+        s.forget_structural_undo();
         let _ = state.player.load_session(
             playlists_of(&s.info),
             s.info.duration_seconds,
@@ -1180,8 +1236,20 @@ pub fn set_export_config(
 pub fn undo(app: AppHandle, state: State<'_, AppState>) -> CmdResult<ProjectView> {
     with_session(&state, |s| {
         let before: Vec<u32> = s.all_chain_cfgs().map(|c| c.id).collect();
-        s.undo();
-        sync_playback(&state, s);
+        let report = s.undo();
+        if report.audio_changed {
+            // A clip-structure step restored a different timeline: the
+            // player must reload the whole program, not just resync.
+            let _ = state.player.load_session(
+                playlists_of(&s.info),
+                s.info.duration_seconds,
+                automation_of(s),
+                s.info.sample_rate,
+                s.info.channels.max(1) as usize,
+            );
+        } else {
+            sync_playback(&state, s);
+        }
         resync_chains_after_edit(&app, &state, s, &before);
         Ok(s.view())
     })
@@ -1191,8 +1259,20 @@ pub fn undo(app: AppHandle, state: State<'_, AppState>) -> CmdResult<ProjectView
 pub fn redo(app: AppHandle, state: State<'_, AppState>) -> CmdResult<ProjectView> {
     with_session(&state, |s| {
         let before: Vec<u32> = s.all_chain_cfgs().map(|c| c.id).collect();
-        s.redo();
-        sync_playback(&state, s);
+        let report = s.redo();
+        if report.audio_changed {
+            // A clip-structure step restored a different timeline: the
+            // player must reload the whole program, not just resync.
+            let _ = state.player.load_session(
+                playlists_of(&s.info),
+                s.info.duration_seconds,
+                automation_of(s),
+                s.info.sample_rate,
+                s.info.channels.max(1) as usize,
+            );
+        } else {
+            sync_playback(&state, s);
+        }
         resync_chains_after_edit(&app, &state, s, &before);
         Ok(s.view())
     })

@@ -1108,6 +1108,176 @@ fn export_cd_image_and_cue() {
     assert!((l1 - l2).abs() < 0.5, "same material, different LUFS: {l1} vs {l2}");
 }
 
+/// Clip editing (M1): removing a middle clip ripples the timeline and
+/// the markers, the re-exported track is sample-accurate, and sources
+/// stay byte-for-byte untouched (ARCHITECTURE.md §3 bis).
+#[test]
+fn remove_clip_ripples_and_exports_sample_accurate() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b, c) = (
+        dir.path().join("a.wav"),
+        dir.path().join("b.wav"),
+        dir.path().join("c.wav"),
+    );
+    write_wav(&a, &[(3.0, 0.2)]);
+    write_wav(&b, &[(2.0, 0.4)]);
+    write_wav(&c, &[(3.0, 0.6)]);
+    let sums = [checksum(&a), checksum(&b), checksum(&c)];
+
+    let (info, peaks) = still_core::scan_layers(
+        &[vec![(a.clone(), None), (b.clone(), None), (c.clone(), None)]],
+        &AtomicBool::new(false),
+        |_| {},
+    )
+    .unwrap();
+    let mut state = ProjectState::new(
+        Project::new(vec![
+            a.display().to_string(),
+            b.display().to_string(),
+            c.display().to_string(),
+        ]),
+        info,
+        peaks,
+    );
+    // Track over clip 3 (5 s..8 s of the timeline).
+    state.add_region(5 * SR as u64 + 100, 8 * SR as u64 - 100, Some("Third".into())).unwrap();
+
+    // Remove clip b (index 1) — mirror rescan_with_groups' order.
+    let plan = state.plan_remove_clip(1).unwrap();
+    let groups: Vec<Vec<(std::path::PathBuf, Option<u64>)>> = plan
+        .groups
+        .iter()
+        .map(|g| {
+            g.iter()
+                .map(|src| (std::path::PathBuf::from(&src.path), src.start))
+                .collect()
+        })
+        .collect();
+    let (info2, peaks2) =
+        still_core::scan_layers(&groups, &AtomicBool::new(false), |_| {}).unwrap();
+    state.apply_remove_clip(&plan);
+    state.set_audio(info2, peaks2);
+    still_core::sanitize_regions(&mut state.project, state.info.duration_samples, state.info.sample_rate);
+
+    assert_eq!(state.info.duration_samples, 6 * SR as u64, "timeline shrank by 2 s");
+    let tracks = state.tracks();
+    assert_eq!(tracks.len(), 1);
+    assert_eq!(tracks[0].start_sample, 3 * SR as u64 + 100, "marker rippled 2 s left");
+    assert_eq!(tracks[0].title, "Third");
+
+    // The exported track must be exactly the rippled span of clip c.
+    if let Ok(ffmpeg) = resolve_ffmpeg(&[]) {
+        let cfg = ExportConfig {
+            format: ExportFormat::Wav,
+            dest_dir: dir.path().join("out").display().to_string(),
+            ..Default::default()
+        };
+        let jobs = plan_export(&state.tracks(), &cfg, &a).unwrap();
+        let rep = run_export(
+            &ffmpeg,
+            &mix_of(&state),
+            2,
+            SR,
+            &jobs,
+            &cfg,
+            &AtomicBool::new(false),
+            |_| {},
+        );
+        assert!(rep.errors.is_empty(), "{:?}", rep.errors);
+        let r = hound::WavReader::open(&jobs[0].out_path).unwrap();
+        assert_eq!(r.duration() as u64, 3 * SR as u64 - 200);
+    }
+
+    // Undo restores the 3-clip recipe and the original marker.
+    let report = state.undo();
+    assert!(report.applied && report.audio_changed);
+    assert_eq!(state.info.duration_samples, 8 * SR as u64);
+    assert_eq!(state.tracks()[0].start_sample, 5 * SR as u64 + 100);
+
+    assert_eq!([checksum(&a), checksum(&b), checksum(&c)], sums, "sources touched!");
+}
+
+/// Removing a take's base clip removes the aligned clips on every layer
+/// and keeps later takes sample-aligned across layers.
+#[test]
+fn remove_take_clip_keeps_layers_aligned() {
+    let dir = tempfile::tempdir().unwrap();
+    let mk = |name: &str, secs: f32, amp: f32| {
+        let p = dir.path().join(name);
+        write_wav(&p, &[(secs, amp)]);
+        p
+    };
+    // Two layers, two takes each (take 2 pinned at 3 s).
+    let l1t1 = mk("l1t1.wav", 3.0, 0.2);
+    let l1t2 = mk("l1t2.wav", 2.0, 0.3);
+    let l2t1 = mk("l2t1.wav", 3.0, 0.4);
+    let l2t2 = mk("l2t2.wav", 2.0, 0.5);
+    let pin = 3 * SR as u64;
+    let (info, peaks) = still_core::scan_layers(
+        &[
+            vec![(l1t1.clone(), None), (l1t2.clone(), Some(pin))],
+            vec![(l2t1.clone(), None), (l2t2.clone(), Some(pin))],
+        ],
+        &AtomicBool::new(false),
+        |_| {},
+    )
+    .unwrap();
+    let mut state = ProjectState::new(
+        Project::new_layers(vec![
+            vec![l1t1.display().to_string(), l1t2.display().to_string()],
+            vec![l2t1.display().to_string(), l2t2.display().to_string()],
+        ]),
+        info,
+        peaks,
+    );
+    // Sync the recipe pins with the scan (new_layers stores sequential refs).
+    state.project.layers[0].sources[1].start = Some(pin);
+    state.project.layers[1].sources[1].start = Some(pin);
+
+    let plan = state.plan_remove_clip(0).unwrap();
+    assert_eq!(plan.groups.len(), 2);
+    for g in &plan.groups {
+        assert_eq!(g.len(), 1, "take-1 clip removed on BOTH layers");
+        assert_eq!(g[0].start, Some(0), "take 2 shifted to the origin");
+    }
+    let groups: Vec<Vec<(std::path::PathBuf, Option<u64>)>> = plan
+        .groups
+        .iter()
+        .map(|g| g.iter().map(|s| (std::path::PathBuf::from(&s.path), s.start)).collect())
+        .collect();
+    let (info2, _) = still_core::scan_layers(&groups, &AtomicBool::new(false), |_| {}).unwrap();
+    assert_eq!(info2.layers[0].clips[0].start_sample, info2.layers[1].clips[0].start_sample);
+    assert_eq!(info2.duration_samples, 2 * SR as u64);
+}
+
+/// clips_to_tracks: one titled track per clip, end to end.
+#[test]
+fn clips_to_tracks_end_to_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let names = ["Morceau 1", "Morceau 2", "Morceau 3"];
+    let mut group = Vec::new();
+    for n in names {
+        let p = dir.path().join(format!("{n}.wav"));
+        write_wav(&p, &[(2.0, 0.3)]);
+        group.push((p, None));
+    }
+    let (info, peaks) =
+        still_core::scan_layers(&[group.clone()], &AtomicBool::new(false), |_| {}).unwrap();
+    let mut state = ProjectState::new(
+        Project::new(group.iter().map(|(p, _)| p.display().to_string()).collect()),
+        info,
+        peaks,
+    );
+    let added = state.clips_to_tracks(None).unwrap();
+    assert_eq!(added, 3);
+    let tracks = state.tracks();
+    for (i, t) in tracks.iter().enumerate() {
+        assert_eq!(t.title, names[i]);
+        assert_eq!(t.start_sample, i as u64 * 2 * SR as u64);
+        assert_eq!(t.end_sample, (i as u64 + 1) * 2 * SR as u64);
+    }
+}
+
 /// Multitrack stems export (#7): one folder per track, one file per layer
 /// named with the {ln}/{layer} macros; raw cuts are sample-exact copies of
 /// the source slice; mix mode skips muted layers; the Source format

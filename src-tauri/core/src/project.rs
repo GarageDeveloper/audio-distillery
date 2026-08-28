@@ -403,7 +403,62 @@ pub enum RegionEdge {
     End,
 }
 
-type Snapshot = Vec<Region>;
+/// Result of planning a base-clip removal (see
+/// [`ProjectState::plan_remove_clip`]): the surviving layers' new source
+/// recipes and the removed timeline span.
+pub struct ClipRemoval {
+    /// New sources per surviving layer, index-aligned with `kept_layer_ids`.
+    pub groups: Vec<Vec<SourceRef>>,
+    pub kept_layer_ids: Vec<u32>,
+    pub span: RegionSpan,
+}
+
+/// Ripple regions after removing the span `[s, e)`: regions before stay,
+/// regions inside disappear, regions after shift left, straddlers are
+/// trimmed — and any trim leaving less than `min_len` drops the region.
+pub fn ripple_regions(regions: &mut Vec<Region>, s: u64, e: u64, min_len: u64) {
+    let d = e - s;
+    regions.retain_mut(|r| {
+        if r.end <= s {
+            return true; // entirely before: untouched
+        }
+        if r.start >= e {
+            r.start -= d;
+            r.end -= d;
+            return true; // entirely after: shifted, length preserved
+        }
+        if r.start >= s && r.end <= e {
+            return false; // swallowed by the removed span
+        }
+        if r.start < s && r.end <= e {
+            r.end = s; // straddles the span start
+        } else if r.start >= s {
+            r.start = s; // straddles the span end
+            r.end -= d;
+        } else {
+            r.end -= d; // contains the whole span
+        }
+        r.end.saturating_sub(r.start) >= min_len
+    });
+}
+
+/// One undo step. Region edits snapshot regions only; CLIP-STRUCTURE
+/// operations (clip removal) also capture the layer recipes and the
+/// scanned audio+peaks so undo/redo is synchronous — no rescan needed.
+/// Region-only snapshots must NOT carry layers: undoing a marker edit
+/// must never revert an intervening (non-undoable) layer change.
+struct Snapshot {
+    regions: Vec<Region>,
+    layers: Option<Vec<Layer>>,
+    audio: Option<(AudioInfo, Vec<PeakPyramid>)>,
+}
+
+/// What an undo/redo actually did — `audio_changed` tells the command
+/// layer to reload the player with the restored timeline.
+pub struct UndoReport {
+    pub applied: bool,
+    pub audio_changed: bool,
+}
 
 /// Split a title into its base and a trailing `-<n>` index, if any
 /// ("Jam-2" → ("Jam", Some(2)), "Jam" → ("Jam", None)).
@@ -686,26 +741,154 @@ impl ProjectState {
     }
 
     fn push_undo(&mut self) {
-        self.undo.push(self.project.regions.clone());
+        self.undo.push(Snapshot {
+            regions: self.project.regions.clone(),
+            layers: None,
+            audio: None,
+        });
         self.redo.clear();
     }
 
-    pub fn undo(&mut self) -> bool {
-        if let Some(s) = self.undo.pop() {
-            self.redo.push(std::mem::replace(&mut self.project.regions, s));
-            true
-        } else {
-            false
+    /// Full snapshot for clip-structure operations: regions + layer
+    /// recipes + scanned audio, restored together on undo.
+    fn push_undo_full(&mut self) {
+        self.undo.push(Snapshot {
+            regions: self.project.regions.clone(),
+            layers: Some(self.project.layers.clone()),
+            audio: Some((self.info.clone(), self.peaks.clone())),
+        });
+        self.redo.clear();
+    }
+
+    /// Strip layer/audio payloads from both stacks (keeping the region
+    /// history) — called by NON-undoable structural ops (append clip/
+    /// take/layer, remove layer) so an old clip-op snapshot can never
+    /// resurrect a pre-append timeline.
+    pub fn forget_structural_undo(&mut self) {
+        for snap in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+            snap.layers = None;
+            snap.audio = None;
         }
     }
 
-    pub fn redo(&mut self) -> bool {
-        if let Some(s) = self.redo.pop() {
-            self.undo.push(std::mem::replace(&mut self.project.regions, s));
-            true
-        } else {
-            false
+    fn swap_snapshot(&mut self, snap: Snapshot) -> (Snapshot, bool) {
+        let audio_changed = snap.audio.is_some();
+        let back = Snapshot {
+            regions: std::mem::replace(&mut self.project.regions, snap.regions),
+            layers: snap
+                .layers
+                .map(|l| std::mem::replace(&mut self.project.layers, l)),
+            audio: snap.audio.map(|(i, p)| {
+                (
+                    std::mem::replace(&mut self.info, i),
+                    std::mem::replace(&mut self.peaks, p),
+                )
+            }),
+        };
+        (back, audio_changed)
+    }
+
+    pub fn undo(&mut self) -> UndoReport {
+        let Some(snap) = self.undo.pop() else {
+            return UndoReport { applied: false, audio_changed: false };
+        };
+        let (back, audio_changed) = self.swap_snapshot(snap);
+        self.redo.push(back);
+        UndoReport { applied: true, audio_changed }
+    }
+
+    pub fn redo(&mut self) -> UndoReport {
+        let Some(snap) = self.redo.pop() else {
+            return UndoReport { applied: false, audio_changed: false };
+        };
+        let (back, audio_changed) = self.swap_snapshot(snap);
+        self.undo.push(back);
+        UndoReport { applied: true, audio_changed }
+    }
+
+    /// Plan the removal of a BASE-layer clip: validates and computes the
+    /// new source recipe of every surviving layer, without mutating
+    /// anything (the caller rescans first; on failure nothing changed).
+    ///
+    /// Ripple semantics for the removed span `[S, E)` (D = E − S), per
+    /// layer: a clip STARTING inside the span is removed (aligned take
+    /// clips on other layers fall here); a clip starting at or after E
+    /// shifts left by D; earlier clips — including one straddling S,
+    /// which is kept whole since sources are read-only — stay in place.
+    /// Every survivor is pinned at its absolute position, so the layout
+    /// is deterministic and collisions resolve to butt-joining.
+    pub fn plan_remove_clip(&self, clip_index: usize) -> Result<ClipRemoval> {
+        let base = self
+            .info
+            .layers
+            .first()
+            .ok_or(StillError::NoAudioLoaded)?;
+        let clip = base.clips.get(clip_index).ok_or_else(|| {
+            StillError::InvalidProject(format!("unknown clip index {clip_index}"))
+        })?;
+        if base.clips.len() == 1 {
+            return Err(StillError::InvalidProject(
+                "The last clip of the timeline cannot be removed. \
+                 Start a new session or open another file instead."
+                    .into(),
+            ));
         }
+        let s0 = clip.start_sample;
+        let e0 = s0 + clip.duration_samples;
+        let d = e0 - s0;
+
+        let mut groups = Vec::new();
+        let mut kept_layer_ids = Vec::new();
+        for (li, layer) in self.project.layers.iter().enumerate() {
+            let Some(scanned) = self.info.layers.get(li) else {
+                continue;
+            };
+            // Clips and sources are index-aligned by scan construction.
+            let mut sources = Vec::new();
+            for (ci, c) in scanned.clips.iter().enumerate() {
+                let Some(src) = layer.sources.get(ci) else {
+                    continue;
+                };
+                let cs = c.start_sample;
+                if (s0..e0).contains(&cs) {
+                    continue; // removed with the span
+                }
+                let pinned = if cs >= e0 { cs - d } else { cs };
+                sources.push(SourceRef {
+                    path: src.path.clone(),
+                    start: Some(pinned),
+                });
+            }
+            if sources.is_empty() {
+                continue; // emptied non-base layer: dropped (base checked above)
+            }
+            groups.push(sources);
+            kept_layer_ids.push(layer.id);
+        }
+        Ok(ClipRemoval {
+            groups,
+            kept_layer_ids,
+            span: RegionSpan { start: s0, end: e0 },
+        })
+    }
+
+    /// Install a planned clip removal: full undo snapshot (regions +
+    /// layers + audio), new layer recipes, rippled regions. The caller
+    /// adopts the rescanned audio via `set_audio` right after.
+    pub fn apply_remove_clip(&mut self, plan: &ClipRemoval) {
+        self.push_undo_full();
+        let mut kept = Vec::new();
+        for (id, sources) in plan.kept_layer_ids.iter().zip(&plan.groups) {
+            if let Some(mut layer) =
+                self.project.layers.iter().find(|l| l.id == *id).cloned()
+            {
+                layer.sources = sources.clone();
+                kept.push(layer);
+            }
+        }
+        self.project.layers = kept;
+        let min = self.min_len();
+        ripple_regions(&mut self.project.regions, plan.span.start, plan.span.end, min);
     }
 
     /// Sorted view of regions (by start).
@@ -768,9 +951,15 @@ impl ProjectState {
     /// Add several regions as one undoable operation (silence detection).
     /// Spans that don't fit are skipped; returns how many were added.
     pub fn add_regions(&mut self, spans: &[RegionSpan]) -> usize {
+        let titled: Vec<(RegionSpan, Option<String>)> =
+            spans.iter().map(|s| (s.clone(), None)).collect();
+        self.add_regions_titled(&titled)
+    }
+
+    fn add_regions_titled(&mut self, spans: &[(RegionSpan, Option<String>)]) -> usize {
         let before = self.project.regions.clone();
         let mut added = 0;
-        for span in spans {
+        for (span, title) in spans {
             if let Ok((s, e)) = self.fit_span(span.start, span.end) {
                 let id = self.project.next_region_id;
                 self.project.next_region_id += 1;
@@ -778,7 +967,7 @@ impl ProjectState {
                     id,
                     start: s,
                     end: e,
-                    title: None,
+                    title: title.clone(),
                     gain_overrides: HashMap::new(),
                     mute_overrides: HashMap::new(),
                     solo_overrides: HashMap::new(),
@@ -789,10 +978,49 @@ impl ProjectState {
             }
         }
         if added > 0 {
-            self.undo.push(before);
+            self.undo.push(Snapshot { regions: before, layers: None, audio: None });
             self.redo.clear();
         }
         added
+    }
+
+    /// One region per BASE-layer clip (all clips, or the given indices),
+    /// titled with the source file's stem. Clip bounds are exact file
+    /// boundaries, so no zero-crossing snap applies; edges overlapping
+    /// existing tracks are trimmed by `fit_span`, misfits are skipped.
+    /// One undo step. Returns how many tracks were added.
+    pub fn clips_to_tracks(&mut self, clip_indices: Option<&[usize]>) -> Result<usize> {
+        let clips = &self.info.clips;
+        let indices: Vec<usize> = match clip_indices {
+            Some(list) => {
+                for i in list {
+                    if *i >= clips.len() {
+                        return Err(StillError::InvalidProject(format!(
+                            "unknown clip index {i}"
+                        )));
+                    }
+                }
+                list.to_vec()
+            }
+            None => (0..clips.len()).collect(),
+        };
+        let spans: Vec<(RegionSpan, Option<String>)> = indices
+            .iter()
+            .map(|&i| {
+                let c = &clips[i];
+                let title = std::path::Path::new(&c.path)
+                    .file_stem()
+                    .map(|n| n.to_string_lossy().to_string());
+                (
+                    RegionSpan {
+                        start: c.start_sample,
+                        end: c.start_sample + c.duration_samples,
+                    },
+                    title,
+                )
+            })
+            .collect();
+        Ok(self.add_regions_titled(&spans))
     }
 
     /// Take an undo snapshot explicitly — called once at the START of an
@@ -1442,6 +1670,161 @@ mod tests {
         )
     }
 
+    /// Multi-clip / multi-layer state: base layer with `clip_secs` clips
+    /// laid back-to-back; optional second layer mirroring the same clips
+    /// (aligned takes).
+    fn multi_state(clip_secs: &[u64], second_layer: bool) -> ProjectState {
+        let mut clips = Vec::new();
+        let mut pos = 0u64;
+        for (i, secs) in clip_secs.iter().enumerate() {
+            clips.push(crate::audio::ClipInfo {
+                path: format!("/tmp/clip{}.wav", i + 1),
+                name: format!("clip{}.wav", i + 1),
+                start_sample: pos,
+                duration_samples: secs * SEC,
+            });
+            pos += secs * SEC;
+        }
+        let layer = crate::audio::ScannedLayer {
+            clips: clips.clone(),
+            channels: 2,
+            duration_samples: pos,
+        };
+        let mut layers = vec![layer.clone()];
+        let mut groups: Vec<Vec<String>> =
+            vec![clips.iter().map(|c| c.path.clone()).collect()];
+        if second_layer {
+            layers.push(layer);
+            groups.push(clips.iter().map(|c| c.path.clone()).collect());
+        }
+        let info = AudioInfo {
+            path: clips[0].path.clone(),
+            clips,
+            layers,
+            duration_samples: pos,
+            sample_rate: SR,
+            channels: 2,
+            format: "WAV".into(),
+            duration_seconds: pos as f64 / SR as f64,
+        };
+        let peaks = vec![PeakPyramid::default(); if second_layer { 2 } else { 1 }];
+        ProjectState::new(Project::new_layers(groups), info, peaks)
+    }
+
+    #[test]
+    fn ripple_regions_all_cases() {
+        let min = 200 * SEC / 1000;
+        let (s0, e0) = (10 * SEC, 14 * SEC); // remove 4 s at 10 s
+        let mk = |start, end| Region {
+            id: 0,
+            start,
+            end,
+            title: None,
+            gain_overrides: HashMap::new(),
+            mute_overrides: HashMap::new(),
+            solo_overrides: HashMap::new(),
+            inserts: Vec::new(),
+            isrc: String::new(),
+        };
+        let mut regions = vec![
+            mk(0, 5 * SEC),            // before: untouched
+            mk(11 * SEC, 13 * SEC),    // inside: dropped
+            mk(20 * SEC, 25 * SEC),    // after: shifted −4 s
+            mk(8 * SEC, 12 * SEC),     // straddles start: trimmed to [8,10)
+            mk(12 * SEC, 20 * SEC),    // straddles end: [10,16)
+            mk(9 * SEC, 15 * SEC),     // contains span: [9,11)
+            mk(13 * SEC + SEC / 2, 14 * SEC + 50), // trimmed under 200 ms: dropped
+        ];
+        ripple_regions(&mut regions, s0, e0, min);
+        let spans: Vec<(u64, u64)> = regions.iter().map(|r| (r.start, r.end)).collect();
+        assert_eq!(
+            spans,
+            vec![
+                (0, 5 * SEC),
+                (16 * SEC, 21 * SEC),
+                (8 * SEC, 10 * SEC),
+                (10 * SEC, 16 * SEC),
+                (9 * SEC, 11 * SEC),
+            ]
+        );
+    }
+
+    #[test]
+    fn plan_remove_clip_shifts_and_pins() {
+        let s = multi_state(&[3, 2, 3], false);
+        let plan = s.plan_remove_clip(1).unwrap();
+        assert_eq!((plan.span.start, plan.span.end), (3 * SEC, 5 * SEC));
+        assert_eq!(plan.groups.len(), 1);
+        let g = &plan.groups[0];
+        assert_eq!(g.len(), 2);
+        assert_eq!(g[0].path, "/tmp/clip1.wav");
+        assert_eq!(g[0].start, Some(0));
+        assert_eq!(g[1].path, "/tmp/clip3.wav");
+        assert_eq!(g[1].start, Some(3 * SEC));
+        assert!(s.plan_remove_clip(9).is_err());
+        let single = multi_state(&[3], false);
+        assert!(single.plan_remove_clip(0).is_err(), "last clip refused");
+    }
+
+    #[test]
+    fn plan_remove_clip_take_layers() {
+        let s = multi_state(&[3, 2, 3], true);
+        let plan = s.plan_remove_clip(1).unwrap();
+        assert_eq!(plan.groups.len(), 2, "both layers survive");
+        for g in &plan.groups {
+            assert_eq!(g.len(), 2);
+            assert_eq!(g[1].start, Some(3 * SEC), "later takes stay aligned");
+        }
+    }
+
+    #[test]
+    fn remove_clip_undo_restores_everything() {
+        let mut s = multi_state(&[3, 2, 3], false);
+        s.add_region(6 * SEC, 8 * SEC, Some("Late".into())).unwrap();
+        let plan = s.plan_remove_clip(1).unwrap();
+        s.apply_remove_clip(&plan);
+        assert_eq!(s.project.layers[0].sources.len(), 2);
+        assert_eq!(s.project.regions[0].start, 4 * SEC, "region rippled");
+        let report = s.undo();
+        assert!(report.applied && report.audio_changed);
+        assert_eq!(s.project.layers[0].sources.len(), 3, "sources restored");
+        assert_eq!(s.project.regions[0].start, 6 * SEC, "region restored");
+        assert_eq!(s.info.duration_samples, 8 * SEC, "audio restored");
+        let report = s.redo();
+        assert!(report.applied && report.audio_changed);
+        assert_eq!(s.project.layers[0].sources.len(), 2);
+    }
+
+    #[test]
+    fn region_undo_leaves_layers_alone() {
+        let mut s = state(120);
+        s.add_region(10 * SEC, 40 * SEC, None).unwrap();
+        // A NON-undoable layer change in between must survive the undo.
+        s.project.layers[0].gain_db = -6.0;
+        let report = s.undo();
+        assert!(report.applied && !report.audio_changed);
+        assert_eq!(s.project.regions.len(), 0);
+        assert_eq!(s.project.layers[0].gain_db, -6.0);
+    }
+
+    #[test]
+    fn clips_to_tracks_titles_and_skips() {
+        let mut s = multi_state(&[3, 2, 3], false);
+        // Occupy clip 2's span: that clip must be skipped, not error.
+        s.add_region(3 * SEC, 5 * SEC, Some("Taken".into())).unwrap();
+        let added = s.clips_to_tracks(None).unwrap();
+        assert_eq!(added, 2);
+        let tracks = s.tracks();
+        assert_eq!(tracks.len(), 3);
+        assert_eq!(tracks[0].title, "clip1");
+        assert_eq!(tracks[1].title, "Taken");
+        assert_eq!(tracks[2].title, "clip3");
+        assert!(s.clips_to_tracks(Some(&[7])).is_err());
+        // One undo step removes both added tracks.
+        s.undo();
+        assert_eq!(s.tracks().len(), 1);
+    }
+
     #[test]
     fn add_region_orders_and_numbers_tracks() {
         let mut s = state(120);
@@ -1536,11 +1919,11 @@ mod tests {
         let mut s = state(120);
         s.add_region(10 * SEC, 40 * SEC, None).unwrap();
         assert_eq!(s.tracks().len(), 1);
-        assert!(s.undo());
+        assert!(s.undo().applied);
         assert!(s.tracks().is_empty());
-        assert!(s.redo());
+        assert!(s.redo().applied);
         assert_eq!(s.tracks().len(), 1);
-        assert!(!s.redo());
+        assert!(!s.redo().applied);
     }
 
     #[test]
@@ -1554,7 +1937,7 @@ mod tests {
         ]);
         assert_eq!(added, 2);
         assert_eq!(s.tracks().len(), 3);
-        assert!(s.undo());
+        assert!(s.undo().applied);
         assert_eq!(s.tracks().len(), 1);
     }
 

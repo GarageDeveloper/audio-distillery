@@ -41,8 +41,9 @@ pub use engine::record::{
 };
 pub use engine::{LayerPlay, MasterPluginSpec, MeterState, PlaybackState, PlayerHandle, VolumeAutomation};
 pub use project::{
-    db_to_linear, read_project, sanitize_regions, save_project, ChainTarget, ExportConfig,
-    ExportFormat, Layer, LayerView, MasteringPluginCfg, MasteringPluginView, Project,
-    ProjectState, ProjectView, RegionEdge, RegionSpan, SourceRef, TrackInfo,
+    db_to_linear, read_project, ripple_regions, sanitize_regions, save_project, ChainTarget,
+    ClipRemoval, ExportConfig, ExportFormat, Layer, LayerView, MasteringPluginCfg,
+    MasteringPluginView, Project, ProjectState, ProjectView, RegionEdge, RegionSpan, SourceRef,
+    TrackInfo, UndoReport,
 };
 pub use silence::{detect_track_regions, SilenceParams};
