@@ -1445,6 +1445,92 @@ button.wordmark:hover { background: var(--panel-2); }
   border-radius: 7px; padding: 5px; box-shadow: 0 8px 24px rgba(0,0,0,.35);
 }
 .gap-editor-input { width: 70px; flex: none; }
+
+/* ——— Workflow phases (Option A) ——— */
+.phase-switch {
+  display: flex; background: var(--bg-deep); border: 1px solid var(--copper-lo);
+  border-radius: 8px; overflow: hidden; margin-left: 4px;
+}
+.phase-seg {
+  all: unset; cursor: pointer; padding: 4px 12px;
+  font-size: 11px; font-weight: 700; letter-spacing: .04em; color: var(--text-3);
+}
+.phase-seg:hover { color: var(--text-1); }
+.phase-seg.on { background: var(--copper); color: var(--text-on-accent); }
+.phase-seg.pulse { color: var(--copper-hi); animation: phase-pulse 1.6s ease-in-out infinite; }
+@keyframes phase-pulse { 50% { opacity: .4; } }
+@media (prefers-reduced-motion: reduce) { .phase-seg.pulse { animation: none; } }
+
+/* Edit phase: mastering panel collapsed to a meter rail. */
+.meter-rail {
+  all: unset; cursor: pointer; width: 46px; flex: none;
+  background: var(--panel); border-left: 1px solid var(--line);
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 10px 0;
+}
+.meter-rail:hover { background: var(--panel-2); }
+.meter-rail-int {
+  font: 700 10px var(--font-mono); color: var(--text-1); text-align: center;
+  display: flex; flex-direction: column;
+}
+.meter-rail-int small { font-weight: 500; color: var(--text-3); font-size: 8px; }
+.meter-rail-int.over { color: var(--err); }
+.meter-rail-bar {
+  width: 8px; flex: 1; background: var(--bg-deep); border-radius: 4px;
+  position: relative; overflow: hidden;
+}
+.meter-rail-bar i {
+  position: absolute; left: 0; right: 0; bottom: 0; border-radius: 4px;
+  background: linear-gradient(to top, var(--ok) 70%, var(--copper-hi));
+}
+.meter-rail-label {
+  writing-mode: vertical-rl; font: 700 8px var(--font-mono);
+  letter-spacing: .16em; color: var(--text-3);
+}
+
+/* Master phase: the waveform steps back, the strip steps forward. */
+.waveform-holder.phase-master { flex: 0 0 150px; min-height: 150px; }
+.waveform-holder.phase-master > .waveform-wrap { opacity: .55; }
+.album-strip.tall { padding: 10px 10px; }
+.album-strip.tall .album-lane { height: 46px; }
+.album-strip.tall .album-mode-chip { background: var(--copper-hi); color: var(--wave-bg); border-color: var(--copper-hi); }
+.album-block { display: flex; flex-direction: column; justify-content: center; align-items: flex-start; }
+.album-block-meta {
+  font-family: var(--font-mono); font-size: 9px; color: var(--text-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+}
+.delivery-line {
+  font-family: var(--font-mono); font-size: 9.5px; color: var(--text-3);
+  padding: 0 8px 4px 30px;
+}
+.delivery-line.missing { color: var(--copper-hi); }
+
+/* Export CTA + readiness popover (hover/focus). */
+.readiness-wrap { position: relative; display: inline-flex; }
+.export-cta { box-shadow: 0 0 0 1px var(--copper-hi); }
+.readiness-badge {
+  background: var(--text-on-accent); color: var(--copper-hi);
+  border-radius: 9px; padding: 1px 7px; font: 700 10px var(--font-mono);
+  margin-left: 6px;
+}
+.readiness-pop {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 60;
+  min-width: 230px; display: none; flex-direction: column; gap: 3px;
+  background: var(--raised); border: 1px solid var(--line);
+  border-radius: 9px; padding: 9px 11px;
+  box-shadow: 0 12px 32px rgba(0,0,0,.45); font-size: 12px;
+}
+.readiness-wrap:hover .readiness-pop,
+.readiness-wrap:focus-within .readiness-pop { display: flex; }
+.readiness-pop b { font-size: 11.5px; color: var(--text-1); margin-bottom: 3px; }
+.readiness-line { color: var(--text-2); }
+.readiness-line.ok::before { content: "\2713 "; color: var(--ok); }
+.readiness-line.todo::before { content: "\25CB "; color: var(--text-3); }
+.readiness-line.actionable {
+  all: unset; cursor: pointer; color: var(--copper-hi);
+  text-decoration: underline; text-underline-offset: 2px; font-size: 12px;
+}
+.readiness-line.actionable::before { content: "\25CB "; color: var(--copper-hi); }
 .lane-list {
   display: flex; flex-direction: column; gap: 4px;
   max-height: 220px; overflow-y: auto; margin-bottom: 6px;

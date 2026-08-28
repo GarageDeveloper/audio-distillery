@@ -3,6 +3,8 @@ import { useState } from "react";
 import type { AlbumLayout } from "../types/AlbumLayout";
 
 interface Props {
+  /** Master phase: taller lane, two-line blocks (duration + ISRC). */
+  tall?: boolean;
   album: AlbumLayout;
   sampleRate: number;
   albumGapMs: number;
@@ -16,6 +18,8 @@ interface Props {
   onSeek: (albumSample: number) => void;
   onTogglePlay: () => void;
   onSetTrackGap: (id: number, gapMs: number | null) => void;
+  /** id → ISRC ("" = none), for the tall variant's second line. */
+  isrcById?: Record<number, string>;
 }
 
 const fmt = (samples: number, sr: number) => {
@@ -57,7 +61,7 @@ export function AlbumStrip(p: Props) {
   };
 
   return (
-    <div className={`album-strip ${active ? "active" : ""}`}>
+    <div className={`album-strip ${active ? "active" : ""} ${p.tall ? "tall" : ""}`}>
       <div className="album-transport">
         <button
           className={`album-mode-chip ${active ? "on" : ""}`}
@@ -113,6 +117,13 @@ export function AlbumStrip(p: Props) {
                 <span className="album-block-label">
                   {t.number}. {t.title}
                 </span>
+                {p.tall && (
+                  <span className="album-block-meta">
+                    {fmt(t.length_samples, p.sampleRate)}
+                    {" · "}
+                    {p.isrcById?.[t.id] || "—"}
+                  </span>
+                )}
               </button>
               {gapEdit?.id === t.id && (
                 <span className="album-gap-editor" onClick={(e) => e.stopPropagation()}>

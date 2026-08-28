@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
@@ -13,6 +13,7 @@ import { Minimap } from "./components/Minimap";
 import { TrackList } from "./components/TrackList";
 import { ExportDialog } from "./components/ExportDialog";
 import { AlbumStrip } from "./components/AlbumStrip";
+import { MeterRail } from "./components/MeterRail";
 import { AlbumMetaForm } from "./components/AlbumMetaForm";
 import { Backdrop } from "./components/Backdrop";
 import { MasteringPanel } from "./components/MasteringPanel";
@@ -74,6 +75,11 @@ export default function App() {
   const [clipMenu, setClipMenu] = useState<{ index: number; x: number; y: number } | null>(null);
   /// Transport program: the source timeline or the album (target) one.
   const [playMode, setPlayMode] = useState<"edit" | "album">("edit");
+  /// Workflow phase (Option A): pure display emphasis, derived + chosen,
+  /// never persisted. "record" is not stored: no session = record screen;
+  /// with a session the Record segment opens the record dialog.
+  const [phase, setPhase] = useState<"edit" | "master">("edit");
+  const [masterPulse, setMasterPulse] = useState(false);
   /// Text-backed draft of the album default gap (committed on blur).
   const [gapDraft, setGapDraft] = useState<string | null>(null);
   const [viewport, setViewport] = useState<Viewport>({ start: 0, spp: 1 });
@@ -166,6 +172,7 @@ export default function App() {
           setPendingStart(null);
           setSelectedTrack(null);
           setSelectedClip(null);
+          setPhase("edit");
         }
       }
     },
@@ -438,6 +445,12 @@ export default function App() {
       } else if (e.key === "e" && mod) {
         e.preventDefault();
         setExportOpen(true);
+      } else if (e.key === "1" && !mod) {
+        setRecordOpen(true);
+      } else if (e.key === "2" && !mod) {
+        setPhase("edit");
+      } else if (e.key === "3" && !mod) {
+        setPhase("master");
       }
     };
     window.addEventListener("keydown", onKey);
@@ -562,6 +575,71 @@ export default function App() {
     [selection, pendingStart, playheadSample]
   );
 
+  const trackCount2 = view?.tracks.length ?? 0;
+  const prevTrackCount = useRef(0);
+  useEffect(() => {
+    if (prevTrackCount.current === 0 && trackCount2 > 0 && phase === "edit") {
+      setMasterPulse(true);
+    }
+    prevTrackCount.current = trackCount2;
+  }, [trackCount2, phase]);
+  useEffect(() => {
+    if (phase === "master") setMasterPulse(false);
+  }, [phase]);
+
+  /// The Master phase's "album readiness": what still stands between
+  /// this session and a pressed album. Display-only, derived from view.
+  const readiness = useMemo(() => {
+    if (!view) return [];
+    const tracks = view.tracks;
+    const withIsrc = tracks.filter((t) => t.isrc).length;
+    const segues = tracks.filter((t) => t.gap_before_effective_ms === 0).length - 1;
+    const items: { key: string; label: string; ok: boolean; action?: "export" | "album" }[] = [
+      {
+        key: "tracks",
+        label:
+          tracks.length > 0
+            ? `${tracks.length} track${tracks.length > 1 ? "s" : ""}, titled`
+            : "No tracks yet",
+        ok: tracks.length > 0,
+      },
+      {
+        key: "gaps",
+        label: `Gaps set (${(view.album_gap_ms / 1000).toFixed(1)} s default${
+          segues > 0 ? `, ${segues} segue${segues > 1 ? "s" : ""}` : ""
+        })`,
+        ok: true,
+      },
+      {
+        key: "meta",
+        label: view.album_meta.album.trim()
+          ? `Album metadata ("${view.album_meta.album.trim()}")`
+          : "Album metadata missing",
+        ok: !!view.album_meta.album.trim(),
+        action: "album",
+      },
+    ];
+    if (withIsrc > 0 && withIsrc < tracks.length) {
+      items.push({
+        key: "isrc",
+        label: `ISRC: ${tracks.length - withIsrc} missing`,
+        ok: false,
+        action: "export",
+      });
+    } else if (withIsrc === tracks.length && tracks.length > 0) {
+      items.push({ key: "isrc", label: "ISRC on every track", ok: true });
+    }
+    items.push({
+      key: "chain",
+      label:
+        view.mastering_chain.length > 0
+          ? "Master chain active"
+          : "No master chain (optional)",
+      ok: true,
+    });
+    return items;
+  }, [view]);
+
   useEffect(() => {
     if (!view) {
       setPlayMode("edit");
@@ -609,6 +687,21 @@ export default function App() {
         onWaveModeChange={setWaveMode}
         onOpen={openFile}
         onRecord={() => setRecordOpen(true)}
+        phase={view ? phase : "record"}
+        masterPulse={masterPulse}
+        onPhaseChange={(p) => {
+          if (p === "record") {
+            if (view) setRecordOpen(true);
+            return;
+          }
+          if (!view) return; // no session: stay on the record screen
+          setPhase(p);
+        }}
+        readiness={readiness}
+        onReadinessAction={(a) => {
+          if (a === "export") setExportOpen(true);
+          else if (a === "album") setAlbumOpen(true);
+        }}
         onAddClips={() => void addClips()}
         onAddTake={() => void addTake()}
         onTogglePlay={() =>
@@ -629,7 +722,7 @@ export default function App() {
         <div className="wave-area">
           {view ? (
             <>
-              <div className="waveform-holder">
+              <div className={`waveform-holder ${phase === "master" ? "phase-master" : ""}`}>
               <Waveform
                 view={view}
                 viewport={viewport}
@@ -713,6 +806,8 @@ export default function App() {
               />
               {view.album.tracks.length > 0 && (
                 <AlbumStrip
+                  tall={phase === "master"}
+                  isrcById={Object.fromEntries(view.tracks.map((t) => [t.id, t.isrc]))}
                   album={view.album}
                   sampleRate={view.audio.sample_rate}
                   albumGapMs={view.album_gap_ms}
@@ -980,6 +1075,7 @@ export default function App() {
             onTrackLayerSolo={(trackId, layerId, so) =>
               void apply(() => api.setTrackLayerSolo(trackId, layerId, so))
             }
+            showDelivery={phase === "master"}
             onTrackGap={(id, ms) => void apply(() => api.setTrackGap(id, ms))}
             onDiscBreaksChange={(breaks) =>
               view &&
@@ -990,7 +1086,7 @@ export default function App() {
           />
         )}
 
-        {view && (
+        {view && phase === "master" && (
           <MasteringPanel
             view={view}
             playheadSample={playheadSample}
@@ -998,6 +1094,9 @@ export default function App() {
             onError={showError}
             onViewChange={setView}
           />
+        )}
+        {view && phase === "edit" && (
+          <MeterRail playing={playback.playing} onOpen={() => setPhase("master")} />
         )}
       </div>
 

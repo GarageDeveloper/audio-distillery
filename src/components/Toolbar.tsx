@@ -25,6 +25,11 @@ interface Props {
   onAddClips: () => void;
   onAddTake: () => void;
   onRecord: () => void;
+  phase: "record" | "edit" | "master";
+  masterPulse: boolean;
+  onPhaseChange: (phase: "record" | "edit" | "master") => void;
+  readiness: { key: string; label: string; ok: boolean; action?: "export" | "album" }[];
+  onReadinessAction: (action: "export" | "album") => void;
   onTogglePlay: () => void;
   onSave: () => void;
   onSaveAs: () => void;
@@ -87,6 +92,19 @@ export function Toolbar(p: Props) {
       >
         ● Rec
       </button>
+      <div className="phase-switch" title="Workflow phase — emphasis only, nothing is ever locked away (keys 1/2/3)">
+        {(["record", "edit", "master"] as const).map((ph) => (
+          <button
+            key={ph}
+            className={`phase-seg ${p.phase === ph ? "on" : ""} ${
+              ph === "master" && p.masterPulse ? "pulse" : ""
+            }`}
+            onClick={() => p.onPhaseChange(ph)}
+          >
+            {ph === "record" ? "Record" : ph === "edit" ? "Edit" : "Master"}
+          </button>
+        ))}
+      </div>
       {p.view && (
         <>
           <button
@@ -204,18 +222,45 @@ export function Toolbar(p: Props) {
             >
               Album…
             </button>
-            <button
-              className="btn btn-primary"
-              onClick={p.onExport}
-              disabled={p.view.tracks.length === 0}
-              title={
-                p.view.tracks.length === 0
-                  ? "Mark at least one track region first"
-                  : "Export tracks (⌘E)"
-              }
-            >
-              Export…
-            </button>
+            <span className="readiness-wrap">
+              <button
+                className={`btn btn-primary ${p.phase === "master" ? "export-cta" : ""}`}
+                onClick={p.onExport}
+                disabled={p.view.tracks.length === 0}
+                title={
+                  p.view.tracks.length === 0
+                    ? "Mark at least one track region first"
+                    : "Export tracks (⌘E)"
+                }
+              >
+                {p.phase === "master" ? "Export album…" : "Export…"}
+                {p.phase === "master" && p.readiness.some((r) => !r.ok) && (
+                  <span className="readiness-badge">
+                    ○ {p.readiness.filter((r) => !r.ok).length}
+                  </span>
+                )}
+              </button>
+              {p.phase === "master" && p.readiness.length > 0 && (
+                <span className="readiness-pop">
+                  <b>Album readiness</b>
+                  {p.readiness.map((r) =>
+                    !r.ok && r.action ? (
+                      <button
+                        key={r.key}
+                        className="readiness-line todo actionable"
+                        onClick={() => p.onReadinessAction(r.action!)}
+                      >
+                        {r.label} → fix
+                      </button>
+                    ) : (
+                      <span key={r.key} className={`readiness-line ${r.ok ? "ok" : "todo"}`}>
+                        {r.label}
+                      </span>
+                    )
+                  )}
+                </span>
+              )}
+            </span>
             <button
               className={`btn btn-icon ${p.panelOpen ? "active" : ""}`}
               onClick={p.onTogglePanel}

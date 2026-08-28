@@ -33,6 +33,8 @@ interface Props {
   onTrackLayerSolo: (trackId: number, layerId: number, solo: boolean | null) => void;
   onDiscBreaksChange: (breaks: number[]) => void;
   onTrackGap: (id: number, gapMs: number | null) => void;
+  /** Master phase: surface delivery info (ISRC) under each row. */
+  showDelivery?: boolean;
 }
 
 export function TrackList({
@@ -55,6 +57,7 @@ export function TrackList({
   onTrackLayerSolo,
   onDiscBreaksChange,
   onTrackGap,
+  showDelivery,
 }: Props) {
   const [editing, setEditing] = useState<number | null>(null);
   const [gapEdit, setGapEdit] = useState<{ id: number; draft: string } | null>(null);
@@ -316,6 +319,13 @@ export function TrackList({
                 ✕
               </button>
             </div>
+            {showDelivery && (
+              <div className={`delivery-line ${t.isrc ? "" : "missing"}`}>
+                {t.isrc
+                  ? `ISRC ${t.isrc.replace(/(..)(...)(..)(.....)/, "$1-$2-$3-$4")}`
+                  : "— no ISRC (set in Export…)"}
+              </div>
+            )}
             {mixOpen === t.id && view.layers.length > 1 && (
               <div className="track-mix" onClick={(e) => e.stopPropagation()}>
                 {view.layers.map((l) => {
