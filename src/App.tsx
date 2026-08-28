@@ -289,6 +289,22 @@ export default function App() {
     }
   }, [pickAudioPaths, loadPaths]);
 
+  /// The Record surface's import zone: same routing as a file drop —
+  /// one file on an empty app is unambiguous, anything else goes through
+  /// the layout choice (clips / album tracks / multitrack / layers).
+  const importFiles = useCallback(async () => {
+    const paths = await pickAudioPaths(true);
+    if (paths.length === 0) return;
+    const still = paths.find((pth) => pth.toLowerCase().endsWith(".still"));
+    if (still) {
+      void loadPaths([still], "project");
+    } else if (!viewRef.current && paths.length === 1) {
+      void loadPaths(paths, "open");
+    } else {
+      setDropChoice(paths);
+    }
+  }, [pickAudioPaths, loadPaths]);
+
   const addClips = useCallback(async () => {
     const paths = await pickAudioPaths(false);
     if (paths.length > 0) void loadPaths(paths, "append");
@@ -786,7 +802,7 @@ export default function App() {
           {phase === "record" && (
             <RecordSurface
               hasSession={!!view}
-              onOpen={openFile}
+              onImport={() => void importFiles()}
               onError={showError}
               onRecorded={(paths) => {
                 if (paths.length === 0) return;

@@ -11,7 +11,8 @@ import { api } from "../api";
 interface Props {
   /** A session is open — the surface sits above the dimmed timeline. */
   hasSession: boolean;
-  onOpen: () => void;
+  /** Open the audio-file picker (routes like a drop: layout choice). */
+  onImport: () => void;
   onError: (msg: string) => void;
   /** Called with the recorded file paths after a successful stop. */
   onRecorded: (paths: string[]) => void;
@@ -26,7 +27,7 @@ const SETUP_KEY = "still-record-setup";
  * watch the meters live (monitor mode — stream open, nothing written),
  * then track. Display only — arming, streaming, metering and file
  * writing are backend. */
-export function RecordSurface({ hasSession, onOpen, onError, onRecorded }: Props) {
+export function RecordSurface({ hasSession, onImport, onError, onRecorded }: Props) {
   const [devices, setDevices] = useState<InputDeviceInfo[]>([]);
   // Composite key: a card can appear under several hosts (WASAPI + ASIO).
   const keyOf = (d: { host: string; name: string }) => `${d.host}\u001f${d.name}`;
@@ -234,16 +235,6 @@ export function RecordSurface({ hasSession, onOpen, onError, onRecorded }: Props
   return (
     <div className="record-surface">
       <div className="record-setup">
-        {!hasSession && (
-          <div className="record-open-hint">
-            Starting from existing audio instead?{" "}
-            <button className="btn" onClick={onOpen}>
-              Open…
-            </button>{" "}
-            <span className="hint">or drop files anywhere.</span>
-          </div>
-        )}
-
         <div className="field">
           <label>Interface</label>
           <select
@@ -468,6 +459,21 @@ export function RecordSurface({ hasSession, onOpen, onError, onRecorded }: Props
         )}
       </div>
 
+      <div className={`record-side ${hasSession ? "" : "fresh"}`}>
+        {!recording && (
+          <button className="record-import" onClick={onImport}>
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M12 15V4" />
+              <path d="M7.5 8.5 12 4l4.5 4.5" />
+              <path d="M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15" />
+            </svg>
+            <strong>{hasSession ? "Add audio files" : "Start from existing audio"}</strong>
+            <span className="record-import-sub">
+              Drop WAV, FLAC, MP3 or AIFF anywhere — or click to choose files
+              {hasSession ? ". You'll pick how they land: clips, layers or a take." : "."}
+            </span>
+          </button>
+        )}
       <div className={`record-clock-panel ${recording ? "rolling" : ""}`}>
         <div className="record-clock" title={recording ? status?.folder : undefined}>
           {recording && <span className="record-dot" />}
@@ -515,6 +521,7 @@ export function RecordSurface({ hasSession, onOpen, onError, onRecorded }: Props
           </div>
         )}
         {status?.error && <div className="record-dropped">⚠ {status.error}</div>}
+      </div>
       </div>
     </div>
   );
