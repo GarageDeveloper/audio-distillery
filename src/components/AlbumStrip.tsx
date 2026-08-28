@@ -23,8 +23,9 @@ interface Props {
   playing: boolean;
   /** Explicit program choice from the Source | Album toggle. */
   onSetMode: (mode: "edit" | "album") => void;
-  /** Enter the album program and seek+play a position (block clicks). */
-  onEnterAlbum: (seekSample: number) => void;
+  /** Play a track (block clicks): SOURCE start sample — the app maps
+   * it into the current program and never changes the mode. */
+  onTrackPlay: (sourceStartSample: number) => void;
   /** Seek within the CURRENT program. */
   onSeek: (sample: number) => void;
   onTogglePlay: () => void;
@@ -143,8 +144,8 @@ export function AlbumStrip(p: Props) {
               <button
                 className={`album-block ${albumMode && i === currentIndex ? "current" : ""}`}
                 style={{ width: `${w * 100}%` }}
-                title={`${t.number}. ${t.title} — ${fmt(t.length_samples, p.sampleRate)} — click to listen in the album program`}
-                onClick={() => p.onEnterAlbum(t.start_sample)}
+                title={`${t.number}. ${t.title} — ${fmt(t.length_samples, p.sampleRate)} — click to listen (current program)`}
+                onClick={() => p.onTrackPlay(p.sourceTracks[i]?.start_sample ?? 0)}
               >
                 <span className="album-block-label">
                   {t.number}. {t.title}

@@ -474,21 +474,40 @@ export default function App() {
     playback.adopt(st);
   }, [playMode, playback]);
 
+  /** Map a SOURCE-timeline position into the album program: exact
+   * inside a track, next track's start outside one. */
+  const sourceToAlbum = useCallback((sample: number): number => {
+    const v = viewRef.current;
+    if (!v) return 0;
+    for (let i = 0; i < v.tracks.length; i++) {
+      const t = v.tracks[i];
+      const a = v.album.tracks[i];
+      if (!a || sample >= t.end_sample) continue;
+      return sample >= t.start_sample
+        ? a.start_sample + (sample - t.start_sample)
+        : a.start_sample;
+    }
+    return Math.max(0, v.album.total_samples - 1);
+  }, []);
+
+  /** Seeks NEVER change the program (only the Source|Album toggle
+   * does): a source-timeline position is mapped into album time when
+   * the album program is loaded. */
   const seekTo = useCallback(
     (sample: number) => {
-      ensureEditMode()
-        .then(() => api.playerSeek(sample))
-        .then(playback.adopt)
-        .catch((e) => showError(String(e)));
+      const target = playMode === "album" ? sourceToAlbum(sample) : sample;
+      api.playerSeek(target).then(playback.adopt).catch((e) => showError(String(e)));
     },
-    [ensureEditMode, playback, showError]
+    [playMode, sourceToAlbum, playback, showError]
   );
 
-  /// Track-list clicks: jump to the track AND start playback if stopped.
+  /// Track-list / album-block clicks: jump to the track AND start
+  /// playback if stopped — in whichever program is loaded.
   const seekToAndPlay = useCallback(
     (sample: number) => {
-      ensureEditMode()
-        .then(() => api.playerSeek(sample))
+      const target = playMode === "album" ? sourceToAlbum(sample) : sample;
+      api
+        .playerSeek(target)
         .then((s) => {
           playback.adopt(s);
           if (!s.playing) {
@@ -497,7 +516,7 @@ export default function App() {
         })
         .catch((e) => showError(String(e)));
     },
-    [ensureEditMode, playback, showError]
+    [playMode, sourceToAlbum, playback, showError]
   );
 
   /** Enter the album program; optionally seek; `play` starts playback
@@ -840,7 +859,7 @@ export default function App() {
                 playMode={playMode}
                 playing={playback.playing}
                 onSetMode={(m) => (m === "album" ? enterAlbum(null) : exitAlbum())}
-                onEnterAlbum={(sample) => enterAlbum(sample)}
+                onTrackPlay={seekToAndPlay}
                 onSeek={(sample) =>
                   void api.playerSeek(sample).then(playback.adopt).catch((e) => showError(String(e)))
                 }
