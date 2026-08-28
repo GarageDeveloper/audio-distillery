@@ -80,6 +80,9 @@ export default function App() {
   /// with a session the Record segment opens the record dialog.
   const [phase, setPhase] = useState<"edit" | "master">("edit");
   const [masterPulse, setMasterPulse] = useState(false);
+  /// Explicit program choices, remembered PER PHASE: once you force a
+  /// mode inside a phase, coming back to that phase restores it.
+  const modeOverride = useRef<{ edit?: "edit" | "album"; master?: "edit" | "album" }>({});
   /// Text-backed draft of the album default gap (committed on blur).
   const [gapDraft, setGapDraft] = useState<string | null>(null);
   const [viewport, setViewport] = useState<Viewport>({ start: 0, spp: 1 });
@@ -173,6 +176,7 @@ export default function App() {
           setSelectedTrack(null);
           setSelectedClip(null);
           setPhase("edit");
+          modeOverride.current = {};
         }
       }
     },
@@ -612,15 +616,16 @@ export default function App() {
     if (phase === "master") setMasterPulse(false);
   }, [phase]);
 
-  // Entering a phase sets its DEFAULT program: Edit listens to the
-  // source timeline, Master to the album. Only on the transition — the
-  // user can still switch programs freely inside a phase (clicking a
-  // source surface in Master, or the Album chip in Edit).
+  // Entering a phase loads its program: the phase default (Edit=source,
+  // Master=album) unless the user explicitly overrode the mode in THAT
+  // phase before — explicit choices persist across phase switches.
   useEffect(() => {
     if (!view) return;
-    if (phase === "master" && playMode !== "album" && view.album.tracks.length > 0) {
+    const target =
+      modeOverride.current[phase] ?? (phase === "master" ? "album" : "edit");
+    if (target === "album" && playMode !== "album" && view.album.tracks.length > 0) {
       enterAlbum(null);
-    } else if (phase === "edit" && playMode === "album") {
+    } else if (target === "edit" && playMode === "album") {
       exitAlbum();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -858,7 +863,11 @@ export default function App() {
                 playheadSample={playheadSample}
                 playMode={playMode}
                 playing={playback.playing}
-                onSetMode={(m) => (m === "album" ? enterAlbum(null) : exitAlbum())}
+                onSetMode={(m) => {
+                  modeOverride.current[phase] = m;
+                  if (m === "album") enterAlbum(null);
+                  else exitAlbum();
+                }}
                 onTrackPlay={seekToAndPlay}
                 onSeek={(sample) =>
                   void api.playerSeek(sample).then(playback.adopt).catch((e) => showError(String(e)))
