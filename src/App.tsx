@@ -15,6 +15,7 @@ import { ExportDialog } from "./components/ExportDialog";
 import { AlbumMetaForm } from "./components/AlbumMetaForm";
 import { Backdrop } from "./components/Backdrop";
 import { MasteringPanel } from "./components/MasteringPanel";
+import { clampSpanToFreeHole } from "./lib/spans";
 import { EmptyState } from "./components/EmptyState";
 import { RecordDialog } from "./components/RecordDialog";
 import { StatusBar } from "./components/StatusBar";
@@ -364,10 +365,14 @@ export default function App() {
         if (pendingStart == null) {
           setPendingStart(Math.round(playheadSample));
         } else {
-          const a = Math.round(Math.min(pendingStart, playheadSample));
-          const b = Math.round(Math.max(pendingStart, playheadSample));
           setPendingStart(null);
-          setSelection({ start: a, end: b });
+          const spans = (viewRef.current?.tracks ?? []).map((t) => ({
+            start: t.start_sample,
+            end: t.end_sample,
+          }));
+          setSelection(
+            clampSpanToFreeHole(pendingStart, Math.round(playheadSample), spans)
+          );
         }
       } else if (e.key === "Enter" && selection) {
         e.preventDefault();
@@ -480,10 +485,12 @@ export default function App() {
           : selection.end
         : pendingStart ?? Math.round(playheadSample);
       setPendingStart(null);
-      setSelection({
-        start: Math.min(anchor, sample),
-        end: Math.max(anchor, sample),
-      });
+      // Butée: the selection may not cross into an existing track.
+      const spans = (viewRef.current?.tracks ?? []).map((t) => ({
+        start: t.start_sample,
+        end: t.end_sample,
+      }));
+      setSelection(clampSpanToFreeHole(anchor, sample, spans));
     },
     [selection, pendingStart, playheadSample]
   );
@@ -586,7 +593,6 @@ export default function App() {
                 onViewportChange={onViewportChange}
               />
               {selectedClip != null &&
-                selectedTrack == null &&
                 !selection &&
                 !proposals &&
                 view.audio.clips[selectedClip] && (

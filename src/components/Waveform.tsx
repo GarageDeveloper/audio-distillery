@@ -7,6 +7,7 @@ import { api } from "../api";
 import { formatTimecode, formatDuration } from "../lib/format";
 import type { Viewport } from "../lib/viewport";
 import { sampleToX, xToSample, zoomAt, clampViewport, edgeScrollVelocity } from "../lib/viewport";
+import { clampSpanToFreeHole, clampEdgeToNeighbors, snapToClipBoundary } from "../lib/spans";
 
 const RULER_H = 26;
 const MIN_LANE_H = 90; // comfortable minimum per expanded layer lane
@@ -87,6 +88,8 @@ export function Waveform(p: Props) {
   const scrollbarDrag = useRef<{ startY: number; startScroll: number } | null>(null);
   const dragSendAt = useRef(0);
   const clipRects = useRef<{ x: number; y: number; w: number; h: number; index: number }[]>([]);
+  /** Sample of the clip boundary an edge drag is currently snapped to. */
+  const snappedAt = useRef<number | null>(null);
   // Drag auto-scroll at the viewport edges.
   const autoScrollRaf = useRef<number | null>(null);
   const lastPointerX = useRef(0);
@@ -643,6 +646,23 @@ export function Waveform(p: Props) {
       }
     }
 
+    // Clip-boundary snap feedback: while an edge drag is magnetized to a
+    // file frontier, the whole boundary lights up.
+    if (snappedAt.current != null && drag.current?.type === "edge") {
+      const sx = Math.round(sampleToX(snappedAt.current, vp)) + 0.5;
+      if (sx >= 0 && sx <= w) {
+        ctx.save();
+        ctx.strokeStyle = css("--copper-hi");
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 4]);
+        ctx.beginPath();
+        ctx.moveTo(sx, RULER_H);
+        ctx.lineTo(sx, h);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
     // Playhead (always on top).
     const px = Math.round(sampleToX(playheadSample, vp)) + 0.5;
     if (px >= 0 && px <= w) {
@@ -769,6 +789,34 @@ export function Waveform(p: Props) {
     return t?.id ?? null;
   }, []);
 
+  const trackSpans = useCallback(() => {
+    return propsRef.current.view.tracks.map((t) => ({
+      id: t.id,
+      start: t.start_sample,
+      end: t.end_sample,
+    }));
+  }, []);
+
+  /** Resolve an edge-drag position: magnetic snap to clip boundaries,
+   * then hard clamp against the neighbouring tracks (butée). */
+  const resolveEdgePos = useCallback(
+    (id: number, edge: RegionEdge, raw: number): number => {
+      const { view, viewport } = propsRef.current;
+      const bounds: number[] = [];
+      if (view.audio.clips.length > 1) {
+        for (const c of view.audio.clips) {
+          bounds.push(c.start_sample, c.start_sample + c.duration_samples);
+        }
+      }
+      const tol = 8 * viewport.spp;
+      const snap = snapToClipBoundary(raw, bounds, tol);
+      snappedAt.current = snap.snapped ? snap.pos : null;
+      const minLen = Math.round(view.audio.sample_rate * 0.2);
+      return clampEdgeToNeighbors(id, edge, snap.pos, trackSpans(), minLen);
+    },
+    [trackSpans]
+  );
+
   /** Index of the clip under x (only when clip frames are drawn). */
   const clipAt = useCallback((x: number): number | null => {
     const { view, viewport } = propsRef.current;
@@ -799,12 +847,9 @@ export function Waveform(p: Props) {
     const sample = Math.max(0, xToSample(lastPointerX.current, propsRef.current.viewport));
     if (d.type === "select") {
       d.moved = true;
-      onSelectionChange({
-        start: Math.min(d.anchor, sample),
-        end: Math.max(d.anchor, sample),
-      });
+      onSelectionChange(clampSpanToFreeHole(d.anchor, sample, trackSpans()));
     } else if (d.type === "edge") {
-      d.pos = sample;
+      d.pos = resolveEdgePos(d.id, d.edge, sample);
       d.moved = true;
       const now = performance.now();
       if (now - dragSendAt.current >= 90) {
@@ -814,7 +859,7 @@ export function Waveform(p: Props) {
     }
     draw();
     autoScrollRaf.current = requestAnimationFrame(autoScrollTick);
-  }, [draw]);
+  }, [draw, trackSpans, resolveEdgePos]);
   useEffect(() => stopAutoScroll, [stopAutoScroll]);
 
   // Wheel: zoom centered on cursor; horizontal delta pans (non-passive).
@@ -941,7 +986,11 @@ export function Waveform(p: Props) {
         }
         if (d?.type === "edge") {
           const wasMoved = d.moved;
-          d.pos = clampSample(xToSample(x, propsRef.current.viewport));
+          d.pos = resolveEdgePos(
+            d.id,
+            d.edge,
+            clampSample(xToSample(x, propsRef.current.viewport))
+          );
           d.moved = true;
           // One undo snapshot at the first real move, then throttled LIVE
           // previews so the track panel (durations) follows the drag.
@@ -960,10 +1009,9 @@ export function Waveform(p: Props) {
           const cur = clampSample(xToSample(x, propsRef.current.viewport));
           if (Math.abs(cur - d.anchor) > 3 * propsRef.current.viewport.spp) {
             d.moved = true;
-            propsRef.current.onSelectionChange({
-              start: Math.min(d.anchor, cur),
-              end: Math.max(d.anchor, cur),
-            });
+            propsRef.current.onSelectionChange(
+              clampSpanToFreeHole(d.anchor, cur, trackSpans())
+            );
           }
           return;
         }
@@ -988,6 +1036,7 @@ export function Waveform(p: Props) {
           if (d.moved) {
             propsRef.current.onMoveEdge(d.id, d.edge, Math.round(d.pos));
           }
+          snappedAt.current = null;
           draw();
           return;
         }
