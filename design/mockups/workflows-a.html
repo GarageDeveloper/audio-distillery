@@ -178,6 +178,10 @@
     padding: 10px 14px; border-radius: 0 8px 8px 0; color: var(--text-2); font-size: 13.5px; max-width: 74ch;
   }
   .cta-btn { background: var(--copper); color: var(--text-on-accent); border-radius: 6px; padding: 3px 10px; font-weight: 700; border: none; font-size: 10.5px; }
+  .badge {
+    background: var(--text-on-accent); color: var(--copper-hi);
+    border-radius: 8px; padding: 1px 6px; font: 700 9px var(--mono); margin-left: 3px;
+  }
   .check {
     position: absolute; right: 10px; bottom: 34px; z-index: 4; width: 150px;
     background: var(--raised); border: 1px solid var(--line); border-radius: 8px;
@@ -281,7 +285,7 @@
         <span class="grow"></span>
         <span class="mb icon">▶</span><span class="tc">-0:01.62 ⏵ 3</span>
         <span class="grow"></span>
-        <span class="mb">Album…</span><button class="cta-btn">Export album…</button>
+        <span class="mb">Album…</span><button class="cta-btn">Export album… <span class="badge">○ 1</span></button>
       </div>
       <div class="cols">
         <div class="center">
@@ -320,10 +324,10 @@
         </div>
       </div>
       <div class="check">
-        <b>Album readiness</b>
+        <b>Album readiness <span style="float:right; color: var(--text-3); font-weight: 400;">au survol</span></b>
         <div class="ok">3 tracks, titrés</div>
         <div class="ok">Gaps posés (1 segue)</div>
-        <div class="todo">ISRC : 1 manquant</div>
+        <div class="todo" style="color: var(--copper-hi); text-decoration: underline; text-underline-offset: 2px;">ISRC : 1 manquant → corriger</div>
         <div class="ok">Métadonnées album</div>
         <div class="ok">Chaîne master active</div>
       </div>
@@ -338,8 +342,14 @@
       elle reste cliquable — un clic rebascule en Edit et on entend la timeline source, règle inchangée.</span></li>
     <li><b class="n">3</b><span><strong>La TrackList expose la livraison</strong> : gaps et ISRC
       sous chaque ligne (un ISRC manquant se voit), disc breaks saillants.</span></li>
-    <li><b class="n">4</b><span><strong>« Export album… » devient le CTA de la phase</strong>, avec le
-      popover <em>Album readiness</em> : ce qui reste à faire avant de presser, en un coup d'œil.</span></li>
+    <li><b class="n">4</b><span><strong>« Export album… » devient le CTA de la phase.</strong>
+      Le signal est permanent : un badge <span style="font-family: var(--mono); font-weight: 700;">○ 1</span>
+      sur le bouton tant qu'il reste des points ouverts. Le popover <em>Album readiness</em> s'ouvre
+      <strong>au survol ou au focus clavier</strong> du bouton — chaque ligne est cliquable et mène
+      directement au correctif (ISRC manquant → TrackList, métadonnées → dialogue Album).
+      Cliquer Export n'est <em>jamais</em> bloqué : la même checklist s'affiche en tête du dialogue
+      d'export si elle n'est pas verte, et l'on peut assumer et exporter quand même.
+      Tout vert = plus de badge ; le survol affiche « Prêt : 3 tracks · 14:52 ».</span></li>
   </ul>
 
   <h2><span class="n">3</span>Phase Record — l'existant d'abord, la surface ensuite</h2>
