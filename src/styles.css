@@ -274,15 +274,6 @@ kbd {
 }
 
 /* ---------- Empty state ---------- */
-.empty-state {
-  flex: 1;
-  display: flex; flex-direction: column;
-  align-items: center; justify-content: center;
-  gap: 10px;
-  background: var(--wave-bg);
-}
-.empty-state h1 { font-size: 16px; font-weight: 600; }
-.empty-state .sub { color: var(--text-3); font-size: 12px; margin-bottom: 10px; }
 .empty-wave { color: var(--copper); opacity: .25; margin-bottom: 14px; }
 
 /* ---------- Track panel ---------- */
@@ -1312,25 +1303,64 @@ button.wordmark:hover { background: var(--panel-2); }
 }
 .isrc-input { flex: none; width: 170px; font-size: 11.5px; }
 
-/* Record dialog (tape machine, #8) */
-.record-modal { width: 440px; }
-.empty-actions { display: flex; gap: 10px; }
-.num-input { width: 70px; }
-.record-elapsed {
-  display: flex; align-items: baseline; gap: 10px;
-  font-family: var(--font-mono); font-size: 28px; font-weight: 600;
-  color: var(--text-1);
+/* Record surface (tape machine, full pane) */
+.record-surface {
+  flex: 1; min-height: 0; display: flex; gap: 18px;
+  padding: 18px; overflow-y: auto;
+  background: var(--bg-deep);
 }
+.record-setup {
+  flex: 1 1 460px; min-width: 0; max-width: 560px;
+  display: flex; flex-direction: column; gap: 16px;
+}
+.record-open-hint {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: 12.5px; color: var(--text-2);
+  padding: 8px 10px; border: 1px dashed var(--line); border-radius: 8px;
+}
+.record-monitor-badge {
+  margin-left: 8px; font-size: 9px; font-weight: 700;
+  letter-spacing: .08em; text-transform: uppercase;
+  color: var(--ok); border: 1px solid var(--ok);
+  border-radius: 8px; padding: 1px 6px; vertical-align: 1px;
+}
+.record-clock-panel {
+  flex: 1 1 300px; min-width: 240px; align-self: stretch;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 12px; padding: 20px; border-radius: 12px;
+  border: 1px solid var(--line); background: var(--wave-bg);
+}
+.record-clock-panel.rolling { border-color: var(--err); }
+.record-clock {
+  display: flex; align-items: center; gap: 14px;
+  font-family: var(--font-mono); font-size: 56px; font-weight: 600;
+  color: var(--text-1); font-variant-numeric: tabular-nums;
+}
+.record-clock-panel.rolling .record-clock { color: var(--err); }
+.record-clock-sub { font-size: 12px; color: var(--text-3); text-align: center; }
+.record-big { font-size: 15px; padding: 10px 26px; }
+.record-clock-folder {
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 11px; color: var(--text-3);
+}
+.rec-chip {
+  all: unset; cursor: pointer; display: flex; align-items: center; gap: 6px;
+  font-family: var(--font-mono); font-size: 12px; font-weight: 700;
+  color: var(--err); padding: 3px 10px; border-radius: 10px;
+  border: 1px solid var(--err);
+}
+.rec-chip .record-dot { width: 8px; height: 8px; }
+.waveform-holder.phase-record { flex: 0 0 120px; min-height: 120px; pointer-events: none; }
+.waveform-holder.phase-record > .waveform-wrap { opacity: .4; }
+
+/* Record dialog (tape machine, #8) */
+.num-input { width: 70px; }
 .record-dot {
   width: 12px; height: 12px; border-radius: 50%;
   background: var(--err); align-self: center;
   animation: record-pulse 1.2s ease-in-out infinite;
 }
 @keyframes record-pulse { 50% { opacity: .35; } }
-.record-rate { font-size: 11px; font-weight: 400; color: var(--text-3); }
-.record-meters { display: flex; flex-direction: column; gap: 3px; }
-.record-lane { display: flex; align-items: center; gap: 8px; }
-.record-lane-num { font-family: var(--font-mono); font-size: 10px; color: var(--text-3); width: 18px; }
 .record-lane-track {
   flex: 1; height: 8px; border-radius: 4px;
   background: var(--bg-3, rgba(127,127,127,.18)); overflow: hidden; display: block;

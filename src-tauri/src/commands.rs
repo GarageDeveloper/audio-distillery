@@ -808,13 +808,67 @@ pub fn get_default_recording_dir() -> CmdResult<String> {
     Ok(dirs_next_audio_dir().join("Recordings").display().to_string())
 }
 
+/// Open the inputs for MONITORING only: meters live, nothing written.
+/// Replaces any previous monitor; refused while a real take runs.
+#[tauri::command]
+pub async fn record_monitor(
+    state: State<'_, AppState>,
+    config: still_core::RecordConfig,
+) -> CmdResult<still_core::RecordStatus> {
+    let previous = {
+        let mut rec = state.recorder.lock().unwrap();
+        match rec.as_ref() {
+            Some(r) if !r.is_monitor() => {
+                return Err("a recording is already running".into())
+            }
+            _ => rec.take(),
+        }
+    };
+    if let Some(r) = previous {
+        let _ = tauri::async_runtime::spawn_blocking(move || r.stop()).await;
+    }
+    let handle = tauri::async_runtime::spawn_blocking(move || {
+        still_core::RecorderHandle::monitor(&config)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(err)?;
+    let status = handle.status();
+    *state.recorder.lock().unwrap() = Some(handle);
+    Ok(status)
+}
+
+/// Rename a lane while the take rolls; applied to the file at stop.
+#[tauri::command]
+pub fn record_rename_lane(
+    state: State<'_, AppState>,
+    index: usize,
+    name: String,
+) -> CmdResult<()> {
+    let rec = state.recorder.lock().unwrap();
+    let Some(r) = rec.as_ref() else {
+        return Err("no recording is running".into());
+    };
+    r.rename_lane(index, &name).map_err(err)
+}
+
 #[tauri::command]
 pub async fn record_start(
     state: State<'_, AppState>,
     config: still_core::RecordConfig,
 ) -> CmdResult<still_core::RecordStatus> {
-    if state.recorder.lock().unwrap().is_some() {
-        return Err("a recording is already running".into());
+    // A monitor session steps aside for the real take.
+    let previous = {
+        let mut rec = state.recorder.lock().unwrap();
+        match rec.as_ref() {
+            Some(r) if !r.is_monitor() => {
+                return Err("a recording is already running".into())
+            }
+            _ => rec.take(),
+        }
+    };
+    if let Some(r) = previous {
+        let _ = tauri::async_runtime::spawn_blocking(move || r.stop()).await;
     }
     // Tracking and playback share no state, but a quiet transport avoids
     // confusion (and feedback loops through open monitors).

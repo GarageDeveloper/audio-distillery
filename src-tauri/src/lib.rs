@@ -130,6 +130,8 @@ pub fn run() {
             commands::mic_permission,
             commands::request_mic_access,
             commands::get_default_recording_dir,
+            commands::record_monitor,
+            commands::record_rename_lane,
             commands::record_start,
             commands::record_status,
             commands::record_stop,

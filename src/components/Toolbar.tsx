@@ -24,7 +24,8 @@ interface Props {
   onOpen: () => void;
   onAddClips: () => void;
   onAddTake: () => void;
-  onRecord: () => void;
+  /** Elapsed seconds of a rolling take (null = none). */
+  recSeconds: number | null;
   phase: "record" | "edit" | "master";
   masterPulse: boolean;
   onPhaseChange: (phase: "record" | "edit" | "master") => void;
@@ -86,6 +87,17 @@ export function Toolbar(p: Props) {
           </button>
         ))}
       </div>
+      {p.recSeconds != null && p.phase !== "record" && (
+        <button
+          className="rec-chip"
+          title="A take is rolling — click to return to the Record surface"
+          onClick={() => p.onPhaseChange("record")}
+        >
+          <span className="record-dot" />
+          {String(Math.floor(p.recSeconds / 60)).padStart(2, "0")}:
+          {String(Math.floor(p.recSeconds % 60)).padStart(2, "0")}
+        </button>
+      )}
       {p.view && (
         <>
           <button

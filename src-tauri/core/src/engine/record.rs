@@ -67,6 +67,9 @@ pub struct RecordConfig {
 #[ts(export, export_to = "../../../src/types/")]
 pub struct RecordStatus {
     pub recording: bool,
+    /// Monitoring: the stream is open and the meters live, but nothing
+    /// is written — the pre-take "are all lines alive?" check.
+    pub monitoring: bool,
     pub elapsed_seconds: f64,
     pub sample_rate: u32,
     /// Per-lane linear peak since the previous status poll.
@@ -628,6 +631,8 @@ mod mic_auth {
 
 struct RecShared {
     stop: AtomicBool,
+    /// Monitor mode: levels only, no files.
+    monitor: bool,
     frames_written: AtomicU64,
     dropped: AtomicU64,
     /// Per-lane max-hold peak (f32 bits), reset by each status poll.
@@ -641,6 +646,9 @@ pub struct RecorderHandle {
     sample_rate: u32,
     folder: PathBuf,
     files: Vec<PathBuf>,
+    /// Lane names changed DURING the take (index → new name); the files
+    /// are renamed after finalize, at stop.
+    renames: Mutex<std::collections::HashMap<usize, String>>,
 }
 
 /// Next free "Take N" folder inside `base`.
@@ -660,6 +668,16 @@ impl RecorderHandle {
     /// Open the device and start recording. Returns once the stream is
     /// live (or with the device's error).
     pub fn start(cfg: &RecordConfig) -> Result<Self> {
+        Self::open(cfg, false)
+    }
+
+    /// Open the device for MONITORING only: the meters live, nothing is
+    /// written anywhere — the pre-take line check.
+    pub fn monitor(cfg: &RecordConfig) -> Result<Self> {
+        Self::open(cfg, true)
+    }
+
+    fn open(cfg: &RecordConfig, monitor: bool) -> Result<Self> {
         use cpal::traits::{DeviceTrait, HostTrait};
         if cfg.lanes.is_empty() {
             return Err(StillError::InvalidProject(
@@ -671,7 +689,7 @@ impl RecorderHandle {
                 "inputs are numbered from 1".into(),
             ));
         }
-        if cfg.dest_dir.trim().is_empty() {
+        if !monitor && cfg.dest_dir.trim().is_empty() {
             return Err(StillError::InvalidProject(
                 "no recording folder selected".into(),
             ));
@@ -723,24 +741,30 @@ impl RecorderHandle {
         // 0-based device channel per lane, in file order.
         let inputs: Vec<usize> = cfg.lanes.iter().map(|l| l.input as usize - 1).collect();
 
-        let folder = take_folder(Path::new(cfg.dest_dir.trim())).map_err(StillError::Io)?;
-        let mut writers = Vec::with_capacity(lanes);
-        let mut files = Vec::with_capacity(lanes);
-        for (i, lane) in cfg.lanes.iter().enumerate() {
-            // The file name IS the layer name once loaded as multitrack.
-            let base = crate::naming::sanitize_filename(lane.name.trim());
-            let base = if base.is_empty() {
-                format!("Input {:02}", lane.input)
-            } else {
-                base
-            };
-            let path = folder.join(format!("{:02} - {base}.wav", i + 1));
-            writers.push(WavLane::create(&path, rate).map_err(StillError::Io)?);
-            files.push(path);
-        }
+        let (folder, mut writers, files) = if monitor {
+            (PathBuf::new(), Vec::new(), Vec::new())
+        } else {
+            let folder = take_folder(Path::new(cfg.dest_dir.trim())).map_err(StillError::Io)?;
+            let mut writers = Vec::with_capacity(lanes);
+            let mut files = Vec::with_capacity(lanes);
+            for (i, lane) in cfg.lanes.iter().enumerate() {
+                // The file name IS the layer name once loaded as multitrack.
+                let base = crate::naming::sanitize_filename(lane.name.trim());
+                let base = if base.is_empty() {
+                    format!("Input {:02}", lane.input)
+                } else {
+                    base
+                };
+                let path = folder.join(format!("{:02} - {base}.wav", i + 1));
+                writers.push(WavLane::create(&path, rate).map_err(StillError::Io)?);
+                files.push(path);
+            }
+            (folder, writers, files)
+        };
 
         let shared = Arc::new(RecShared {
             stop: AtomicBool::new(false),
+            monitor,
             frames_written: AtomicU64::new(0),
             dropped: AtomicU64::new(0),
             levels: (0..lanes).map(|_| AtomicU32::new(0)).collect(),
@@ -756,6 +780,16 @@ impl RecorderHandle {
         let mut on_input = move |frames: &[f32]| {
             // `frames` is interleaved with dev_ch channels; keep lanes.
             for frame in frames.chunks_exact(dev_ch) {
+                if monitor {
+                    // Meters only — nothing leaves the callback.
+                    for (ch, level) in cb_inputs.iter().zip(shared_cb.levels.iter()) {
+                        let a = frame[*ch].abs();
+                        let _ = level.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |bits| {
+                            (a > f32::from_bits(bits)).then(|| a.to_bits())
+                        });
+                    }
+                    continue;
+                }
                 if producer.slots() < lanes {
                     shared_cb.dropped.fetch_add(1, Ordering::Relaxed);
                     continue;
@@ -901,15 +935,20 @@ impl RecorderHandle {
                     sample_rate: rate,
                     folder,
                     files,
+                    renames: Mutex::new(std::collections::HashMap::new()),
                 })
             }
             Ok(Err(msg)) => {
                 let _ = thread.join();
-                let _ = std::fs::remove_dir_all(&folder);
+                if !monitor {
+                    let _ = std::fs::remove_dir_all(&folder);
+                }
                 Err(StillError::Audio(msg))
             }
             Err(_) => {
-                let _ = std::fs::remove_dir_all(&folder);
+                if !monitor {
+                    let _ = std::fs::remove_dir_all(&folder);
+                }
                 Err(StillError::Audio("the recording thread died".into()))
             }
         }
@@ -922,8 +961,10 @@ impl RecorderHandle {
             .iter()
             .map(|l| f32::from_bits(l.swap(0, Ordering::Relaxed)))
             .collect();
+        let live = !self.shared.stop.load(Ordering::SeqCst);
         RecordStatus {
-            recording: !self.shared.stop.load(Ordering::SeqCst),
+            recording: live && !self.shared.monitor,
+            monitoring: live && self.shared.monitor,
             elapsed_seconds: self.shared.frames_written.load(Ordering::Relaxed) as f64
                 / self.sample_rate.max(1) as f64,
             sample_rate: self.sample_rate,
@@ -934,7 +975,31 @@ impl RecorderHandle {
         }
     }
 
-    /// Stop, finalize every lane and return the recorded files.
+    /// True when this handle only monitors (no files involved).
+    pub fn is_monitor(&self) -> bool {
+        self.shared.monitor
+    }
+
+    /// Rename a lane DURING the take: recorded in memory, applied to the
+    /// finished file at stop (keeping the "NN - name.wav" shape).
+    pub fn rename_lane(&self, index: usize, name: &str) -> Result<()> {
+        if self.shared.monitor {
+            return Ok(()); // nothing on disk to rename
+        }
+        if index >= self.files.len() {
+            return Err(StillError::InvalidProject(format!(
+                "unknown lane index {index}"
+            )));
+        }
+        self.renames
+            .lock()
+            .unwrap()
+            .insert(index, name.trim().to_string());
+        Ok(())
+    }
+
+    /// Stop, finalize every lane, apply pending lane renames and return
+    /// the recorded files (empty for a monitor handle).
     pub fn stop(mut self) -> Result<Vec<PathBuf>> {
         self.shared.stop.store(true, Ordering::SeqCst);
         if let Some(t) = self.thread.take() {
@@ -944,7 +1009,25 @@ impl RecorderHandle {
         if let Some(e) = self.shared.error.lock().unwrap().clone() {
             return Err(StillError::Audio(format!("recording ended with: {e}")));
         }
-        Ok(self.files.clone())
+        let renames = std::mem::take(&mut *self.renames.lock().unwrap());
+        let mut files = self.files.clone();
+        for (index, name) in renames {
+            let base = crate::naming::sanitize_filename(&name);
+            if base.is_empty() {
+                continue;
+            }
+            let old = &files[index];
+            let new_path = self
+                .folder
+                .join(format!("{:02} - {base}.wav", index + 1));
+            if new_path == *old {
+                continue;
+            }
+            if std::fs::rename(old, &new_path).is_ok() {
+                files[index] = new_path;
+            }
+        }
+        Ok(files)
     }
 }
 
