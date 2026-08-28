@@ -824,28 +824,31 @@ export default function App() {
                 playheadSample={playMode === "album" ? -1 : playheadSample}
                 onViewportChange={onViewportChange}
               />
-              {view.album.tracks.length > 0 && (
-                <AlbumStrip
-                  tall={phase === "master"}
-                  isrcById={Object.fromEntries(view.tracks.map((t) => [t.id, t.isrc]))}
-                  album={view.album}
-                  sampleRate={view.audio.sample_rate}
-                  albumGapMs={view.album_gap_ms}
-                  discBreaks={view.album_meta.disc_breaks}
-                  playheadSample={playheadSample}
-                  playMode={playMode}
-                  playing={playback.playing}
-                  onEnterAlbum={enterAlbum}
-                  onExitAlbum={exitAlbum}
-                  onSeek={(sample) =>
-                    void api.playerSeek(sample).then(playback.adopt).catch((e) => showError(String(e)))
-                  }
-                  onTogglePlay={() =>
-                    void api.playerToggle().then(playback.adopt).catch((e) => showError(String(e)))
-                  }
-                  onSetTrackGap={(id, ms) => void apply(() => api.setTrackGap(id, ms))}
-                />
-              )}
+              <AlbumStrip
+                tall={phase === "master"}
+                isrcById={Object.fromEntries(view.tracks.map((t) => [t.id, t.isrc]))}
+                album={view.album}
+                sampleRate={view.audio.sample_rate}
+                albumGapMs={view.album_gap_ms}
+                discBreaks={view.album_meta.disc_breaks}
+                sourceTracks={view.tracks.map((t) => ({
+                  id: t.id,
+                  start_sample: t.start_sample,
+                  end_sample: t.end_sample,
+                }))}
+                playheadSample={playheadSample}
+                playMode={playMode}
+                playing={playback.playing}
+                onSetMode={(m) => (m === "album" ? enterAlbum(null) : exitAlbum())}
+                onEnterAlbum={(sample) => enterAlbum(sample)}
+                onSeek={(sample) =>
+                  void api.playerSeek(sample).then(playback.adopt).catch((e) => showError(String(e)))
+                }
+                onTogglePlay={() =>
+                  void api.playerToggle().then(playback.adopt).catch((e) => showError(String(e)))
+                }
+                onSetTrackGap={(id, ms) => void apply(() => api.setTrackGap(id, ms))}
+              />
               {selection && !proposals && (
                 <div className="proposal-bar">
                   <input

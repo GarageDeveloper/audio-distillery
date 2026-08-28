@@ -42,18 +42,6 @@ interface Props {
   onToggleSnap: () => void;
 }
 
-const PlayIcon = ({ playing }: { playing: boolean }) =>
-  playing ? (
-    <svg width="12" height="14" viewBox="0 0 12 14" fill="currentColor">
-      <rect x="1" y="1" width="3.6" height="12" rx="1" />
-      <rect x="7.4" y="1" width="3.6" height="12" rx="1" />
-    </svg>
-  ) : (
-    <svg width="12" height="14" viewBox="0 0 12 14" fill="currentColor">
-      <path d="M2 1.3c0-.8.9-1.3 1.6-.9l8 5.7c.6.4.6 1.4 0 1.8l-8 5.7c-.7.5-1.6 0-1.6-.9V1.3z" />
-    </svg>
-  );
-
 export function Toolbar(p: Props) {
   const clipCount = p.view?.audio.clips.length ?? 0;
   const firstName = p.view?.audio.path.split(/[/\\]/).pop();
@@ -147,14 +135,6 @@ export function Toolbar(p: Props) {
       )}
 
       <div className="transport">
-        <button
-          className="play-btn"
-          onClick={p.onTogglePlay}
-          disabled={!p.view}
-          title="Play / Pause (Space)"
-        >
-          <PlayIcon playing={p.playing} />
-        </button>
         {p.view && (
           <span className="timecode">
             {formatDuration(p.positionSeconds)}{" "}

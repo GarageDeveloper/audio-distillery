@@ -1532,6 +1532,18 @@ button.wordmark:hover { background: var(--panel-2); }
   text-decoration: underline; text-underline-offset: 2px; font-size: 12px;
 }
 .readiness-line.actionable::before { content: "\25CB "; color: var(--copper-hi); }
+
+/* Source | Album mode toggle inside the single bottom player. */
+.mode-toggle {
+  display: flex; background: var(--bg); border: 1px solid var(--line);
+  border-radius: 7px; overflow: hidden; flex: none;
+}
+.mode-seg {
+  all: unset; cursor: pointer; padding: 3px 10px;
+  font-size: 10.5px; font-weight: 700; color: var(--text-3);
+}
+.mode-seg.on { background: var(--copper); color: var(--text-on-accent); }
+.mode-seg:disabled { opacity: .4; cursor: default; }
 .lane-list {
   display: flex; flex-direction: column; gap: 4px;
   max-height: 220px; overflow-y: auto; margin-bottom: 6px;
