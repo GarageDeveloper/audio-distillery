@@ -1342,6 +1342,13 @@ button.wordmark:hover { background: var(--panel-2); }
 .record-dropped { color: var(--err); font-size: 12px; font-weight: 600; }
 .record-btn.recording { background: var(--err); border-color: var(--err); }
 .record-btn.arming { opacity: .7; animation: record-pulse 1.2s ease-in-out infinite; }
+.mic-perm {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 6px; padding: 8px 10px; border-radius: 6px;
+  font-size: 12px; background: var(--err-dim); color: var(--text-1);
+}
+.mic-perm.denied { color: var(--err); font-weight: 600; }
+.mic-perm-actions { display: flex; gap: 6px; }
 .lane-list {
   display: flex; flex-direction: column; gap: 4px;
   max-height: 220px; overflow-y: auto; margin-bottom: 6px;
