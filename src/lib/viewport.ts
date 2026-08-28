@@ -50,3 +50,24 @@ export function zoomAt(
   const next = { start: anchorSample - anchorX * spp, spp };
   return clampViewport(next, widthPx, totalSamples, minSpp);
 }
+
+/** Signed auto-scroll velocity (px/frame) when a drag sits within `zone`
+ * px of either edge — 0 in the middle, proportional inside the zone,
+ * clamped to ±`max` (positions beyond the edges saturate). */
+export function edgeScrollVelocity(
+  x: number,
+  width: number,
+  zone: number,
+  max: number
+): number {
+  if (width <= 2 * zone) return 0;
+  if (x < zone) {
+    const depth = Math.min(1, (zone - x) / zone);
+    return -depth * max;
+  }
+  if (x > width - zone) {
+    const depth = Math.min(1, (x - (width - zone)) / zone);
+    return depth * max;
+  }
+  return 0;
+}

@@ -67,6 +67,7 @@ export default function App() {
   const [selection, setSelection] = useState<RegionSpan | null>(null);
   const [pendingStart, setPendingStart] = useState<number | null>(null);
   const [selectedTrack, setSelectedTrack] = useState<number | null>(null);
+  const [selectedClip, setSelectedClip] = useState<number | null>(null);
   const [viewport, setViewport] = useState<Viewport>({ start: 0, spp: 1 });
   const [waveWidth, setWaveWidth] = useState(1000);
   const [theme, setTheme] = useState<Theme>(
@@ -118,7 +119,7 @@ export default function App() {
   const loadPaths = useCallback(
     async (
       paths: string[],
-      mode: "open" | "append" | "project" | "multitrack" | "layers" | "take"
+      mode: "open" | "album" | "append" | "project" | "multitrack" | "layers" | "take"
     ) => {
       const first = paths[0].split(/[/\\]/).pop() ?? paths[0];
       const fileName = paths.length > 1 ? `${first} +${paths.length - 1}` : first;
@@ -137,6 +138,10 @@ export default function App() {
                 : mode === "multitrack"
                   ? await api.loadMultitrack(paths)
                   : await api.loadAudio(paths);
+        if (mode === "album" && v) {
+          // Sequential import as album tracks: one titled track per clip.
+          v = await api.clipsToTracks(null);
+        }
         setView(v);
       } catch (e) {
         // A user-triggered cancel is not an error worth a toast.
@@ -152,6 +157,7 @@ export default function App() {
           setSelection(null);
           setPendingStart(null);
           setSelectedTrack(null);
+          setSelectedClip(null);
         }
       }
     },
@@ -321,6 +327,23 @@ export default function App() {
   }, [selection, view]);
 
   // Keyboard shortcuts.
+  /** Delete a clip (ripple). The rescan streams load:progress, so the
+   * usual loading overlay narrates it. */
+  const removeClip = useCallback(
+    async (index: number) => {
+      setSelectedClip(null);
+      setLoading({ active: true, progress: 0, fileName: "Updating timeline…" });
+      try {
+        const v = await api.removeClip(index);
+        setView(v);
+      } catch (e) {
+        showError(String(e));
+      }
+      setLoading({ active: false, progress: 0, fileName: "" });
+    },
+    [showError]
+  );
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
@@ -353,6 +376,7 @@ export default function App() {
         setPendingStart(null);
         setSelection(null);
         setProposals(null);
+        setSelectedClip(null);
       } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
         e.preventDefault();
         const delta = (e.key === "ArrowLeft" ? -1 : 1) * (e.shiftKey ? 30 : 5);
@@ -373,6 +397,9 @@ export default function App() {
         e.preventDefault();
         setSelectedTrack(null);
         void apply(() => api.removeRegion(selectedTrack));
+      } else if ((e.key === "Delete" || e.key === "Backspace") && selectedClip != null) {
+        e.preventDefault();
+        void removeClip(selectedClip);
       } else if (e.key === "e" && mod) {
         e.preventDefault();
         setExportOpen(true);
@@ -380,7 +407,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [view, playback, apply, selectedTrack, selection, pendingStart, titleDraft, addRegion, saveProject, showError]);
+  }, [view, playback, apply, selectedTrack, selectedClip, removeClip, selection, pendingStart, titleDraft, addRegion, saveProject, showError]);
 
   const onViewportChange = useCallback(
     (vp: Viewport) => {
@@ -441,6 +468,32 @@ export default function App() {
   }, [view, showError]);
 
   const playheadSample = playback.positionSeconds * (view?.audio.sample_rate ?? 44100);
+
+  /** Shift-click completes a selection from the most sensible anchor:
+   * the far edge of an existing selection (extension), else the pending
+   * M-mark, else the playhead. */
+  const onShiftClick = useCallback(
+    (sample: number) => {
+      const anchor = selection
+        ? Math.abs(sample - selection.start) >= Math.abs(sample - selection.end)
+          ? selection.start
+          : selection.end
+        : pendingStart ?? Math.round(playheadSample);
+      setPendingStart(null);
+      setSelection({
+        start: Math.min(anchor, sample),
+        end: Math.max(anchor, sample),
+      });
+    },
+    [selection, pendingStart, playheadSample]
+  );
+
+  // A structural change can shrink the clip list under the selection.
+  useEffect(() => {
+    if (view && selectedClip != null && selectedClip >= view.audio.clips.length) {
+      setSelectedClip(null);
+    }
+  }, [view, selectedClip]);
 
   // Auto-split proposals filtered by the live minimum-length criterion,
   // minus the ones excluded during review.
@@ -504,6 +557,7 @@ export default function App() {
                 selection={selection}
                 pendingStart={pendingStart}
                 selectedTrack={selectedTrack}
+                selectedClip={selectedClip}
                 onWidthChange={setWaveWidth}
                 onViewportChange={onViewportChange}
                 onSeek={seekTo}
@@ -514,6 +568,8 @@ export default function App() {
                   void apply(() => api.moveRegionEdgePreview(id, edge, pos))
                 }
                 onSelectTrack={setSelectedTrack}
+                onSelectClip={setSelectedClip}
+                onShiftClick={onShiftClick}
                 onToggleLayerCollapsed={(id, c) =>
                   void apply(() => api.setLayerCollapsed(id, c))
                 }
@@ -529,6 +585,38 @@ export default function App() {
                 playheadSample={playheadSample}
                 onViewportChange={onViewportChange}
               />
+              {selectedClip != null &&
+                selectedTrack == null &&
+                !selection &&
+                !proposals &&
+                view.audio.clips[selectedClip] && (
+                  <div className="proposal-bar clip-bar">
+                    <span className="clip-bar-name" title={view.audio.clips[selectedClip].path}>
+                      {view.audio.clips[selectedClip].name}
+                    </span>
+                    <button
+                      className="btn"
+                      title="Create a track spanning exactly this clip, titled after the file"
+                      onClick={() => {
+                        const idx = selectedClip;
+                        setSelectedClip(null);
+                        void apply(() => api.clipsToTracks([idx]));
+                      }}
+                    >
+                      Make track
+                    </button>
+                    <button
+                      className="btn"
+                      title="Remove this clip from the timeline — later clips and markers close the gap (undoable). Source files are never touched."
+                      onClick={() => void removeClip(selectedClip)}
+                    >
+                      Delete clip (⌫)
+                    </button>
+                    <button className="btn" onClick={() => setSelectedClip(null)}>
+                      Clear
+                    </button>
+                  </div>
+                )}
               {selection && !proposals && (
                 <div className="proposal-bar">
                   <input
@@ -878,6 +966,18 @@ export default function App() {
               <strong>{view ? "Append to timeline" : "One after another"}</strong>
               <span>Clips laid back-to-back on one timeline (vinyl sides, concert parts)</span>
             </button>
+            {!view && dropChoice.length > 1 && (
+              <button
+                className="btn choice"
+                onClick={() => {
+                  void loadPaths(dropChoice, "album");
+                  setDropChoice(null);
+                }}
+              >
+                <strong>One after another — as album tracks</strong>
+                <span>Each file becomes a clip AND a titled track — ready to master an album</span>
+              </button>
+            )}
             <button
               className="btn choice"
               onClick={() => {

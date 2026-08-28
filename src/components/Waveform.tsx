@@ -6,7 +6,7 @@ import type { RegionEdge } from "../types/RegionEdge";
 import { api } from "../api";
 import { formatTimecode, formatDuration } from "../lib/format";
 import type { Viewport } from "../lib/viewport";
-import { sampleToX, xToSample, zoomAt, clampViewport } from "../lib/viewport";
+import { sampleToX, xToSample, zoomAt, clampViewport, edgeScrollVelocity } from "../lib/viewport";
 
 const RULER_H = 26;
 const MIN_LANE_H = 90; // comfortable minimum per expanded layer lane
@@ -31,6 +31,8 @@ interface Props {
   selection: RegionSpan | null;
   pendingStart: number | null;
   selectedTrack: number | null;
+  /** Index into view.audio.clips of the selected clip (null = none). */
+  selectedClip: number | null;
   onWidthChange: (w: number) => void;
   onViewportChange: (vp: Viewport) => void;
   onSeek: (sample: number) => void;
@@ -39,6 +41,9 @@ interface Props {
   onBeginEdgeDrag: () => void;
   onMoveEdge: (id: number, edge: RegionEdge, sample: number) => void;
   onSelectTrack: (id: number | null) => void;
+  onSelectClip: (index: number | null) => void;
+  /** Shift-click: complete a selection from the App-held anchor. */
+  onShiftClick: (sample: number) => void;
   onRemoveRegion: (id: number) => void;
   onToggleLayerCollapsed: (id: number, collapsed: boolean) => void;
 }
@@ -81,6 +86,10 @@ export function Waveform(p: Props) {
   const labelRects = useRef<{ x: number; y: number; w: number; h: number; id: number; collapsed: boolean }[]>([]);
   const scrollbarDrag = useRef<{ startY: number; startScroll: number } | null>(null);
   const dragSendAt = useRef(0);
+  const clipRects = useRef<{ x: number; y: number; w: number; h: number; index: number }[]>([]);
+  // Drag auto-scroll at the viewport edges.
+  const autoScrollRaf = useRef<number | null>(null);
+  const lastPointerX = useRef(0);
 
   const propsRef = useRef(p);
   propsRef.current = p;
@@ -416,33 +425,42 @@ export function Waveform(p: Props) {
     // Clips: each source file gets a vivid 2 px frame (theme token --clip)
     // and a solid name badge at the bottom, so the timeline composition is
     // obvious at a glance.
+    clipRects.current = [];
     if (view.audio.clips.length > 1) {
       const clipColor = css("--clip");
+      const { selectedClip } = propsRef.current;
       ctx.save();
-      for (const clip of view.audio.clips) {
+      view.audio.clips.forEach((clip, ci) => {
         const x0 = sampleToX(clip.start_sample, vp);
         const x1 = sampleToX(clip.start_sample + clip.duration_samples, vp);
-        if (x1 < 0 || x0 > w) continue;
+        if (x1 < 0 || x0 > w) return;
+        const selected = ci === selectedClip;
+        if (selected) {
+          ctx.fillStyle = clipColor;
+          ctx.globalAlpha = 0.08;
+          ctx.fillRect(x0 + 1, RULER_H + 1, x1 - x0 - 2, h - RULER_H - 2);
+        }
         ctx.strokeStyle = clipColor;
-        ctx.lineWidth = 2;
-        ctx.globalAlpha = 0.9;
+        ctx.lineWidth = selected ? 3 : 2;
+        ctx.globalAlpha = selected ? 1 : 0.9;
         ctx.strokeRect(x0 + 1, RULER_H + 1, x1 - x0 - 2, h - RULER_H - 2);
         ctx.globalAlpha = 1;
-      }
+      });
       ctx.font = "700 11px ui-monospace, Menlo, Consolas, monospace";
       ctx.textBaseline = "middle";
-      for (const clip of view.audio.clips) {
+      view.audio.clips.forEach((clip, ci) => {
         const x0 = sampleToX(clip.start_sample, vp);
         const x1 = sampleToX(clip.start_sample + clip.duration_samples, vp);
-        if (x1 < 0 || x0 > w) continue;
+        if (x1 < 0 || x0 > w) return;
         const label = clip.name;
         const tw = ctx.measureText(label).width;
         const bx = Math.max(x0, 0) + 5;
         const bh = 20;
         const by = h - bh - 5;
         const bw = Math.min(tw + 16, Math.min(x1, w) - bx - 4);
-        if (bw < 30) continue;
-        ctx.fillStyle = clipColor;
+        if (bw < 30) return;
+        const selected = ci === propsRef.current.selectedClip;
+        ctx.fillStyle = selected ? css("--copper-hi") : clipColor;
         ctx.beginPath();
         ctx.roundRect(bx, by, bw, bh, 5);
         ctx.fill();
@@ -453,7 +471,8 @@ export function Waveform(p: Props) {
         ctx.clip();
         ctx.fillText(label, bx + 8, by + bh / 2 + 1);
         ctx.restore();
-      }
+        clipRects.current.push({ x: bx, y: by, w: bw, h: bh, index: ci });
+      });
       ctx.restore();
     }
 
@@ -750,6 +769,54 @@ export function Waveform(p: Props) {
     return t?.id ?? null;
   }, []);
 
+  /** Index of the clip under x (only when clip frames are drawn). */
+  const clipAt = useCallback((x: number): number | null => {
+    const { view, viewport } = propsRef.current;
+    if (view.audio.clips.length <= 1) return null;
+    const s = xToSample(x, viewport);
+    const i = view.audio.clips.findIndex(
+      (c) => s >= c.start_sample && s < c.start_sample + c.duration_samples
+    );
+    return i >= 0 ? i : null;
+  }, []);
+
+  /** Auto-scroll while a drag hugs a viewport edge: pans the viewport
+   * (App clamps) and keeps the dragged thing following the pointer. */
+  const stopAutoScroll = useCallback(() => {
+    if (autoScrollRaf.current != null) {
+      cancelAnimationFrame(autoScrollRaf.current);
+      autoScrollRaf.current = null;
+    }
+  }, []);
+  const autoScrollTick = useCallback(() => {
+    autoScrollRaf.current = null;
+    const d = drag.current;
+    if (!d) return;
+    const { viewport, onViewportChange, onSelectionChange, onMoveEdge } = propsRef.current;
+    const v = edgeScrollVelocity(lastPointerX.current, sizeRef.current.w, 40, 18);
+    if (v === 0) return;
+    onViewportChange({ start: viewport.start + v * viewport.spp, spp: viewport.spp });
+    const sample = Math.max(0, xToSample(lastPointerX.current, propsRef.current.viewport));
+    if (d.type === "select") {
+      d.moved = true;
+      onSelectionChange({
+        start: Math.min(d.anchor, sample),
+        end: Math.max(d.anchor, sample),
+      });
+    } else if (d.type === "edge") {
+      d.pos = sample;
+      d.moved = true;
+      const now = performance.now();
+      if (now - dragSendAt.current >= 90) {
+        dragSendAt.current = now;
+        onMoveEdge(d.id, d.edge, Math.round(d.pos));
+      }
+    }
+    draw();
+    autoScrollRaf.current = requestAnimationFrame(autoScrollTick);
+  }, [draw]);
+  useEffect(() => stopAutoScroll, [stopAutoScroll]);
+
   // Wheel: zoom centered on cursor; horizontal delta pans (non-passive).
   useEffect(() => {
     const el = wrapRef.current;
@@ -824,6 +891,17 @@ export function Waveform(p: Props) {
             return;
           }
         }
+        // Clip name badge: explicit clip selection (no drag started).
+        const badge = clipRects.current.find(
+          (r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h
+        );
+        if (badge) {
+          propsRef.current.onSelectClip(badge.index);
+          propsRef.current.onSelectTrack(null);
+          propsRef.current.onSeek(Math.round(clampSample(xToSample(x, propsRef.current.viewport))));
+          draw();
+          return;
+        }
         const edge = edgeAt(x);
         if (edge) {
           drag.current = { type: "edge", id: edge.id, edge: edge.edge, pos: edge.sample, moved: false };
@@ -852,6 +930,15 @@ export function Waveform(p: Props) {
           return;
         }
         const d = drag.current;
+        if (d) {
+          lastPointerX.current = x;
+          const v = edgeScrollVelocity(x, sizeRef.current.w, 40, 18);
+          if (v !== 0 && autoScrollRaf.current == null) {
+            autoScrollRaf.current = requestAnimationFrame(autoScrollTick);
+          } else if (v === 0) {
+            stopAutoScroll();
+          }
+        }
         if (d?.type === "edge") {
           const wasMoved = d.moved;
           d.pos = clampSample(xToSample(x, propsRef.current.viewport));
@@ -889,6 +976,7 @@ export function Waveform(p: Props) {
         wrapRef.current!.style.cursor = edge ? "ew-resize" : "default";
       }}
       onPointerUp={(e) => {
+        stopAutoScroll();
         if (scrollbarDrag.current) {
           scrollbarDrag.current = null;
           return;
@@ -905,18 +993,35 @@ export function Waveform(p: Props) {
         }
         if (d?.type === "select") {
           if (!d.moved) {
-            // Simple click: seek, select the clicked track (if any), clear selection.
             const sample = clampSample(xToSample(x, propsRef.current.viewport));
-            propsRef.current.onSelectionChange(null);
-            propsRef.current.onSelectTrack(trackAt(x));
-            propsRef.current.onSeek(Math.round(sample));
+            if (e.shiftKey) {
+              // Shift-click: complete a selection from the App-held
+              // anchor (pending start / playhead / selection edge).
+              propsRef.current.onShiftClick(Math.round(sample));
+            } else {
+              // Simple click: seek, select track and clip under the
+              // cursor, clear selection.
+              propsRef.current.onSelectionChange(null);
+              propsRef.current.onSelectTrack(trackAt(x));
+              propsRef.current.onSelectClip(clipAt(x));
+              propsRef.current.onSeek(Math.round(sample));
+            }
           }
           draw();
         }
       }}
       onContextMenu={(e) => {
         e.preventDefault();
-        const { x } = toLocal(e);
+        const { x, y } = toLocal(e);
+        const badge = clipRects.current.find(
+          (r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h
+        );
+        if (badge) {
+          propsRef.current.onSelectClip(badge.index);
+          propsRef.current.onSelectTrack(null);
+          draw();
+          return;
+        }
         const edge = edgeAt(x);
         const id = edge?.id ?? trackAt(x);
         if (id != null) propsRef.current.onRemoveRegion(id);

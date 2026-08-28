@@ -1349,6 +1349,12 @@ button.wordmark:hover { background: var(--panel-2); }
 }
 .mic-perm.denied { color: var(--err); font-weight: 600; }
 .mic-perm-actions { display: flex; gap: 6px; }
+.clip-bar { display: flex; align-items: center; gap: 8px; }
+.clip-bar-name {
+  font-family: var(--font-mono); font-size: 12px; font-weight: 700;
+  color: var(--text-1); min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .lane-list {
   display: flex; flex-direction: column; gap: 4px;
   max-height: 220px; overflow-y: auto; margin-bottom: 6px;
