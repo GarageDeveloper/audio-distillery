@@ -119,6 +119,9 @@ export const api = {
   detectSilences: (params: SilenceParams, layerId: number | null) =>
     invoke<RegionSpan[]>("detect_silences", { params, layerId }),
   listInputDevices: () => invoke<InputDeviceInfo[]>("list_input_devices"),
+  micPermission: () => invoke<string>("mic_permission"),
+  requestMicAccess: (reset: boolean) =>
+    invoke<void>("request_mic_access", { reset }),
   getDefaultRecordingDir: () => invoke<string>("get_default_recording_dir"),
   recordStart: (config: RecordConfig) =>
     invoke<RecordStatus>("record_start", { config }),

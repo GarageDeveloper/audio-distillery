@@ -547,6 +547,83 @@ impl WavLane {
 /// While true, the device watcher stays away from the audio HAL.
 static WATCH_PAUSED: AtomicBool = AtomicBool::new(false);
 
+/// Microphone/input authorization state:
+/// `"granted" | "denied" | "undetermined" | "restricted" | "unknown"`.
+/// macOS is the platform where an unauthorized input yields SILENT
+/// zeros with no error; elsewhere the state is not exposed ("unknown").
+pub fn mic_permission() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        mic_auth::status()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        "unknown"
+    }
+}
+
+/// Trigger the OS microphone prompt when it has never been answered:
+/// briefly opens the default input on a throwaway thread — the OS
+/// attributes the access to the app and shows its consent dialog (which
+/// survives the stream closing). No-op once the decision exists; poll
+/// [`mic_permission`] to observe the outcome.
+pub fn request_mic_access() {
+    std::thread::spawn(|| {
+        use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+        let host = cpal::default_host();
+        let Some(dev) = host.default_input_device() else {
+            return;
+        };
+        let Ok(sup) = dev.default_input_config() else {
+            return;
+        };
+        let config = sup.config();
+        if let Ok(s) = dev.build_input_stream(&config, |_: &[f32], _: &_| {}, |_| {}, None) {
+            let _ = s.play();
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            drop(s);
+        }
+    });
+}
+
+/// `AVCaptureDevice authorizationStatusForMediaType:` via the ObjC
+/// runtime (0 = notDetermined, 1 = restricted, 2 = denied,
+/// 3 = authorized).
+#[cfg(target_os = "macos")]
+mod mic_auth {
+    use std::os::raw::{c_char, c_void};
+
+    #[link(name = "objc")]
+    extern "C" {
+        fn objc_getClass(name: *const c_char) -> *mut c_void;
+        fn sel_registerName(name: *const c_char) -> *mut c_void;
+        fn objc_msgSend();
+    }
+    #[link(name = "AVFoundation", kind = "framework")]
+    extern "C" {
+        static AVMediaTypeAudio: *mut c_void;
+    }
+
+    pub fn status() -> &'static str {
+        unsafe {
+            let cls = objc_getClass(c"AVCaptureDevice".as_ptr());
+            let sel = sel_registerName(c"authorizationStatusForMediaType:".as_ptr());
+            if cls.is_null() || sel.is_null() {
+                return "unknown";
+            }
+            let send: extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> isize =
+                std::mem::transmute(objc_msgSend as *const ());
+            match send(cls, sel, AVMediaTypeAudio) {
+                0 => "undetermined",
+                1 => "restricted",
+                2 => "denied",
+                3 => "granted",
+                _ => "unknown",
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 
 struct RecShared {
@@ -965,6 +1042,13 @@ mod tests {
             let peak = r.samples::<i32>().map(|v| v.unwrap().abs()).max().unwrap_or(0);
             eprintln!("peak {f:?} = {peak} ({:.1} dBFS)", 20.0 * ((peak.max(1) as f64) / 8388607.0).log10());
         }
+    }
+
+    /// Print the microphone authorization state (manual check).
+    #[test]
+    #[ignore]
+    fn print_mic_permission() {
+        eprintln!("mic permission: {}", mic_permission());
     }
 
     /// Print the input devices this machine exposes (manual check).

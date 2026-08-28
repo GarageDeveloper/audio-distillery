@@ -628,6 +628,28 @@ pub async fn list_input_devices() -> CmdResult<Vec<still_core::InputDeviceInfo>>
 }
 
 #[tauri::command]
+pub fn mic_permission() -> CmdResult<String> {
+    Ok(still_core::mic_permission().to_string())
+}
+
+/// Ask the OS for microphone access. `reset` first forgets a previous
+/// denial for THIS app (macOS `tccutil reset`, scoped to our bundle id)
+/// so the consent dialog can appear again.
+#[tauri::command]
+pub fn request_mic_access(reset: bool) -> CmdResult<()> {
+    #[cfg(target_os = "macos")]
+    if reset {
+        let _ = std::process::Command::new("tccutil")
+            .args(["reset", "Microphone", "com.garagedeveloper.audiodistillery"])
+            .output();
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = reset;
+    still_core::request_mic_access();
+    Ok(())
+}
+
+#[tauri::command]
 pub fn get_default_recording_dir() -> CmdResult<String> {
     Ok(dirs_next_audio_dir().join("Recordings").display().to_string())
 }

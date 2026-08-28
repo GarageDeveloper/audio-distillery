@@ -121,6 +121,8 @@ pub fn run() {
             commands::rename_track,
             commands::set_track_isrc,
             commands::list_input_devices,
+            commands::mic_permission,
+            commands::request_mic_access,
             commands::get_default_recording_dir,
             commands::record_start,
             commands::record_status,

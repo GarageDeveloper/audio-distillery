@@ -36,8 +36,8 @@ pub use peaks::{merged_base_pyramid, merged_query, PeakPyramid, PeakSlice};
 pub use chain_presets::{ChainPreset, ChainPresetInfo};
 pub use plugins::{create_plugin, list_plugins, PluginFormat, PluginInfo};
 pub use engine::record::{
-    list_input_devices, watch_input_devices, InputDeviceInfo, RecordConfig, RecordLane,
-    RecordStatus, RecorderHandle,
+    list_input_devices, mic_permission, request_mic_access, watch_input_devices,
+    InputDeviceInfo, RecordConfig, RecordLane, RecordStatus, RecorderHandle,
 };
 pub use engine::{LayerPlay, MasterPluginSpec, MeterState, PlaybackState, PlayerHandle, VolumeAutomation};
 pub use project::{

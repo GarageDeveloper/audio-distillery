@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 import type { InputDeviceInfo } from "../types/InputDeviceInfo";
 import type { RecordLane } from "../types/RecordLane";
@@ -40,6 +41,9 @@ export function RecordDialog({ onClose, onError, onRecorded }: Props) {
   const holds = useRef<number[]>([]);
   // True once ANY lane has shown signal during this take.
   const sawSignal = useRef(false);
+  // OS microphone authorization: granted | denied | undetermined |
+  // restricted | unknown (platforms that don't expose it).
+  const [micPerm, setMicPerm] = useState<string>("unknown");
 
   const recording = status?.recording ?? false;
   const selected = devices.find((d) => keyOf(d) === device);
@@ -66,6 +70,7 @@ export function RecordDialog({ onClose, onError, onRecorded }: Props) {
       .catch(() => {});
     // Adopt an already-running recording if the dialog was reopened.
     api.recordStatus().then((s) => s && setStatus(s)).catch(() => {});
+    api.micPermission().then(setMicPerm).catch(() => {});
     try {
       const saved = JSON.parse(localStorage.getItem(SETUP_KEY) ?? "null");
       if (saved?.lanes?.length) {
@@ -77,6 +82,17 @@ export function RecordDialog({ onClose, onError, onRecorded }: Props) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Track the authorization until it lands on granted — it changes
+  // under our feet when the user answers the prompt or flips the
+  // System Settings toggle.
+  useEffect(() => {
+    if (micPerm === "granted" || micPerm === "unknown") return;
+    const t = window.setInterval(() => {
+      api.micPermission().then(setMicPerm).catch(() => {});
+    }, 1200);
+    return () => window.clearInterval(t);
+  }, [micPerm]);
 
   // Hot-plug: the backend watcher (CoreAudio listener + off-thread
   // enumeration) pushes an event ONLY when the topology changes — no
@@ -201,6 +217,46 @@ export function RecordDialog({ onClose, onError, onRecorded }: Props) {
                 ))}
               </select>
               <div className="hint">The list refreshes itself when devices are plugged or unplugged.</div>
+              {micPerm === "undetermined" && (
+                <div className="mic-perm">
+                  macOS has not been asked for microphone access yet.
+                  <button
+                    className="btn"
+                    onClick={() => {
+                      void api.requestMicAccess(false);
+                    }}
+                  >
+                    Grant access…
+                  </button>
+                </div>
+              )}
+              {(micPerm === "denied" || micPerm === "restricted") && (
+                <div className="mic-perm denied">
+                  Microphone access is {micPerm} for AudioDistillery — every
+                  input records silence.
+                  <span className="mic-perm-actions">
+                    <button
+                      className="btn"
+                      onClick={() =>
+                        void openUrl(
+                          "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+                        )
+                      }
+                    >
+                      Open System Settings
+                    </button>
+                    <button
+                      className="btn"
+                      title="Forget the previous decision for this app and show the consent dialog again"
+                      onClick={() => {
+                        void api.requestMicAccess(true);
+                      }}
+                    >
+                      Ask again
+                    </button>
+                  </span>
+                </div>
+              )}
             </div>
 
             <div className="field">
@@ -370,9 +426,10 @@ export function RecordDialog({ onClose, onError, onRecorded }: Props) {
             )}
             {!sawSignal.current && elapsed > 3 && (
               <div className="record-dropped">
-                ⚠ No signal on any input — the OS may be blocking microphone
-                access (macOS: System Settings → Privacy &amp; Security →
-                Microphone), or the wrong interface is selected.
+                ⚠ No signal on any input yet —{" "}
+                {micPerm === "denied" || micPerm === "restricted"
+                  ? "microphone access is blocked (see the setup screen)."
+                  : "check the selected interface, its inputs and the cables."}
               </div>
             )}
             {status.error && <div className="record-dropped">⚠ {status.error}</div>}
