@@ -707,12 +707,16 @@ impl RecorderHandle {
         .ok_or_else(|| {
             StillError::Audio(format!("input device \"{}\" not found", cfg.device))
         })?;
-        // Freeze the device watcher for the whole take.
-        WATCH_PAUSED.store(true, Ordering::SeqCst);
-        let unpause = scopeguard();
+        // Freeze the device watcher for the whole take — but ONLY for a
+        // real take: a monitor stream runs whenever the Record surface
+        // is open, and hot-plug must keep working under it.
+        if !monitor {
+            WATCH_PAUSED.store(true, Ordering::SeqCst);
+        }
+        let unpause = scopeguard(!monitor);
         struct Unpause(bool);
-        fn scopeguard() -> Unpause {
-            Unpause(true)
+        fn scopeguard(armed: bool) -> Unpause {
+            Unpause(armed)
         }
         impl Unpause {
             fn disarm(mut self) {

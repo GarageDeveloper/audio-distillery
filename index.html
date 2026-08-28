@@ -4,6 +4,20 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AudioDistillery</title>
+    <script>
+      // Paint the saved theme's ground before any CSS or JS loads, so a
+      // slow dev-server start never flashes the wrong color.
+      try {
+        var t = localStorage.getItem("still-theme");
+        document.documentElement.style.background =
+          t === "light" ? "#EAE3D6"
+          : t === "signal" ? "#070A0E"
+          : t === "atelier" ? "#1C1D21"
+          : "#100D09";
+      } catch (e) {
+        document.documentElement.style.background = "#100D09";
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>
