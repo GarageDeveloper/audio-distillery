@@ -18,6 +18,9 @@ pub struct AppState {
     pub chain: ChainHost,
     /// Live multitrack recorder (tape machine, #8). None = idle.
     pub recorder: Mutex<Option<still_core::RecorderHandle>>,
+    /// Transport mode: true = the ALBUM program (target timeline) is
+    /// loaded in the player. Ephemeral — never persisted.
+    pub album_mode: AtomicBool,
 }
 
 impl AppState {
@@ -31,6 +34,7 @@ impl AppState {
             editors: EditorRegistry::default(),
             chain: ChainHost::default(),
             recorder: Mutex::new(None),
+            album_mode: AtomicBool::new(false),
         }
     }
 }

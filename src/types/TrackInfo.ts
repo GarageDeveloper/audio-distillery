@@ -25,6 +25,14 @@ layer_volumes: Array<number>,
  */
 isrc: string, 
 /**
+ * Raw per-boundary override (None = following the album default).
+ */
+gap_before_ms: number | null, 
+/**
+ * Resolved gap actually applied before this track (0 for track 1).
+ */
+gap_before_effective_ms: number, 
+/**
  * This track's insert chain (master-bus position, active in its span).
  */
 inserts: Array<MasteringPluginView>, };

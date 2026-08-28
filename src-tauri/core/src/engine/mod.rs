@@ -72,9 +72,18 @@ pub struct PlaybackState {
     pub ready: bool,
 }
 
-/// One playable item: a file (Some(path)) or a silent gap (None), with its
-/// duration in seconds. Gaps keep take-aligned layers in sync.
-type Playlist = Vec<(Option<PathBuf>, f64)>;
+/// One playable item: a file (Some(path)) or a silent gap (None), with
+/// its duration in seconds. Gaps keep take-aligned layers in sync;
+/// `source_offset` (samples) starts a file item mid-file — the album
+/// program cuts tracks inside clips with it.
+#[derive(Debug, Clone)]
+pub struct PlayEntry {
+    pub path: Option<PathBuf>,
+    pub seconds: f64,
+    pub source_offset: u64,
+}
+
+type Playlist = Vec<PlayEntry>;
 
 /// One layer to play: its sequential clips.
 #[derive(Debug, Clone)]
@@ -120,6 +129,16 @@ enum Cmd {
         automation: VolumeAutomation,
         sample_rate: u32,
         channels: usize,
+    },
+    /// Replace the PROGRAM (decoders, automation, length) while keeping
+    /// the open output stream, resampler and meter — the light-weight
+    /// sibling of Load for mode toggles and live gap edits. Resumes at
+    /// `resume_at` seconds, paused/playing state preserved by the caller.
+    SetProgram {
+        layers: Vec<LayerPlay>,
+        total_seconds: f64,
+        automation: VolumeAutomation,
+        resume_at: f64,
     },
     SetAutomation(VolumeAutomation),
     ResetMeter,
@@ -215,6 +234,23 @@ impl PlayerHandle {
         })
     }
 
+    /// Swap the loaded program without renegotiating the device (same
+    /// session rate/channels). See [`Cmd::SetProgram`].
+    pub fn set_program(
+        &self,
+        layers: Vec<LayerPlay>,
+        total_seconds: f64,
+        automation: VolumeAutomation,
+        resume_at_seconds: f64,
+    ) -> Result<()> {
+        self.send(Cmd::SetProgram {
+            layers,
+            total_seconds,
+            automation,
+            resume_at: resume_at_seconds,
+        })
+    }
+
     pub fn set_automation(&self, automation: VolumeAutomation) -> Result<()> {
         self.send(Cmd::SetAutomation(automation))
     }
@@ -300,12 +336,13 @@ impl PlayerHandle {
 fn to_items(playlist: &Playlist, sample_rate: u32) -> Vec<PlayItem> {
     playlist
         .iter()
-        .map(|(path, secs)| {
-            let samples = (secs * sample_rate as f64).round() as u64;
-            match path {
+        .map(|e| {
+            let samples = (e.seconds * sample_rate as f64).round() as u64;
+            match &e.path {
                 Some(p) => PlayItem::File {
                     path: p.clone(),
                     samples,
+                    offset: e.source_offset,
                 },
                 None => PlayItem::Silence { samples },
             }
@@ -461,6 +498,37 @@ fn render_thread(rx: Receiver<Cmd>, shared: Arc<Shared>) {
                         .map(|(span, inserts)| render::InsertSection::new(span, inserts))
                         .collect();
                     install_lanes(r, std::mem::take(&mut pending_lanes));
+                }
+            }
+            Ok(Cmd::SetProgram {
+                layers,
+                total_seconds,
+                automation,
+                resume_at,
+            }) => {
+                // Same session: rate/channels unchanged, device stays open.
+                let sample_rate = shared.sample_rate.load(Ordering::Relaxed).max(1) as u32;
+                let channels = renderer.as_ref().map(|r| r.channels).unwrap_or(2);
+                let total_samples = (total_seconds * sample_rate as f64).round() as u64;
+                let decoders: Vec<LayerDecoder> = layers
+                    .iter()
+                    .map(|l| LayerDecoder::new(to_items(&l.playlist, sample_rate), channels))
+                    .collect();
+                renderer = Some(Renderer::new(
+                    decoders,
+                    automation,
+                    sample_rate,
+                    channels,
+                    total_samples,
+                ));
+                shared.total_samples.store(total_samples, Ordering::Relaxed);
+                if let Some(r) = &mut renderer {
+                    let target = ((resume_at * sample_rate as f64).round() as u64)
+                        .min(total_samples);
+                    seek_engine(&shared, r, target);
+                    if let Some(rs) = &mut resampler {
+                        rs.reset();
+                    }
                 }
             }
             Ok(Cmd::SetMasterInserts(sections, reply)) => {

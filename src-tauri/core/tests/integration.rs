@@ -1041,6 +1041,7 @@ fn export_cd_image_and_cue() {
     // Two tracks with deliberately NON-frame-aligned lengths.
     state.add_region(0, SR as u64 + 123, None).unwrap();
     state.add_region(SR as u64 + 200, 2 * SR as u64 + 777, None).unwrap();
+    state.set_album_gap_ms(0); // geometry test: no album spacing
     let meta = still_core::AlbumMeta {
         album: "Barn Sessions".into(),
         album_artist: "The Copper Stills".into(),
@@ -1443,6 +1444,7 @@ fn export_ddp_fileset() {
         ProjectState::new(Project::new(vec![wav.display().to_string()]), info, vec![peaks]);
     state.add_region(0, SR as u64 + 123, None).unwrap();
     state.add_region(SR as u64 + 200, 2 * SR as u64 + 777, None).unwrap();
+    state.set_album_gap_ms(0); // geometry test: no album spacing
     let t1 = state.tracks()[0].id;
     state.set_track_isrc(t1, "fr-ab1-26-00001").unwrap();
     assert_eq!(state.tracks()[0].isrc, "FRAB12600001");
@@ -1572,6 +1574,103 @@ fn export_ddp_fileset() {
     let expect = format!("{:02}:{:02}:{:02} (lead-out)", lo / 75 / 60, (lo / 75) % 60, lo % 75);
     assert!(sheet.contains(&expect), "{sheet}");
     assert!(sheet.contains("FRAB12600001"), "{sheet}");
+}
+
+/// Album spacing (M2): the default gap sits between titles in the CD
+/// image — as pure digital silence — a per-boundary override of 0
+/// segues, and INDEX offsets follow. Per-file exports stay byte-exact
+/// regardless of gaps (a track file IS the region's audio).
+#[test]
+fn export_cd_image_with_gaps() {
+    let Ok(ffmpeg) = resolve_ffmpeg(&[]) else {
+        eprintln!("ffmpeg not found — CD gap test skipped");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let wav = dir.path().join("src.wav");
+    write_wav(&wav, &[(6.0, 0.4)]);
+    let (info, peaks) = scan_file(&wav, |_| {}).unwrap();
+    let mut state =
+        ProjectState::new(Project::new(vec![wav.display().to_string()]), info, vec![peaks]);
+    // Three 1-second tracks; boundary 2→3 overridden to segue.
+    state.add_region(0, SR as u64, None).unwrap();
+    state.add_region(2 * SR as u64, 3 * SR as u64, None).unwrap();
+    state.add_region(4 * SR as u64, 5 * SR as u64, None).unwrap();
+    let t3 = state.tracks()[2].id;
+    state.set_track_gap_before(t3, Some(0)).unwrap();
+
+    let cfg = ExportConfig {
+        format: ExportFormat::Wav,
+        bit_depth: 16,
+        dest_dir: dir.path().join("out").display().to_string(),
+        ..Default::default()
+    };
+    let meta = still_core::AlbumMeta::default();
+    let cancel = AtomicBool::new(false);
+    let jobs = still_core::export::plan_export_with_meta(&state.tracks(), &cfg, &wav, &meta).unwrap();
+    assert_eq!(jobs[0].gap_before_sectors, 0);
+    assert_eq!(jobs[1].gap_before_sectors, 150, "2 s default = 150 sectors");
+    assert_eq!(jobs[2].gap_before_sectors, 0, "segue override");
+
+    let rep = still_core::export::run_export_cd_image(
+        &ffmpeg, &mix_of(&state), 2, SR, &jobs, &cfg, &[], &[], &meta, &cancel, |_| {},
+    );
+    assert!(rep.errors.is_empty(), "{:?}", rep.errors);
+
+    let track_len = (SR as u64).div_ceil(588) * 588; // frame-padded second
+    let t1f = track_len / 588;
+    let r = hound::WavReader::open(&rep.files[0].path).unwrap();
+    assert_eq!(
+        r.duration() as u64,
+        3 * track_len + 150 * 588,
+        "image = three tracks + one 2 s gap"
+    );
+    let cue = std::fs::read_to_string(&rep.files[1].path).unwrap();
+    let idx = |f: u64| format!("INDEX 01 {:02}:{:02}:{:02}", f / 75 / 60, (f / 75) % 60, f % 75);
+    assert!(cue.contains(&idx(0)), "{cue}");
+    assert!(cue.contains(&idx(t1f + 150)), "track 2 after the gap: {cue}");
+    assert!(cue.contains(&idx(2 * t1f + 150)), "track 3 segued: {cue}");
+
+    // The gap range is pure digital silence.
+    let mut r = hound::WavReader::open(&rep.files[0].path).unwrap();
+    let all: Vec<i16> = r.samples::<i16>().map(|v| v.unwrap()).collect();
+    let gap_start = (track_len as usize) * 2;
+    let gap_end = gap_start + 150 * 588 * 2;
+    // The whole image runs through noise-shaped dither, so the gap is
+    // DITHERED silence (a few LSB of shaped noise, ≈ −78 dBFS) — exactly
+    // what a mastered disc carries. Anything louder means audio leaked.
+    let gap_peak = all[gap_start..gap_end].iter().map(|v| v.abs()).max().unwrap();
+    assert!(gap_peak <= 16, "album gap carries signal (peak {gap_peak})");
+
+    // DDP follows the same geometry.
+    let rep2 = still_core::export::run_export_ddp(
+        &ffmpeg, &mix_of(&state), 2, SR, &jobs, &cfg, &[], &[], &meta, &cancel, |_| {},
+    );
+    assert!(rep2.errors.is_empty(), "{:?}", rep2.errors);
+    let pq = std::fs::read(std::path::Path::new(&rep2.files[0].path).join("PQDESCR")).unwrap();
+    let msf = |sector: u64| {
+        format!("{:02}{:02}{:02}", sector / 75 / 60, (sector / 75) % 60, sector % 75)
+    };
+    let pk: Vec<&[u8]> = pq.chunks(64).collect();
+    // lead-in, 01/00, 01/01, 02/01, 03/01, AA — track 2 shifted by the gap.
+    assert_eq!(String::from_utf8_lossy(&pk[3][10..16]), msf(150 + t1f + 150));
+    assert_eq!(String::from_utf8_lossy(&pk[4][10..16]), msf(150 + 2 * t1f + 150));
+
+    // Per-file export ignores gaps entirely: byte-identical either way.
+    let jobs_files = plan_export(&state.tracks(), &cfg, &wav).unwrap();
+    let repa = run_export(&ffmpeg, &mix_of(&state), 2, SR, &jobs_files, &cfg, &cancel, |_| {});
+    assert!(repa.errors.is_empty());
+    state.set_album_gap_ms(0);
+    let jobs_nogap = plan_export(&state.tracks(), &cfg, &wav).unwrap();
+    let repb = run_export(&ffmpeg, &mix_of(&state), 2, SR, &jobs_nogap, &cfg, &cancel, |_| {});
+    assert!(repb.errors.is_empty());
+    for (a, b) in repa.files.iter().zip(&repb.files) {
+        assert_eq!(
+            checksum(std::path::Path::new(&a.path)),
+            checksum(std::path::Path::new(&b.path)),
+            "per-file exports must not embed album gaps"
+        );
+    }
 }
 
 /// Metering (#2): the export report measures the DELIVERED files. A

@@ -56,6 +56,9 @@ pub struct ExportJob {
     pub silence_ok: bool,
     /// Normalized ISRC of the track ("" = none) — cue sheets and DDP.
     pub isrc: String,
+    /// Album gap rendered BEFORE this track in continuous deliverables
+    /// (CD image, DDP), in Red Book sectors. Per-file exports ignore it.
+    pub gap_before_sectors: u64,
 }
 
 impl ExportJob {
@@ -279,6 +282,7 @@ pub fn plan_export_with_meta(
             source_fmt: src_fmt,
             silence_ok: false,
             isrc: t.isrc.clone(),
+            gap_before_sectors: (t.gap_before_effective_ms as u64 * 75 + 500) / 1000,
         });
     }
     Ok(jobs)
@@ -402,6 +406,7 @@ pub fn plan_export_stems(
                 source_fmt: src_fmt,
                 silence_ok: true,
                 isrc: String::new(),
+                gap_before_sectors: 0,
             });
         }
     }
@@ -847,6 +852,7 @@ fn build_track_renderer(
                 items.push(PlayItem::File {
                     path: PathBuf::from(&c.path),
                     samples: c.duration_samples,
+                    offset: 0,
                 });
                 cursor = c.start_sample + c.duration_samples;
             }
@@ -1256,6 +1262,8 @@ mod tests {
             solo_overrides: HashMap::new(),
             layer_volumes: vec![1.0],
             isrc: String::new(),
+            gap_before_ms: None,
+            gap_before_effective_ms: 0,
             inserts: Vec::new(),
         }
     }
@@ -1593,6 +1601,17 @@ fn run_export_cd_common(
                 break;
             }
         };
+        // Album gap: silence between the previous track and this one —
+        // pushed BEFORE this track's start entry, so cue INDEX 01, the
+        // DDP table and the loudness segments all shift together.
+        if job.gap_before_sectors > 0 {
+            let zeros = vec![0.0f32; (job.gap_before_sectors * CD_FRAME_SAMPLES) as usize * 2];
+            if !push(&mut stdin, &zeros) {
+                failed = true;
+                break;
+            }
+            image_samples += job.gap_before_sectors * CD_FRAME_SAMPLES;
+        }
         track_starts.push((
             job.number,
             job.title.clone(),
