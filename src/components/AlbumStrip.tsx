@@ -13,7 +13,7 @@ interface Props {
   playheadSample: number;
   playMode: "edit" | "album";
   playing: boolean;
-  onEnterAlbum: (seekSample: number | null) => void;
+  onEnterAlbum: (seekSample: number | null, play?: boolean) => void;
   onExitAlbum: () => void;
   onSeek: (albumSample: number) => void;
   onTogglePlay: () => void;
@@ -80,7 +80,7 @@ export function AlbumStrip(p: Props) {
         <button
           className="btn btn-icon"
           title="Play/pause the album program"
-          onClick={() => (active ? p.onTogglePlay() : p.onEnterAlbum(null))}
+          onClick={() => (active ? p.onTogglePlay() : p.onEnterAlbum(null, true))}
         >
           {active && p.playing ? "❚❚" : "▶"}
         </button>

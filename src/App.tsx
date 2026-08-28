@@ -500,9 +500,10 @@ export default function App() {
     [ensureEditMode, playback, showError]
   );
 
-  /** Enter the album program; optionally seek (and start playing). */
+  /** Enter the album program; optionally seek; `play` starts playback
+   * (a seek always does — clicking a title means "listen to it"). */
   const enterAlbum = useCallback(
-    (seekSample: number | null) => {
+    (seekSample: number | null, play = false) => {
       (async () => {
         if (playMode !== "album") {
           const st = await api.setPlayMode(true);
@@ -512,6 +513,11 @@ export default function App() {
         if (seekSample != null) {
           const s = await api.playerSeek(seekSample);
           playback.adopt(s);
+          if (!s.playing) {
+            playback.adopt(await api.playerToggle());
+          }
+        } else if (play) {
+          const s = await api.playerState();
           if (!s.playing) {
             playback.adopt(await api.playerToggle());
           }
