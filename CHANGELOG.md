@@ -3,6 +3,51 @@
 All notable changes to AudioDistillery are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.0] — 2026-08-28
+
+### Added
+- **Clip editing**: select any clip (frame, badge or its new ⋯ menu),
+  delete it — the timeline ripples closed across every layer, markers
+  follow, fully undoable in one step — or turn it into a titled track.
+  Importing several files gains "One after another — as album tracks":
+  one clip AND one titled track per file.
+- **Selection, refined**: selections butt against existing tracks (no
+  overlap, in every gesture), edge drags snap magnetically to clip
+  boundaries (the frontier lights up), dragging auto-scrolls at the
+  viewport edges, Shift-click completes a selection from the M-mark,
+  the playhead or the nearest selection edge — and the numbered edge
+  flags are now grab handles.
+- **Album spacing**: a default gap between titles (2.0 s, per-album
+  setting) with per-boundary overrides (segues welcome), edited in the
+  track list, the album strip or the Album dialog. CD images and DDP
+  filesets press the gaps as real Red Book pregaps (INDEX 00 in cue and
+  PQ subcode); per-track file exports stay byte-identical.
+- **The target timeline**: an album strip shows the record as it will
+  be delivered — titles, gaps, disc breaks — updating live with every
+  edit. One player, two programs: an explicit Source | Album toggle
+  plays either the working timeline or the album (mid-file track
+  starts, real silences), with ⏮ ⏯ ⏭ navigation in both.
+- **Workflow phases** (Record · Edit · Master): a toolbar switcher that
+  emphasizes, never walls off — Edit collapses mastering to an
+  always-visible meter rail; Master enlarges the album strip, surfaces
+  gaps/ISRC in the track list and turns Export into the phase's CTA
+  with an "album readiness" checklist; phases pick their default
+  program, explicit choices persist. The waveform separates the clip
+  identity band (top) from the track windows (below) so the two layers
+  never blend.
+- **Windows recording** ([#9]): ASIO backend (build-time Steinberg SDK,
+  WASAPI fallback), multi-host input enumeration, event-driven device
+  hot-plug (IMMNotificationClient) — verified in a Windows 11 VM.
+
+### Fixed
+- macOS recording captured silence: the app never declared microphone
+  access (no Info.plist key, no hardened-runtime entitlement). Both are
+  in place, the record dialog shows the real authorization state with
+  "Grant access" / "Ask again" flows, and takes warn when every lane
+  stays silent.
+
+[#9]: https://github.com/GarageDeveloper/audio-distillery/issues/9
+
 ## [0.7.0] — 2026-08-27
 
 ### Added
