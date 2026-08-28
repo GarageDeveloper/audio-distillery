@@ -167,10 +167,32 @@ pub fn run() {
             commands::player_state,
             commands::get_default_export_dir,
         ])
+        .on_page_load(|webview, payload| {
+            // The window starts hidden (no white unloaded webview); reveal
+            // it once the page has actually loaded. A hidden WKWebView
+            // never fires requestAnimationFrame, so this CANNOT be done
+            // from the frontend.
+            use tauri::webview::PageLoadEvent;
+            if matches!(payload.event(), PageLoadEvent::Finished) {
+                let _ = webview.window().show();
+                let _ = webview.window().set_focus();
+            }
+        })
         .setup(|app| {
             use tauri::{Emitter, Manager};
             if let Ok(dir) = app.path().app_config_dir() {
                 spawn_vst3_rescan_if_stale(app.app_handle(), dir.join("vst3_scan_cache.json"));
+            }
+            // Last-resort net: if the page never finishes loading (dev
+            // server down, bundle error), still surface the window so the
+            // app is never invisibly stuck.
+            if let Some(win) = app.get_webview_window("main") {
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    if !win.is_visible().unwrap_or(true) {
+                        let _ = win.show();
+                    }
+                });
             }
             // Input-device topology watcher: event-driven (CoreAudio
             // listener on macOS), emits only when the list changes.

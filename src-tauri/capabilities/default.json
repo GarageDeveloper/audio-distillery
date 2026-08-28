@@ -26,6 +26,7 @@
     },
     "dialog:default",
     "core:window:allow-show",
-    "core:window:allow-set-focus"
+    "core:window:allow-set-focus",
+    "core:window:allow-is-visible"
   ]
 }
