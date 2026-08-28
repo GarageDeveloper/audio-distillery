@@ -187,6 +187,7 @@ mod tests {
                     start_sector: 0,
                     length_sectors: 100,
                     isrc: Some("FRAB12600001".into()),
+                    pregap_sectors: 0,
                 },
                 Track {
                     number: 2,
@@ -194,6 +195,7 @@ mod tests {
                     start_sector: 100,
                     length_sectors: 50,
                     isrc: None,
+                    pregap_sectors: 0,
                 },
             ],
         }

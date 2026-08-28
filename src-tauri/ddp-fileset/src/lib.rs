@@ -55,6 +55,11 @@ pub struct Track {
     pub length_sectors: u64,
     /// 12-character ISRC (e.g. `FRXXX2600001`), already normalized.
     pub isrc: Option<String>,
+    /// Red Book pregap (INDEX 00 span) BEFORE this track, in sectors.
+    /// The pause audio sits in the image right before `start_sector`.
+    /// 0 = segue (no INDEX 00 for this track). Ignored for track 1,
+    /// whose mandatory 150-sector pause is handled by the writer.
+    pub pregap_sectors: u64,
 }
 
 /// The disc description handed to the writer.
@@ -232,8 +237,11 @@ fn pq_packet(
     p.0
 }
 
-/// The full PQ stream for a gapless program (tracks are contiguous; only
-/// track 1 has an index 00, covering the initial pause).
+/// The full PQ stream: track 1's mandatory pause as its INDEX 00, and a
+/// proper Red Book pregap (INDEX 00 at the gap start, INDEX 01 on the
+/// downbeat) for every later track with a non-zero `pregap_sectors` —
+/// this is what makes players count the gap down and DDP tools show the
+/// inter-track pause.
 fn pq_stream(disc: &Disc) -> Vec<u8> {
     let mut out = Vec::new();
     // Lead-in: carries the UPC/EAN.
@@ -251,11 +259,20 @@ fn pq_stream(disc: &Disc) -> Vec<u8> {
                 None,
             ));
         } else {
+            if t.pregap_sectors > 0 {
+                out.extend_from_slice(&pq_packet(
+                    &trk,
+                    0,
+                    msf(PAUSE_SECTORS + t.start_sector - t.pregap_sectors.min(t.start_sector)),
+                    t.isrc.as_deref(),
+                    None,
+                ));
+            }
             out.extend_from_slice(&pq_packet(
                 &trk,
                 1,
                 msf(PAUSE_SECTORS + t.start_sector),
-                t.isrc.as_deref(),
+                if t.pregap_sectors > 0 { None } else { t.isrc.as_deref() },
                 None,
             ));
         }
@@ -294,23 +311,29 @@ pub fn pq_sheet(disc: &Disc) -> String {
     let _ = writeln!(s);
     let _ = writeln!(
         s,
-        "TRK IDX  START (mm:ss:ff)  LENGTH (mm:ss:ff)  ISRC          TITLE"
+        "TRK IDX  START (mm:ss:ff)  LENGTH (mm:ss:ff)  PREGAP    ISRC          TITLE"
     );
     let _ = writeln!(
         s,
-        "--- ---  ----------------  -----------------  ------------  -----"
+        "--- ---  ----------------  -----------------  --------  ------------  -----"
     );
     let _ = writeln!(
         s,
-        " 01  00  00:00:00 (pause)  00:02:00           {:<12}  ",
-        ""
+        " 01  00  00:00:00 (pause)  00:02:00           {:<8}  {:<12}  ",
+        "", ""
     );
     for t in &disc.tracks {
         let (m, sec, f) = msf(PAUSE_SECTORS + t.start_sector);
         let (lm, ls, lf) = msf(t.length_sectors);
+        let pregap = if t.pregap_sectors > 0 {
+            let (pm, ps, pf) = msf(t.pregap_sectors);
+            format!("{pm:02}:{ps:02}:{pf:02}")
+        } else {
+            "-".into()
+        };
         let _ = writeln!(
             s,
-            " {:02}  01  {m:02}:{sec:02}:{f:02}          {lm:02}:{ls:02}:{lf:02}           {:<12}  {}",
+            " {:02}  01  {m:02}:{sec:02}:{f:02}          {lm:02}:{ls:02}:{lf:02}           {pregap:<8}  {:<12}  {}",
             t.number,
             t.isrc.as_deref().unwrap_or(""),
             t.title,

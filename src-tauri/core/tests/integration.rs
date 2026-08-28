@@ -1626,10 +1626,18 @@ fn export_cd_image_with_gaps() {
         "image = three tracks + one 2 s gap"
     );
     let cue = std::fs::read_to_string(&rep.files[1].path).unwrap();
-    let idx = |f: u64| format!("INDEX 01 {:02}:{:02}:{:02}", f / 75 / 60, (f / 75) % 60, f % 75);
+    let cuetime = |f: u64| format!("{:02}:{:02}:{:02}", f / 75 / 60, (f / 75) % 60, f % 75);
+    let idx = |f: u64| format!("INDEX 01 {}", cuetime(f));
     assert!(cue.contains(&idx(0)), "{cue}");
     assert!(cue.contains(&idx(t1f + 150)), "track 2 after the gap: {cue}");
     assert!(cue.contains(&idx(2 * t1f + 150)), "track 3 segued: {cue}");
+    // The gap is a REAL pregap: INDEX 00 opens it, and segued/track-1
+    // entries carry none.
+    assert!(
+        cue.contains(&format!("INDEX 00 {}", cuetime(t1f))),
+        "track 2 needs a pregap INDEX 00: {cue}"
+    );
+    assert_eq!(cue.matches("INDEX 00").count(), 1, "only the gapped boundary: {cue}");
 
     // The gap range is pure digital silence.
     let mut r = hound::WavReader::open(&rep.files[0].path).unwrap();
@@ -1652,9 +1660,13 @@ fn export_cd_image_with_gaps() {
         format!("{:02}{:02}{:02}", sector / 75 / 60, (sector / 75) % 60, sector % 75)
     };
     let pk: Vec<&[u8]> = pq.chunks(64).collect();
-    // lead-in, 01/00, 01/01, 02/01, 03/01, AA — track 2 shifted by the gap.
-    assert_eq!(String::from_utf8_lossy(&pk[3][10..16]), msf(150 + t1f + 150));
-    assert_eq!(String::from_utf8_lossy(&pk[4][10..16]), msf(150 + 2 * t1f + 150));
+    // lead-in, 01/00, 01/01, 02/00 (pregap), 02/01, 03/01, AA.
+    assert_eq!(String::from_utf8_lossy(&pk[3][4..8]), "0200", "pregap packet");
+    assert_eq!(String::from_utf8_lossy(&pk[3][10..16]), msf(150 + t1f), "pregap opens at the gap");
+    assert_eq!(String::from_utf8_lossy(&pk[4][4..8]), "0201");
+    assert_eq!(String::from_utf8_lossy(&pk[4][10..16]), msf(150 + t1f + 150));
+    assert_eq!(String::from_utf8_lossy(&pk[5][4..8]), "0301");
+    assert_eq!(String::from_utf8_lossy(&pk[5][10..16]), msf(150 + 2 * t1f + 150));
 
     // Per-file export ignores gaps entirely: byte-identical either way.
     let jobs_files = plan_export(&state.tracks(), &cfg, &wav).unwrap();
