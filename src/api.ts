@@ -86,6 +86,13 @@ export const api = {
     invoke<ProjectView>("rename_track", { id, title }),
   setTrackIsrc: (id: number, isrc: string) =>
     invoke<ProjectView>("set_track_isrc", { id, isrc }),
+  setAlbumGap: (gapMs: number) =>
+    invoke<ProjectView>("set_album_gap", { gapMs }),
+  setTrackGap: (id: number, gapMs: number | null) =>
+    invoke<ProjectView>("set_track_gap", { id, gapMs }),
+  setPlayMode: (album: boolean) =>
+    invoke<PlaybackState>("set_play_mode", { album }),
+  playMode: () => invoke<boolean>("play_mode"),
   setSnapToZero: (enabled: boolean) =>
     invoke<ProjectView>("set_snap_to_zero", { enabled }),
   setExportConfig: (config: ExportConfig) =>

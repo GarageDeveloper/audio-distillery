@@ -32,6 +32,7 @@ interface Props {
   onTrackLayerMute: (trackId: number, layerId: number, muted: boolean | null) => void;
   onTrackLayerSolo: (trackId: number, layerId: number, solo: boolean | null) => void;
   onDiscBreaksChange: (breaks: number[]) => void;
+  onTrackGap: (id: number, gapMs: number | null) => void;
 }
 
 export function TrackList({
@@ -53,6 +54,7 @@ export function TrackList({
   onTrackLayerMute,
   onTrackLayerSolo,
   onDiscBreaksChange,
+  onTrackGap,
 }: Props) {
   const [editing, setEditing] = useState<number | null>(null);
   const [mixOpen, setMixOpen] = useState<number | null>(null);
@@ -173,6 +175,22 @@ export function TrackList({
                 onClick={() => onDiscBreaksChange([...breaks, t.number])}
               >
                 + Disc break
+              </button>
+            )}
+            {i > 0 && (
+              <button
+                className={`gap-chip ${t.gap_before_ms != null ? "overridden" : ""}`}
+                title={
+                  t.gap_before_ms != null
+                    ? `Gap override before this track — click to cycle: segue (0) → album default`
+                    : `Album gap before this track (${(t.gap_before_effective_ms / 1000).toFixed(1)} s default) — click for a segue (0 s)`
+                }
+                onClick={() =>
+                  onTrackGap(t.id, t.gap_before_ms != null ? null : 0)
+                }
+              >
+                ⟷ {(t.gap_before_effective_ms / 1000).toFixed(1)} s
+                {t.gap_before_ms != null ? " ✱" : ""}
               </button>
             )}
             <div

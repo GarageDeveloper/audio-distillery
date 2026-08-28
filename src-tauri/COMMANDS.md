@@ -258,6 +258,24 @@ player). Region-only edits still snapshot regions alone.
 (file stem as title, overlaps trimmed, one undo step) — it powers the
 "as album tracks" import option and the per-clip "Make track" action.
 
+### Album spacing + target timeline (M2)
+
+`Project.album_gap_ms` (default 2000) + `Region.gap_before_ms`
+(None = default, Some(0) = segue; undoable) resolve per boundary in
+`TrackInfo.gap_before_effective_ms`. `set_album_gap` / `set_track_gap`
+edit them. Every `ProjectView` carries `album: AlbumLayout` — the
+derived TARGET timeline (tracks + gaps in album time). `set_play_mode
+(album)` swaps the player between the EDIT program (source timeline)
+and the ALBUM program — built by `album_playlists` (per-layer slices
+cut mid-file via the new `PlayItem` offset, silence in gaps and take
+holes) and loaded through `Cmd::SetProgram`, which keeps the device
+stream/meter and resumes in place; positions map across modes, track
+chains gate on album spans, and any region/gap mutation live-reloads
+an active album program. CD/DDP exports render the same gaps
+(`ExportJob.gap_before_sectors`) as silence between titles — cue
+INDEX 01, DDP table and loudness segments shift together; per-file
+exports stay byte-identical regardless of gaps.
+
 ## Playback
 
 | Command | Parameters | Returns |

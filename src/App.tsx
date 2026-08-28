@@ -12,6 +12,7 @@ import { Waveform } from "./components/Waveform";
 import { Minimap } from "./components/Minimap";
 import { TrackList } from "./components/TrackList";
 import { ExportDialog } from "./components/ExportDialog";
+import { AlbumStrip } from "./components/AlbumStrip";
 import { AlbumMetaForm } from "./components/AlbumMetaForm";
 import { Backdrop } from "./components/Backdrop";
 import { MasteringPanel } from "./components/MasteringPanel";
@@ -71,6 +72,8 @@ export default function App() {
   const [selectedClip, setSelectedClip] = useState<number | null>(null);
   /** Open clip menu: clip index + anchor local to the waveform holder. */
   const [clipMenu, setClipMenu] = useState<{ index: number; x: number; y: number } | null>(null);
+  /// Transport program: the source timeline or the album (target) one.
+  const [playMode, setPlayMode] = useState<"edit" | "album">("edit");
   const [viewport, setViewport] = useState<Viewport>({ start: 0, spp: 1 });
   const [waveWidth, setWaveWidth] = useState(1000);
   const [theme, setTheme] = useState<Theme>(
@@ -447,18 +450,30 @@ export default function App() {
     [view, waveWidth]
   );
 
+  /** Leave the album program first when a SOURCE surface asks to seek —
+   * you always hear the timeline you clicked. */
+  const ensureEditMode = useCallback(async () => {
+    if (playMode !== "album") return;
+    const st = await api.setPlayMode(false);
+    setPlayMode("edit");
+    playback.adopt(st);
+  }, [playMode, playback]);
+
   const seekTo = useCallback(
     (sample: number) => {
-      api.playerSeek(sample).then(playback.adopt).catch((e) => showError(String(e)));
+      ensureEditMode()
+        .then(() => api.playerSeek(sample))
+        .then(playback.adopt)
+        .catch((e) => showError(String(e)));
     },
-    [playback, showError]
+    [ensureEditMode, playback, showError]
   );
 
   /// Track-list clicks: jump to the track AND start playback if stopped.
   const seekToAndPlay = useCallback(
     (sample: number) => {
-      api
-        .playerSeek(sample)
+      ensureEditMode()
+        .then(() => api.playerSeek(sample))
         .then((s) => {
           playback.adopt(s);
           if (!s.playing) {
@@ -467,8 +482,33 @@ export default function App() {
         })
         .catch((e) => showError(String(e)));
     },
-    [playback, showError]
+    [ensureEditMode, playback, showError]
   );
+
+  /** Enter the album program; optionally seek (and start playing). */
+  const enterAlbum = useCallback(
+    (seekSample: number | null) => {
+      (async () => {
+        if (playMode !== "album") {
+          const st = await api.setPlayMode(true);
+          setPlayMode("album");
+          playback.adopt(st);
+        }
+        if (seekSample != null) {
+          const s = await api.playerSeek(seekSample);
+          playback.adopt(s);
+          if (!s.playing) {
+            playback.adopt(await api.playerToggle());
+          }
+        }
+      })().catch((e) => showError(String(e)));
+    },
+    [playMode, playback, showError]
+  );
+
+  const exitAlbum = useCallback(() => {
+    ensureEditMode().catch((e) => showError(String(e)));
+  }, [ensureEditMode, showError]);
 
   const detectSilences = useCallback(async (layerId: number | null) => {
     try {
@@ -519,6 +559,14 @@ export default function App() {
     },
     [selection, pendingStart, playheadSample]
   );
+
+  useEffect(() => {
+    if (!view) {
+      setPlayMode("edit");
+      return;
+    }
+    api.playMode().then((a) => setPlayMode(a ? "album" : "edit")).catch(() => {});
+  }, [view]);
 
   // A structural change can shrink the clip list under the selection.
   useEffect(() => {
@@ -583,7 +631,7 @@ export default function App() {
               <Waveform
                 view={view}
                 viewport={viewport}
-                playheadSample={playheadSample}
+                playheadSample={playMode === "album" ? -1 : playheadSample}
                 waveMode={view.layers.length > 1 ? waveMode : "mix"}
                 proposals={proposals ? keptProposals : null}
                 ignoredProposals={proposals ? ignoredProposals : null}
@@ -658,9 +706,29 @@ export default function App() {
                 view={view}
                 viewport={viewport}
                 width={waveWidth}
-                playheadSample={playheadSample}
+                playheadSample={playMode === "album" ? -1 : playheadSample}
                 onViewportChange={onViewportChange}
               />
+              {view.album.tracks.length > 0 && (
+                <AlbumStrip
+                  album={view.album}
+                  sampleRate={view.audio.sample_rate}
+                  albumGapMs={view.album_gap_ms}
+                  discBreaks={view.album_meta.disc_breaks}
+                  playheadSample={playheadSample}
+                  playMode={playMode}
+                  playing={playback.playing}
+                  onEnterAlbum={enterAlbum}
+                  onExitAlbum={exitAlbum}
+                  onSeek={(sample) =>
+                    void api.playerSeek(sample).then(playback.adopt).catch((e) => showError(String(e)))
+                  }
+                  onTogglePlay={() =>
+                    void api.playerToggle().then(playback.adopt).catch((e) => showError(String(e)))
+                  }
+                  onSetTrackGap={(id, ms) => void apply(() => api.setTrackGap(id, ms))}
+                />
+              )}
               {selection && !proposals && (
                 <div className="proposal-bar">
                   <input
@@ -910,6 +978,7 @@ export default function App() {
             onTrackLayerSolo={(trackId, layerId, so) =>
               void apply(() => api.setTrackLayerSolo(trackId, layerId, so))
             }
+            onTrackGap={(id, ms) => void apply(() => api.setTrackGap(id, ms))}
             onDiscBreaksChange={(breaks) =>
               view &&
               void apply(() =>
@@ -980,6 +1049,31 @@ export default function App() {
               meta={view.album_meta}
               onChange={(m) => void apply(() => api.setAlbumMeta(m))}
             />
+            <div className="field album-gap-field">
+              <label>Default gap between tracks</label>
+              <div className="dest-row">
+                <input
+                  className="text-input num-input"
+                  type="number"
+                  min={0}
+                  max={30}
+                  step={0.1}
+                  value={(view.album_gap_ms / 1000).toFixed(1)}
+                  onChange={(e) =>
+                    void apply(() =>
+                      api.setAlbumGap(
+                        Math.round(Math.max(0, parseFloat(e.target.value) || 0) * 1000)
+                      )
+                    )
+                  }
+                />
+                <span className="hint">
+                  seconds of silence between titles — heard in the Album program,
+                  pressed into CD/DDP; override any boundary in the track list or
+                  the album strip (segues welcome)
+                </span>
+              </div>
+            </div>
             <div className="modal-foot">
               <button className="btn btn-primary" onClick={() => setAlbumOpen(false)}>
                 Done

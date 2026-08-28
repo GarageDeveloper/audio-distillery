@@ -1371,6 +1371,71 @@ button.wordmark:hover { background: var(--panel-2); }
 .clip-menu-item:hover:not(:disabled) { background: var(--err-dim); background: color-mix(in srgb, var(--clip) 18%, transparent); }
 .clip-menu-item:disabled { opacity: .4; cursor: default; }
 .clip-menu-item.danger { color: var(--err); }
+
+/* Album strip: the TARGET timeline (tracks + gaps) with its transport. */
+.album-strip {
+  flex: none; display: flex; align-items: stretch; gap: 8px;
+  padding: 5px 8px; background: var(--bg-deep);
+  border-top: 1px solid var(--line);
+}
+.album-strip.active { background: color-mix(in srgb, var(--copper-hi) 7%, var(--bg-deep)); }
+.album-transport { display: flex; align-items: center; gap: 4px; flex: none; }
+.album-mode-chip {
+  all: unset; cursor: pointer; font-size: 11px; font-weight: 700;
+  letter-spacing: .06em; text-transform: uppercase;
+  padding: 3px 9px; border-radius: 10px; border: 1px solid var(--clip);
+  color: var(--text-2);
+}
+.album-mode-chip.on { background: var(--copper-hi); color: var(--wave-bg); border-color: var(--copper-hi); }
+.album-total { font-family: var(--font-mono); font-size: 11px; color: var(--text-3); margin-left: 4px; }
+.album-lane {
+  position: relative; flex: 1; min-width: 0; display: flex; align-items: stretch;
+  height: 30px;
+}
+.album-cell { position: relative; display: contents; }
+.album-block {
+  all: unset; cursor: pointer; box-sizing: border-box;
+  min-width: 28px; overflow: hidden;
+  background: color-mix(in srgb, var(--clip) 26%, transparent);
+  border: 1px solid var(--clip); border-radius: 5px;
+  display: flex; align-items: center; padding: 0 6px;
+}
+.album-block:hover { background: color-mix(in srgb, var(--clip) 40%, transparent); }
+.album-block.current { border-color: var(--copper-hi); background: color-mix(in srgb, var(--copper-hi) 22%, transparent); }
+.album-block-label {
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--text-1);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.album-gap {
+  all: unset; cursor: pointer; box-sizing: border-box; min-width: 4px;
+  background: repeating-linear-gradient(
+    -45deg, transparent, transparent 3px,
+    color-mix(in srgb, var(--text-3) 45%, transparent) 3px,
+    color-mix(in srgb, var(--text-3) 45%, transparent) 5px);
+  border-radius: 2px; align-self: center; height: 14px;
+}
+.album-gap.overridden { background: repeating-linear-gradient(
+    -45deg, transparent, transparent 3px, var(--copper-hi) 3px, var(--copper-hi) 5px); }
+.album-gap.disc-break { border-left: 3px solid var(--text-2); }
+.album-gap-editor {
+  position: absolute; bottom: calc(100% + 4px); left: 0; z-index: 42;
+  display: flex; gap: 4px; align-items: center;
+  background: var(--panel, var(--wave-bg)); border: 1px solid var(--clip);
+  border-radius: 7px; padding: 5px; box-shadow: 0 8px 24px rgba(0,0,0,.35);
+}
+.album-playhead {
+  position: absolute; top: -2px; bottom: -2px; width: 2px;
+  background: var(--copper-hi); pointer-events: none;
+}
+.gap-chip {
+  all: unset; cursor: pointer; align-self: center; margin: 0 auto;
+  font-family: var(--font-mono); font-size: 10px; color: var(--text-3);
+  padding: 1px 8px; border-radius: 8px; display: block; text-align: center;
+}
+.gap-chip:hover { color: var(--text-1); }
+.gap-chip.overridden { color: var(--copper-hi); font-weight: 700; }
+.album-gap-field .num-input { width: 80px; }
+.album-gap-field .hint { align-self: center; }
 .lane-list {
   display: flex; flex-direction: column; gap: 4px;
   max-height: 220px; overflow-y: auto; margin-bottom: 6px;

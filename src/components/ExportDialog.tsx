@@ -245,6 +245,13 @@ export function ExportDialog({ view, progress, onClose, onError, onViewChange }:
                     <option value="ddp">DDP fileset + PQ sheet (pressing plant)</option>
                   </select>
                 )}
+                {cdCombo && !cfg.stems && (cfg.cd_image || cfg.ddp) && (
+                  <div className="hint">
+                    Track gaps: {(view.album_gap_ms / 1000).toFixed(1)} s default between
+                    titles (edit in Album…, override any boundary in the track list) —
+                    pressed into the image exactly as heard in the Album program.
+                  </div>
+                )}
               </div>
               {cfg.format === "source" && (
                 <div className="hint">
