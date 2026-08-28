@@ -85,13 +85,6 @@ export function Toolbar(p: Props) {
       <button className="btn" onClick={p.onOpen} title="Open an audio file or project (⌘O)">
         Open
       </button>
-      <button
-        className="btn"
-        onClick={p.onRecord}
-        title="Record a multitrack take from an audio interface"
-      >
-        ● Rec
-      </button>
       <div className="phase-switch" title="Workflow phase — emphasis only, nothing is ever locked away (keys 1/2/3)">
         {(["record", "edit", "master"] as const).map((ph) => (
           <button

@@ -198,7 +198,8 @@ kbd {
 }
 .wordmark .drop { color: var(--copper); }
 .toolbar .sep { width: 1px; height: 24px; background: var(--line); flex: none; }
-.file-meta { min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+.file-meta { min-width: 0; flex: 0 1 auto; overflow: hidden; display: flex; flex-direction: column; line-height: 1.25; }
+.file-meta .meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .file-meta .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .file-meta .meta { font-family: var(--font-mono); font-size: 10px; color: var(--text-3); }
 .transport { display: flex; align-items: center; gap: 10px; margin: 0 auto; }
@@ -1448,7 +1449,7 @@ button.wordmark:hover { background: var(--panel-2); }
 
 /* ——— Workflow phases (Option A) ——— */
 .phase-switch {
-  display: flex; background: var(--bg-deep); border: 1px solid var(--copper-lo);
+  display: flex; flex: none; background: var(--bg-deep); border: 1px solid var(--copper-lo);
   border-radius: 8px; overflow: hidden; margin-left: 4px;
 }
 .phase-seg {
