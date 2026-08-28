@@ -1499,7 +1499,8 @@ button.wordmark:hover { background: var(--panel-2); }
   all: unset; cursor: pointer; padding: 4px 12px;
   font-size: 11px; font-weight: 700; letter-spacing: .04em; color: var(--text-3);
 }
-.phase-seg:hover { color: var(--text-1); }
+.phase-seg:hover:not(:disabled) { color: var(--text-1); }
+.phase-seg:disabled { opacity: .35; cursor: default; }
 .phase-seg.on { background: var(--copper); color: var(--text-on-accent); }
 .phase-seg.pulse { color: var(--copper-hi); animation: phase-pulse 1.6s ease-in-out infinite; }
 @keyframes phase-pulse { 50% { opacity: .4; } }

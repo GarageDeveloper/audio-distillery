@@ -81,6 +81,12 @@ export function Toolbar(p: Props) {
             className={`phase-seg ${p.phase === ph ? "on" : ""} ${
               ph === "master" && p.masterPulse ? "pulse" : ""
             }`}
+            disabled={!p.view && ph !== "record"}
+            title={
+              !p.view && ph !== "record"
+                ? "Record a take or add audio files first — there is nothing to edit yet"
+                : undefined
+            }
             onClick={() => p.onPhaseChange(ph)}
           >
             {ph === "record" ? "Record" : ph === "edit" ? "Edit" : "Master"}
