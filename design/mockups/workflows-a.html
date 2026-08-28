@@ -191,6 +191,18 @@
   .check b { display: block; color: var(--text); font-size: 10px; margin-bottom: 4px; }
   .check .ok::before { content: "✓ "; color: var(--ok); }
   .check .todo::before { content: "○ "; color: var(--text-3); }
+  .rec-lane {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+    padding: 4px 8px;
+  }
+  .rec-lane.hot { border-color: var(--err); }
+  .rec-lane.dead { opacity: .55; }
+  .rl-n { font: 700 9px var(--mono); color: var(--copper); width: 16px; }
+  .rl-in { font: 500 8.5px var(--mono); color: var(--text-3); width: 96px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .rl-name { font-size: 10px; color: var(--text); width: 74px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .rl-m { flex: 1; height: 7px; border-radius: 4px; background: var(--bg-deep); overflow: hidden; }
+  .rl-m i { display: block; height: 100%; border-radius: 4px; background: linear-gradient(to right, var(--ok) 72%, var(--copper-hi) 90%, var(--err)); }
   .future {
     margin-top: 12px; border: 1px dashed var(--line); border-radius: 9px; padding: 12px 16px;
     color: var(--text-3); font-size: 13px; max-width: 74ch;
@@ -386,7 +398,74 @@
   d'entrée pendant la prise arrivera) : le dialogue devient une surface pleine page — voies + vumètres
   d'entrée + chrono en grand, timeline visible dessous, estompée. Hors périmètre de la V1.</div>
 
-  <h2><span class="n">4</span>Les règles du jeu</h2>
+  <h2><span class="n">4</span>Étape 2 — la surface Record plein écran <span style="font-size: 12px; color: var(--text-3); font-weight: 400;">(vision, à valider plus tard)</span></h2>
+  <p class="sub">Quand le métering d'entrée pendant la prise arrivera (suites de #8), le dialogue
+  Record devient la surface de la phase : on arme, on voit, on tourne — la timeline reste visible
+  dessous, estompée. Rien de tout cela n'est engagé : c'est la cible de l'étape 2.</p>
+
+  <div class="shot">
+    <span class="pin" style="left: 300px; top: 56px;">1</span>
+    <span class="pin" style="right: 210px; top: 100px;">2</span>
+    <span class="pin" style="left: 130px; bottom: 90px;">3</span>
+    <span class="pin" style="right: 60px; bottom: 132px;">4</span>
+    <div class="win">
+      <div class="tbar">
+        <span class="drop">⧫ Still</span><span class="sep"></span>
+        <span class="mb">Open</span>
+        <span class="phases"><b>Record</b><s>Edit</s><s>Master</s></span>
+        <span class="grow"></span>
+        <span class="tc" style="color: var(--err); font-weight: 700;">● REC 12:41</span>
+        <span class="grow"></span>
+        <span class="mb">Interface: Universal Audio — 22 in</span>
+      </div>
+      <div style="display: flex; background: var(--bg);">
+        <div style="flex: 1; padding: 12px 14px; display: flex; flex-direction: column; gap: 5px;">
+          <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px;">
+            <span style="font: 700 10px var(--mono); letter-spacing: .12em; color: var(--text-2);">LANES — TAKE 3</span>
+            <span style="font: 600 9px var(--mono); color: var(--ok);">0 dropped</span>
+          </div>
+          <div class="rec-lane"><span class="rl-n">01</span><span class="rl-in">MIC/LINE/HIZ 1</span><span class="rl-name">Kick</span><span class="rl-m"><i style="width: 62%;"></i></span></div>
+          <div class="rec-lane"><span class="rl-n">02</span><span class="rl-in">MIC/LINE/HIZ 2</span><span class="rl-name">Snare</span><span class="rl-m"><i style="width: 71%;"></i></span></div>
+          <div class="rec-lane"><span class="rl-n">03</span><span class="rl-in">MIC/LINE 3</span><span class="rl-name">Bass DI</span><span class="rl-m"><i style="width: 45%;"></i></span></div>
+          <div class="rec-lane hot"><span class="rl-n">04</span><span class="rl-in">MIC/LINE 4</span><span class="rl-name">Guitare L</span><span class="rl-m"><i style="width: 96%;"></i></span></div>
+          <div class="rec-lane"><span class="rl-n">05</span><span class="rl-in">VIRTUAL 1</span><span class="rl-name">Voix</span><span class="rl-m"><i style="width: 38%;"></i></span></div>
+          <div class="rec-lane dead"><span class="rl-n">06</span><span class="rl-in">VIRTUAL 2</span><span class="rl-name">Clavier</span><span class="rl-m"><i style="width: 1%;"></i></span></div>
+          <div style="color: var(--text-3); font-size: 9px; padding-left: 2px;">… 10 autres voies</div>
+        </div>
+        <div style="width: 190px; flex: none; border-left: 1px solid var(--line); padding: 14px; display: flex; flex-direction: column; align-items: center; gap: 10px; background: var(--panel);">
+          <div style="font: 700 30px var(--mono); color: var(--text);">12:41<span style="font-size: 13px; color: var(--text-3);">.6</span></div>
+          <div style="font: 600 9px var(--mono); color: var(--text-3);">48 kHz · 24-bit · 16 voies</div>
+          <button class="cta-btn" style="background: var(--err); font-size: 12px; padding: 6px 18px;">■ Stop</button>
+          <div style="font-size: 9px; color: var(--text-3); text-align: center;">Take 3 → Recordings/Take 3<br>fichiers réparés toutes les 2 s</div>
+        </div>
+      </div>
+      <div style="position: relative;">
+        <canvas class="wave ghost" data-h="64" data-clips="2" data-markers="0"></canvas>
+        <span style="position: absolute; right: 8px; top: 6px; font: 600 9px var(--mono); color: var(--text-3);">session actuelle (takes 1–2), estompée</span>
+      </div>
+      <div class="sbar"><span>À l'arrêt : la prise devient des layers synchronisés et bascule en Edit (règle actuelle)</span></div>
+    </div>
+  </div>
+  <ul class="legend">
+    <li><b class="n">1</b><span><strong>Le chrono vit dans la barre d'outils</strong> (● REC rouge) —
+      visible même si l'on va jeter un œil ailleurs ; le sélecteur de phase reste opérant, rien
+      n'est modal.</span></li>
+    <li><b class="n">2</b><span><strong>Une ligne par voie</strong> : n° · entrée (vrais noms du
+      driver) · nom du layer (éditable à chaud) · <strong>vumètre d'entrée en continu</strong> —
+      rouge quand ça tape (Guitare L), éteint quand une ligne est morte (Clavier : câble ?).
+      C'est LE gain de l'étape 2 : voir les 16 lignes vivre pendant la prise.</span></li>
+    <li><b class="n">3</b><span><strong>La timeline reste visible dessous</strong>, estompée — on
+      voit où la prise va atterrir ; plus tard, elle pourra pousser en direct.</span></li>
+    <li><b class="n">4</b><span><strong>Le panneau prise</strong> : chrono géant, format, Stop,
+      dossier de destination et le rappel de la garantie crash-safe. Le popover de config
+      (interface, ajout de voies) reste accessible à l'arrêt seulement.</span></li>
+  </ul>
+  <div class="future"><strong style="color: var(--text-2);">Prérequis techniques</strong> — vumètres
+  d'entrée temps réel exposés par le backend (extension de record_status, déjà par-voie), édition
+  des noms pendant la prise (renommage des fichiers au stop), et — optionnel, plus tard — le dessin
+  incrémental de la forme d'onde en cours d'enregistrement.</div>
+
+  <h2><span class="n">5</span>Les règles du jeu</h2>
   <div class="rules">
     <div class="rule"><h3>Accentuer, jamais murer</h3><p>Toutes les données restent accessibles
       dans toutes les phases : cliquer un élément « d'une autre phase » y bascule, c'est tout.
@@ -403,7 +482,7 @@
       ci-dessus réutilise ce qui existe déjà.</p></div>
   </div>
 
-  <h2><span class="n">5</span>Matrice des états</h2>
+  <h2><span class="n">6</span>Matrice des états</h2>
   <div class="tablewrap">
   <table>
     <tr><th>État \ Phase</th><th>Record</th><th>Edit</th><th>Master</th></tr>
