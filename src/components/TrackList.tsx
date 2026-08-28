@@ -57,6 +57,7 @@ export function TrackList({
   onTrackGap,
 }: Props) {
   const [editing, setEditing] = useState<number | null>(null);
+  const [gapEdit, setGapEdit] = useState<{ id: number; draft: string } | null>(null);
   const [mixOpen, setMixOpen] = useState<number | null>(null);
   const overrideThrottle = useRef<Record<string, number>>({});
 
@@ -178,20 +179,69 @@ export function TrackList({
               </button>
             )}
             {i > 0 && (
-              <button
-                className={`gap-chip ${t.gap_before_ms != null ? "overridden" : ""}`}
-                title={
-                  t.gap_before_ms != null
-                    ? `Gap override before this track — click to cycle: segue (0) → album default`
-                    : `Album gap before this track (${(t.gap_before_effective_ms / 1000).toFixed(1)} s default) — click for a segue (0 s)`
-                }
-                onClick={() =>
-                  onTrackGap(t.id, t.gap_before_ms != null ? null : 0)
-                }
-              >
-                ⟷ {(t.gap_before_effective_ms / 1000).toFixed(1)} s
-                {t.gap_before_ms != null ? " ✱" : ""}
-              </button>
+              <div className="gap-slot">
+                <button
+                  className={`gap-chip ${t.gap_before_ms != null ? "overridden" : ""}`}
+                  title={`Gap before this track — ${
+                    t.gap_before_ms != null ? "override" : "album default"
+                  }. Click to edit.`}
+                  onClick={() =>
+                    setGapEdit(
+                      gapEdit?.id === t.id
+                        ? null
+                        : { id: t.id, draft: (t.gap_before_effective_ms / 1000).toFixed(1) }
+                    )
+                  }
+                >
+                  ⟷ {(t.gap_before_effective_ms / 1000).toFixed(1)} s
+                  {t.gap_before_ms != null ? " ✱" : ""}
+                </button>
+                {gapEdit?.id === t.id && (
+                  <span className="gap-editor" onClick={(e) => e.stopPropagation()}>
+                    <input
+                      className="text-input gap-editor-input"
+                      type="number"
+                      min={0}
+                      max={30}
+                      step={0.1}
+                      autoFocus
+                      value={gapEdit.draft}
+                      onChange={(e) => setGapEdit({ id: t.id, draft: e.target.value })}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          onTrackGap(
+                            t.id,
+                            Math.round(
+                              Math.max(0, Math.min(30, parseFloat(gapEdit.draft) || 0)) * 1000
+                            )
+                          );
+                          setGapEdit(null);
+                        } else if (e.key === "Escape") setGapEdit(null);
+                      }}
+                    />
+                    <button
+                      className="btn"
+                      title="No gap — segue into the previous title"
+                      onClick={() => {
+                        onTrackGap(t.id, 0);
+                        setGapEdit(null);
+                      }}
+                    >
+                      Segue
+                    </button>
+                    <button
+                      className="btn"
+                      title="Follow the album default again"
+                      onClick={() => {
+                        onTrackGap(t.id, null);
+                        setGapEdit(null);
+                      }}
+                    >
+                      × default
+                    </button>
+                  </span>
+                )}
+              </div>
             )}
             <div
               className={`track-row ${isPlaying ? "playing" : ""} ${

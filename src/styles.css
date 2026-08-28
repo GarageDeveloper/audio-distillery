@@ -1434,8 +1434,17 @@ button.wordmark:hover { background: var(--panel-2); }
 }
 .gap-chip:hover { color: var(--text-1); }
 .gap-chip.overridden { color: var(--copper-hi); font-weight: 700; }
-.album-gap-field .num-input { width: 80px; }
-.album-gap-field .hint { align-self: center; }
+.album-gap-row { display: flex; align-items: center; gap: 8px; }
+.album-gap-input { width: 90px; flex: none; }
+.album-gap-unit { font-size: 12px; color: var(--text-2); }
+.gap-slot { position: relative; }
+.gap-editor {
+  position: absolute; top: calc(100% + 2px); left: 50%; transform: translateX(-50%);
+  z-index: 42; display: flex; gap: 4px; align-items: center;
+  background: var(--panel, var(--wave-bg)); border: 1px solid var(--clip);
+  border-radius: 7px; padding: 5px; box-shadow: 0 8px 24px rgba(0,0,0,.35);
+}
+.gap-editor-input { width: 70px; flex: none; }
 .lane-list {
   display: flex; flex-direction: column; gap: 4px;
   max-height: 220px; overflow-y: auto; margin-bottom: 6px;

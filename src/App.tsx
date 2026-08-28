@@ -74,6 +74,8 @@ export default function App() {
   const [clipMenu, setClipMenu] = useState<{ index: number; x: number; y: number } | null>(null);
   /// Transport program: the source timeline or the album (target) one.
   const [playMode, setPlayMode] = useState<"edit" | "album">("edit");
+  /// Text-backed draft of the album default gap (committed on blur).
+  const [gapDraft, setGapDraft] = useState<string | null>(null);
   const [viewport, setViewport] = useState<Viewport>({ start: 0, spp: 1 });
   const [waveWidth, setWaveWidth] = useState(1000);
   const [theme, setTheme] = useState<Theme>(
@@ -1051,27 +1053,33 @@ export default function App() {
             />
             <div className="field album-gap-field">
               <label>Default gap between tracks</label>
-              <div className="dest-row">
+              <div className="album-gap-row">
                 <input
-                  className="text-input num-input"
+                  className="text-input album-gap-input"
                   type="number"
                   min={0}
                   max={30}
                   step={0.1}
-                  value={(view.album_gap_ms / 1000).toFixed(1)}
-                  onChange={(e) =>
-                    void apply(() =>
-                      api.setAlbumGap(
-                        Math.round(Math.max(0, parseFloat(e.target.value) || 0) * 1000)
-                      )
-                    )
-                  }
+                  value={gapDraft ?? (view.album_gap_ms / 1000).toFixed(1)}
+                  onChange={(e) => setGapDraft(e.target.value)}
+                  onBlur={() => {
+                    if (gapDraft == null) return;
+                    const ms = Math.round(
+                      Math.max(0, Math.min(30, parseFloat(gapDraft) || 0)) * 1000
+                    );
+                    setGapDraft(null);
+                    if (ms !== view.album_gap_ms) void apply(() => api.setAlbumGap(ms));
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                  }}
                 />
-                <span className="hint">
-                  seconds of silence between titles — heard in the Album program,
-                  pressed into CD/DDP; override any boundary in the track list or
-                  the album strip (segues welcome)
-                </span>
+                <span className="album-gap-unit">seconds</span>
+              </div>
+              <div className="hint">
+                Silence between titles — heard in the Album program, pressed into
+                CD/DDP. Override any boundary in the track list or the album strip
+                (segues welcome).
               </div>
             </div>
             <div className="modal-foot">
