@@ -1565,6 +1565,11 @@ button.wordmark:hover { background: var(--panel-2); }
   border-radius: 9px; padding: 9px 11px;
   box-shadow: 0 12px 32px rgba(0,0,0,.45); font-size: 12px;
 }
+/* Invisible bridge over the 6px gap so the pointer can travel from the
+   button into the popover without the :hover breaking. */
+.readiness-pop::before {
+  content: ""; position: absolute; top: -8px; left: 0; right: 0; height: 8px;
+}
 .readiness-wrap:hover .readiness-pop,
 .readiness-wrap:focus-within .readiness-pop { display: flex; }
 .readiness-pop b { font-size: 11.5px; color: var(--text-1); margin-bottom: 3px; }
