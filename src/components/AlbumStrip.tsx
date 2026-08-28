@@ -2,96 +2,133 @@ import { useState } from "react";
 
 import type { AlbumLayout } from "../types/AlbumLayout";
 
+interface SourceTrack {
+  id: number;
+  start_sample: number;
+  end_sample: number;
+}
+
 interface Props {
+  /** Master phase: taller lane, two-line blocks (duration + ISRC). */
+  tall?: boolean;
   album: AlbumLayout;
   sampleRate: number;
   albumGapMs: number;
   discBreaks: number[];
-  /** Playhead in ALBUM samples — only meaningful in album mode. */
+  /** Track spans on the SOURCE timeline (for prev/next in source mode). */
+  sourceTracks: SourceTrack[];
+  /** Playhead in the CURRENT program's samples (source or album time). */
   playheadSample: number;
   playMode: "edit" | "album";
   playing: boolean;
-  onEnterAlbum: (seekSample: number | null) => void;
-  onExitAlbum: () => void;
-  onSeek: (albumSample: number) => void;
+  /** Explicit program choice from the Source | Album toggle. */
+  onSetMode: (mode: "edit" | "album") => void;
+  /** Play a track (block clicks): SOURCE start sample — the app maps
+   * it into the current program and never changes the mode. */
+  onTrackPlay: (sourceStartSample: number) => void;
+  /** Seek within the CURRENT program. */
+  onSeek: (sample: number) => void;
   onTogglePlay: () => void;
   onSetTrackGap: (id: number, gapMs: number | null) => void;
+  /** id → ISRC ("" = none), for the tall variant's second line. */
+  isrcById?: Record<number, string>;
 }
 
 const fmt = (samples: number, sr: number) => {
-  const s = Math.floor(samples / sr);
+  const s = Math.floor(Math.max(0, samples) / sr);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 };
 
-/** The TARGET timeline: the album as delivered — titles + gaps — with
- * its own transport. Display only; the layout comes computed from the
- * backend and every edit refreshes it. */
+/** THE player: one transport for both programs, with an explicit
+ * Source | Album mode toggle. The phase sets the default mode; only the
+ * user changes it afterwards. Display only — the programs live in the
+ * backend. */
 export function AlbumStrip(p: Props) {
   const [gapEdit, setGapEdit] = useState<{ id: number; draft: string } | null>(null);
   const total = Math.max(p.album.total_samples, 1);
-  const active = p.playMode === "album";
+  const albumMode = p.playMode === "album";
+  const hasAlbum = p.album.tracks.length > 0;
 
-  const currentIndex = p.album.tracks.findIndex(
-    (t, i) =>
-      p.playheadSample >= t.start_sample &&
-      (i + 1 >= p.album.tracks.length ||
-        p.playheadSample < p.album.tracks[i + 1].start_sample)
-  );
+  /** Track starts in the CURRENT program's time. */
+  const starts: number[] = albumMode
+    ? p.album.tracks.map((t) => t.start_sample)
+    : p.sourceTracks.map((t) => t.start_sample);
+  const currentIndex = (() => {
+    let i = -1;
+    for (let k = 0; k < starts.length; k++) {
+      if (p.playheadSample >= starts[k]) i = k;
+    }
+    return i;
+  })();
 
   const prev = () => {
     const cur = currentIndex >= 0 ? currentIndex : 0;
-    const t = p.album.tracks[cur];
+    const start = starts[cur] ?? 0;
     // Standard transport: restart the current title, then step back.
-    if (t && p.playheadSample > t.start_sample + p.sampleRate) {
-      p.onSeek(t.start_sample);
+    if (p.playheadSample > start + p.sampleRate) {
+      p.onSeek(start);
     } else if (cur > 0) {
-      p.onSeek(p.album.tracks[cur - 1].start_sample);
+      p.onSeek(starts[cur - 1]);
     } else {
       p.onSeek(0);
     }
   };
   const next = () => {
-    const cur = currentIndex >= 0 ? currentIndex : -1;
-    const t = p.album.tracks[cur + 1];
-    if (t) p.onSeek(t.start_sample);
+    const s = starts[currentIndex + 1];
+    if (s != null) p.onSeek(s);
   };
 
   return (
-    <div className={`album-strip ${active ? "active" : ""}`}>
+    <div className={`album-strip ${albumMode ? "active" : ""} ${p.tall ? "tall" : ""}`}>
       <div className="album-transport">
+        <span className="mode-toggle" title="Which program the player runs: the source timeline, or the album as delivered (tracks + gaps). Edit defaults to Source, Master to Album.">
+          <button
+            className={`mode-seg ${!albumMode ? "on" : ""}`}
+            onClick={() => p.onSetMode("edit")}
+          >
+            Source
+          </button>
+          <button
+            className={`mode-seg ${albumMode ? "on" : ""}`}
+            disabled={!hasAlbum}
+            title={hasAlbum ? undefined : "No tracks yet — the album program is empty"}
+            onClick={() => p.onSetMode("album")}
+          >
+            Album
+          </button>
+        </span>
         <button
-          className={`album-mode-chip ${active ? "on" : ""}`}
-          title={
-            active
-              ? "Listening to the ALBUM program (tracks + gaps). Click to go back to the source timeline."
-              : "Listen to the album as it will be delivered: tracks in order with the gaps applied."
-          }
-          onClick={() => (active ? p.onExitAlbum() : p.onEnterAlbum(null))}
+          className="btn btn-icon"
+          title="Previous track"
+          disabled={starts.length === 0}
+          onClick={prev}
         >
-          Album
-        </button>
-        <button className="btn btn-icon" title="Previous track" onClick={() => (active ? prev() : p.onEnterAlbum(0))}>
           ⏮
+        </button>
+        <button className="btn btn-icon" title="Play/pause (Space)" onClick={p.onTogglePlay}>
+          {p.playing ? "❚❚" : "▶"}
         </button>
         <button
           className="btn btn-icon"
-          title="Play/pause the album program"
-          onClick={() => (active ? p.onTogglePlay() : p.onEnterAlbum(null))}
+          title="Next track"
+          disabled={starts.length === 0 || currentIndex + 1 >= starts.length}
+          onClick={next}
         >
-          {active && p.playing ? "❚❚" : "▶"}
-        </button>
-        <button className="btn btn-icon" title="Next track" onClick={() => (active ? next() : p.onEnterAlbum(0))}>
           ⏭
         </button>
-        <span className="album-total">{fmt(p.album.total_samples, p.sampleRate)}</span>
+        {albumMode && (
+          <span className="album-total">
+            {fmt(p.playheadSample, p.sampleRate)} / {fmt(p.album.total_samples, p.sampleRate)}
+          </span>
+        )}
       </div>
+      {hasAlbum && (
       <div className="album-lane">
         {p.album.tracks.map((t, i) => {
           const gapW = (t.start_sample - (i === 0 ? 0 : p.album.tracks[i - 1].start_sample + p.album.tracks[i - 1].length_samples)) / total;
           const w = t.length_samples / total;
           const isBreak = p.discBreaks.includes(t.number);
-          const overridden =
-            t.gap_before_ms !== p.albumGapMs && i > 0;
+          const overridden = t.gap_before_ms !== p.albumGapMs && i > 0;
           return (
             <span key={t.id} className="album-cell">
               {i > 0 && (
@@ -105,14 +142,21 @@ export function AlbumStrip(p: Props) {
                 />
               )}
               <button
-                className={`album-block ${active && i === currentIndex ? "current" : ""}`}
+                className={`album-block ${albumMode && i === currentIndex ? "current" : ""}`}
                 style={{ width: `${w * 100}%` }}
-                title={`${t.number}. ${t.title} — ${fmt(t.length_samples, p.sampleRate)}`}
-                onClick={() => p.onEnterAlbum(t.start_sample)}
+                title={`${t.number}. ${t.title} — ${fmt(t.length_samples, p.sampleRate)} — click to listen (current program)`}
+                onClick={() => p.onTrackPlay(p.sourceTracks[i]?.start_sample ?? 0)}
               >
                 <span className="album-block-label">
                   {t.number}. {t.title}
                 </span>
+                {p.tall && (
+                  <span className="album-block-meta">
+                    {fmt(t.length_samples, p.sampleRate)}
+                    {" · "}
+                    {p.isrcById?.[t.id] || "—"}
+                  </span>
+                )}
               </button>
               {gapEdit?.id === t.id && (
                 <span className="album-gap-editor" onClick={(e) => e.stopPropagation()}>
@@ -159,13 +203,14 @@ export function AlbumStrip(p: Props) {
             </span>
           );
         })}
-        {active && (
+        {albumMode && (
           <span
             className="album-playhead"
             style={{ left: `${Math.min(100, (p.playheadSample / total) * 100)}%` }}
           />
         )}
       </div>
+      )}
     </div>
   );
 }

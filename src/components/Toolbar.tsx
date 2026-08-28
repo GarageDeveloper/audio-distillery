@@ -25,6 +25,11 @@ interface Props {
   onAddClips: () => void;
   onAddTake: () => void;
   onRecord: () => void;
+  phase: "record" | "edit" | "master";
+  masterPulse: boolean;
+  onPhaseChange: (phase: "record" | "edit" | "master") => void;
+  readiness: { key: string; label: string; ok: boolean; action?: "export" | "album" }[];
+  onReadinessAction: (action: "export" | "album") => void;
   onTogglePlay: () => void;
   onSave: () => void;
   onSaveAs: () => void;
@@ -36,18 +41,6 @@ interface Props {
   onTogglePanel: () => void;
   onToggleSnap: () => void;
 }
-
-const PlayIcon = ({ playing }: { playing: boolean }) =>
-  playing ? (
-    <svg width="12" height="14" viewBox="0 0 12 14" fill="currentColor">
-      <rect x="1" y="1" width="3.6" height="12" rx="1" />
-      <rect x="7.4" y="1" width="3.6" height="12" rx="1" />
-    </svg>
-  ) : (
-    <svg width="12" height="14" viewBox="0 0 12 14" fill="currentColor">
-      <path d="M2 1.3c0-.8.9-1.3 1.6-.9l8 5.7c.6.4.6 1.4 0 1.8l-8 5.7c-.7.5-1.6 0-1.6-.9V1.3z" />
-    </svg>
-  );
 
 export function Toolbar(p: Props) {
   const clipCount = p.view?.audio.clips.length ?? 0;
@@ -80,13 +73,19 @@ export function Toolbar(p: Props) {
       <button className="btn" onClick={p.onOpen} title="Open an audio file or project (⌘O)">
         Open
       </button>
-      <button
-        className="btn"
-        onClick={p.onRecord}
-        title="Record a multitrack take from an audio interface"
-      >
-        ● Rec
-      </button>
+      <div className="phase-switch" title="Workflow phase — emphasis only, nothing is ever locked away (keys 1/2/3)">
+        {(["record", "edit", "master"] as const).map((ph) => (
+          <button
+            key={ph}
+            className={`phase-seg ${p.phase === ph ? "on" : ""} ${
+              ph === "master" && p.masterPulse ? "pulse" : ""
+            }`}
+            onClick={() => p.onPhaseChange(ph)}
+          >
+            {ph === "record" ? "Record" : ph === "edit" ? "Edit" : "Master"}
+          </button>
+        ))}
+      </div>
       {p.view && (
         <>
           <button
@@ -136,14 +135,6 @@ export function Toolbar(p: Props) {
       )}
 
       <div className="transport">
-        <button
-          className="play-btn"
-          onClick={p.onTogglePlay}
-          disabled={!p.view}
-          title="Play / Pause (Space)"
-        >
-          <PlayIcon playing={p.playing} />
-        </button>
         {p.view && (
           <span className="timecode">
             {formatDuration(p.positionSeconds)}{" "}
@@ -204,18 +195,45 @@ export function Toolbar(p: Props) {
             >
               Album…
             </button>
-            <button
-              className="btn btn-primary"
-              onClick={p.onExport}
-              disabled={p.view.tracks.length === 0}
-              title={
-                p.view.tracks.length === 0
-                  ? "Mark at least one track region first"
-                  : "Export tracks (⌘E)"
-              }
-            >
-              Export…
-            </button>
+            <span className="readiness-wrap">
+              <button
+                className={`btn btn-primary ${p.phase === "master" ? "export-cta" : ""}`}
+                onClick={p.onExport}
+                disabled={p.view.tracks.length === 0}
+                title={
+                  p.view.tracks.length === 0
+                    ? "Mark at least one track region first"
+                    : "Export tracks (⌘E)"
+                }
+              >
+                {p.phase === "master" ? "Export album…" : "Export…"}
+                {p.phase === "master" && p.readiness.some((r) => !r.ok) && (
+                  <span className="readiness-badge">
+                    ○ {p.readiness.filter((r) => !r.ok).length}
+                  </span>
+                )}
+              </button>
+              {p.phase === "master" && p.readiness.length > 0 && (
+                <span className="readiness-pop">
+                  <b>Album readiness</b>
+                  {p.readiness.map((r) =>
+                    !r.ok && r.action ? (
+                      <button
+                        key={r.key}
+                        className="readiness-line todo actionable"
+                        onClick={() => p.onReadinessAction(r.action!)}
+                      >
+                        {r.label} → fix
+                      </button>
+                    ) : (
+                      <span key={r.key} className={`readiness-line ${r.ok ? "ok" : "todo"}`}>
+                        {r.label}
+                      </span>
+                    )
+                  )}
+                </span>
+              )}
+            </span>
             <button
               className={`btn btn-icon ${p.panelOpen ? "active" : ""}`}
               onClick={p.onTogglePanel}

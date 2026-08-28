@@ -10,6 +10,10 @@ import { sampleToX, xToSample, zoomAt, clampViewport, edgeScrollVelocity } from 
 import { clampSpanToFreeHole, clampEdgeToNeighbors, snapToClipBoundary } from "../lib/spans";
 
 const RULER_H = 26;
+/// Height of the clip identity band at the top (name + ⋯ menu) — track
+/// windows start BELOW it so the two layers never blend. Only present
+/// when clip frames are drawn (more than one clip).
+const CLIP_BAND = 30;
 const MIN_LANE_H = 90; // comfortable minimum per expanded layer lane
 const COLLAPSED_H = 22; // collapsed layer strip
 const SCROLLBAR_W = 6;
@@ -94,6 +98,9 @@ export function Waveform(p: Props) {
   /** Sample of the clip boundary an edge drag is currently snapped to. */
   const snappedAt = useRef<number | null>(null);
   const clipMenuRects = useRef<{ x: number; y: number; w: number; h: number; index: number }[]>([]);
+  /** Edge-flag hit zones: grabbing the flag drags the edge — no need to
+   * hunt the 1 px line. */
+  const flagRects = useRef<{ x: number; y: number; w: number; h: number; id: number; edge: RegionEdge }[]>([]);
   // Drag auto-scroll at the viewport edges.
   const autoScrollRaf = useRef<number | null>(null);
   const lastPointerX = useRef(0);
@@ -387,6 +394,10 @@ export function Waveform(p: Props) {
     if (xEnd < w) ctx.fillRect(Math.max(xEnd, 0), RULER_H, w - Math.max(xEnd, 0), area);
     ctx.globalAlpha = 1;
 
+    // Track windows sit BELOW the clip identity band.
+    const trackTop = RULER_H + (view.audio.clips.length > 1 ? CLIP_BAND : 0);
+    const trackArea = h - trackTop;
+
     // Region tint + border + chip.
     ctx.font = "700 10px ui-monospace, Menlo, Consolas, monospace";
     const current = regions.find(
@@ -398,11 +409,19 @@ export function Waveform(p: Props) {
       if (x1 < 0 || x0 > w) continue;
       const isSelected = selectedTrack === t.id;
       ctx.fillStyle = css("--selection");
-      ctx.fillRect(Math.max(x0, 0), RULER_H, Math.min(x1, w) - Math.max(x0, 0), area);
+      ctx.fillRect(Math.max(x0, 0), trackTop, Math.min(x1, w) - Math.max(x0, 0), trackArea);
       if (isSelected) {
         ctx.fillStyle = css("--copper-dim");
-        ctx.fillRect(Math.max(x0, 0), RULER_H, Math.min(x1, w) - Math.max(x0, 0), area);
+        ctx.fillRect(Math.max(x0, 0), trackTop, Math.min(x1, w) - Math.max(x0, 0), trackArea);
       }
+      // The track window's own top line — visibly below the clip band.
+      ctx.strokeStyle = css(isSelected ? "--copper-hi" : "--copper-lo");
+      ctx.globalAlpha = 0.8;
+      ctx.beginPath();
+      ctx.moveTo(Math.max(x0, 0), trackTop + 0.5);
+      ctx.lineTo(Math.min(x1, w), trackTop + 0.5);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
 
       // Chip: always "number · title"; fall back to the number alone when
       // the region is too narrow on screen for the full label.
@@ -418,7 +437,7 @@ export function Waveform(p: Props) {
       const bx = cx - tw / 2 - 7;
       const bw2 = tw + 14;
       if (bw2 <= visible - 6) {
-        const by = RULER_H + 10;
+        const by = trackTop + 8;
         ctx.beginPath();
         ctx.roundRect(bx, by, bw2, 18, 9);
         ctx.fillStyle = highlighted ? css("--copper") : css("--panel-2");
@@ -461,10 +480,13 @@ export function Waveform(p: Props) {
         if (x1 < 0 || x0 > w) return;
         const label = clip.name;
         const tw = ctx.measureText(label).width;
-        const bx = Math.max(x0, 0) + 5;
+        const v0 = Math.max(x0, 0);
+        const v1 = Math.min(x1, w);
         const bh = 20;
-        const by = h - bh - 5;
-        const bw = Math.min(tw + 16, Math.min(x1, w) - bx - 4);
+        const by = RULER_H + 5;
+        // Centered in the clip's visible span, clear of the ⋯ chip.
+        const bw = Math.min(tw + 16, v1 - v0 - 70);
+        const bx = (v0 + v1) / 2 - bw / 2;
         if (bw < 30) return;
         const selected = ci === propsRef.current.selectedClip;
         ctx.fillStyle = selected ? css("--copper-hi") : clipColor;
@@ -524,7 +546,7 @@ export function Waveform(p: Props) {
         ctx.fillStyle = css("--copper");
         ctx.fillRect(Math.max(x0, 0), RULER_H, Math.min(x1, w) - Math.max(x0, 0), area);
         ctx.globalAlpha = 0.6;
-        ctx.strokeRect(Math.max(x0, 0) + 0.5, RULER_H + 1.5, Math.min(x1, w) - Math.max(x0, 0) - 1, area - 3);
+        ctx.strokeRect(Math.max(x0, 0) + 0.5, trackTop + 1.5, Math.min(x1, w) - Math.max(x0, 0) - 1, trackArea - 3);
       }
       ctx.restore();
     }
@@ -537,7 +559,7 @@ export function Waveform(p: Props) {
         const x0 = sampleToX(r.start, vp);
         const x1 = sampleToX(r.end, vp);
         if (x1 < 0 || x0 > w) continue;
-        ctx.strokeRect(Math.max(x0, 0) + 0.5, RULER_H + 1.5, Math.min(x1, w) - Math.max(x0, 0) - 1, area - 3);
+        ctx.strokeRect(Math.max(x0, 0) + 0.5, trackTop + 1.5, Math.min(x1, w) - Math.max(x0, 0) - 1, trackArea - 3);
       }
       ctx.restore();
     }
@@ -555,17 +577,17 @@ export function Waveform(p: Props) {
         const width = Math.min(x1, w) - left;
         ctx.globalAlpha = 0.10;
         ctx.fillStyle = css("--err");
-        ctx.fillRect(left, RULER_H, width, area);
+        ctx.fillRect(left, trackTop, width, trackArea);
         ctx.globalAlpha = 0.55;
         ctx.strokeStyle = css("--err");
-        ctx.strokeRect(left + 0.5, RULER_H + 1.5, width - 1, area - 3);
+        ctx.strokeRect(left + 0.5, trackTop + 1.5, width - 1, trackArea - 3);
         // Small ✕ chip at the top of the span.
         ctx.globalAlpha = 0.9;
         ctx.setLineDash([]);
         ctx.font = "700 10px ui-monospace, Menlo, monospace";
         ctx.fillStyle = css("--err");
         ctx.textAlign = "center";
-        ctx.fillText("✕", left + width / 2, RULER_H + 16);
+        ctx.fillText("✕", left + width / 2, trackTop + 16);
         ctx.setLineDash([5, 4]);
       }
       ctx.restore();
@@ -577,7 +599,7 @@ export function Waveform(p: Props) {
       const x1 = sampleToX(selection.end, vp);
       ctx.save();
       ctx.fillStyle = css("--copper-dim");
-      ctx.fillRect(Math.max(x0, 0), RULER_H, Math.min(x1, w) - Math.max(x0, 0), area);
+      ctx.fillRect(Math.max(x0, 0), trackTop, Math.min(x1, w) - Math.max(x0, 0), trackArea);
       ctx.strokeStyle = css("--copper-hi");
       ctx.setLineDash([5, 4]);
       for (const x of [x0, x1]) {
@@ -598,19 +620,20 @@ export function Waveform(p: Props) {
         ctx.strokeStyle = css("--copper-hi");
         ctx.setLineDash([3, 3]);
         ctx.beginPath();
-        ctx.moveTo(x, RULER_H);
+        ctx.moveTo(x, trackTop);
         ctx.lineTo(x, h);
         ctx.stroke();
         ctx.restore();
         ctx.fillStyle = css("--copper-hi");
         ctx.font = "700 10px ui-monospace, Menlo, Consolas, monospace";
         ctx.textAlign = "left";
-        ctx.fillText("start?", x + 5, RULER_H + FLAG_H / 2);
+        ctx.fillText("start?", x + 5, trackTop + FLAG_H / 2);
       }
     }
 
     // Region edge markers ("barrel label" flags: start opens →, end closes ←).
     const markerColor = css("--marker");
+    flagRects.current = [];
     for (const t of regions) {
       for (const edge of ["start", "end"] as RegionEdge[]) {
         const sample = edge === "start" ? t.start_sample : t.end_sample;
@@ -627,14 +650,14 @@ export function Waveform(p: Props) {
         ctx.strokeStyle = markerColor;
         ctx.lineWidth = emph ? 3 : 1;
         ctx.beginPath();
-        ctx.moveTo(x, RULER_H);
+        ctx.moveTo(x, trackTop);
         ctx.lineTo(x, h);
         ctx.stroke();
         ctx.restore();
 
         // Dovetail flag on the inside of the region.
         const dir = edge === "start" ? 1 : -1;
-        const fy = RULER_H;
+        const fy = trackTop;
         const grad = ctx.createLinearGradient(0, fy, 0, fy + FLAG_H);
         grad.addColorStop(0, css("--marker-flag-a"));
         grad.addColorStop(1, css("--marker-flag-b"));
@@ -657,6 +680,14 @@ export function Waveform(p: Props) {
           fy + FLAG_H / 2 + 1
         );
         ctx.textAlign = "left";
+        flagRects.current.push({
+          x: dir === 1 ? x : x - FLAG_W,
+          y: fy,
+          w: FLAG_W,
+          h: FLAG_H,
+          id: t.id,
+          edge,
+        });
 
         if (isDragged) {
           const tc = formatTimecode(sample / sr);
@@ -986,7 +1017,13 @@ export function Waveform(p: Props) {
           draw();
           return;
         }
-        const edge = edgeAt(x);
+        // Grabbing an edge FLAG drags that edge — the generous target.
+        const flag = flagRects.current.find(
+          (r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h
+        );
+        const edge = flag
+          ? edges().find((e) => e.id === flag.id && e.edge === flag.edge) ?? null
+          : edgeAt(x);
         if (edge) {
           drag.current = { type: "edge", id: edge.id, edge: edge.edge, pos: edge.sample, moved: false };
           propsRef.current.onSelectTrack(edge.id);
@@ -1054,7 +1091,12 @@ export function Waveform(p: Props) {
           }
           return;
         }
-        const edge = edgeAt(x);
+        const flag = flagRects.current.find(
+          (r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h
+        );
+        const edge = flag
+          ? { id: flag.id, edge: flag.edge, sample: 0 }
+          : edgeAt(x);
         const prev = hoverEdge.current;
         if (edge?.id !== prev?.id || edge?.edge !== prev?.edge) {
           hoverEdge.current = edge;

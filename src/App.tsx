@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
@@ -13,6 +13,7 @@ import { Minimap } from "./components/Minimap";
 import { TrackList } from "./components/TrackList";
 import { ExportDialog } from "./components/ExportDialog";
 import { AlbumStrip } from "./components/AlbumStrip";
+import { MeterRail } from "./components/MeterRail";
 import { AlbumMetaForm } from "./components/AlbumMetaForm";
 import { Backdrop } from "./components/Backdrop";
 import { MasteringPanel } from "./components/MasteringPanel";
@@ -74,6 +75,14 @@ export default function App() {
   const [clipMenu, setClipMenu] = useState<{ index: number; x: number; y: number } | null>(null);
   /// Transport program: the source timeline or the album (target) one.
   const [playMode, setPlayMode] = useState<"edit" | "album">("edit");
+  /// Workflow phase (Option A): pure display emphasis, derived + chosen,
+  /// never persisted. "record" is not stored: no session = record screen;
+  /// with a session the Record segment opens the record dialog.
+  const [phase, setPhase] = useState<"edit" | "master">("edit");
+  const [masterPulse, setMasterPulse] = useState(false);
+  /// Explicit program choices, remembered PER PHASE: once you force a
+  /// mode inside a phase, coming back to that phase restores it.
+  const modeOverride = useRef<{ edit?: "edit" | "album"; master?: "edit" | "album" }>({});
   /// Text-backed draft of the album default gap (committed on blur).
   const [gapDraft, setGapDraft] = useState<string | null>(null);
   const [viewport, setViewport] = useState<Viewport>({ start: 0, spp: 1 });
@@ -166,6 +175,8 @@ export default function App() {
           setPendingStart(null);
           setSelectedTrack(null);
           setSelectedClip(null);
+          setPhase("edit");
+          modeOverride.current = {};
         }
       }
     },
@@ -438,6 +449,12 @@ export default function App() {
       } else if (e.key === "e" && mod) {
         e.preventDefault();
         setExportOpen(true);
+      } else if (e.key === "1" && !mod) {
+        setRecordOpen(true);
+      } else if (e.key === "2" && !mod) {
+        setPhase("edit");
+      } else if (e.key === "3" && !mod) {
+        setPhase("master");
       }
     };
     window.addEventListener("keydown", onKey);
@@ -461,21 +478,40 @@ export default function App() {
     playback.adopt(st);
   }, [playMode, playback]);
 
+  /** Map a SOURCE-timeline position into the album program: exact
+   * inside a track, next track's start outside one. */
+  const sourceToAlbum = useCallback((sample: number): number => {
+    const v = viewRef.current;
+    if (!v) return 0;
+    for (let i = 0; i < v.tracks.length; i++) {
+      const t = v.tracks[i];
+      const a = v.album.tracks[i];
+      if (!a || sample >= t.end_sample) continue;
+      return sample >= t.start_sample
+        ? a.start_sample + (sample - t.start_sample)
+        : a.start_sample;
+    }
+    return Math.max(0, v.album.total_samples - 1);
+  }, []);
+
+  /** Seeks NEVER change the program (only the Source|Album toggle
+   * does): a source-timeline position is mapped into album time when
+   * the album program is loaded. */
   const seekTo = useCallback(
     (sample: number) => {
-      ensureEditMode()
-        .then(() => api.playerSeek(sample))
-        .then(playback.adopt)
-        .catch((e) => showError(String(e)));
+      const target = playMode === "album" ? sourceToAlbum(sample) : sample;
+      api.playerSeek(target).then(playback.adopt).catch((e) => showError(String(e)));
     },
-    [ensureEditMode, playback, showError]
+    [playMode, sourceToAlbum, playback, showError]
   );
 
-  /// Track-list clicks: jump to the track AND start playback if stopped.
+  /// Track-list / album-block clicks: jump to the track AND start
+  /// playback if stopped — in whichever program is loaded.
   const seekToAndPlay = useCallback(
     (sample: number) => {
-      ensureEditMode()
-        .then(() => api.playerSeek(sample))
+      const target = playMode === "album" ? sourceToAlbum(sample) : sample;
+      api
+        .playerSeek(target)
         .then((s) => {
           playback.adopt(s);
           if (!s.playing) {
@@ -484,12 +520,13 @@ export default function App() {
         })
         .catch((e) => showError(String(e)));
     },
-    [ensureEditMode, playback, showError]
+    [playMode, sourceToAlbum, playback, showError]
   );
 
-  /** Enter the album program; optionally seek (and start playing). */
+  /** Enter the album program; optionally seek; `play` starts playback
+   * (a seek always does — clicking a title means "listen to it"). */
   const enterAlbum = useCallback(
-    (seekSample: number | null) => {
+    (seekSample: number | null, play = false) => {
       (async () => {
         if (playMode !== "album") {
           const st = await api.setPlayMode(true);
@@ -499,6 +536,11 @@ export default function App() {
         if (seekSample != null) {
           const s = await api.playerSeek(seekSample);
           playback.adopt(s);
+          if (!s.playing) {
+            playback.adopt(await api.playerToggle());
+          }
+        } else if (play) {
+          const s = await api.playerState();
           if (!s.playing) {
             playback.adopt(await api.playerToggle());
           }
@@ -562,6 +604,86 @@ export default function App() {
     [selection, pendingStart, playheadSample]
   );
 
+  const trackCount2 = view?.tracks.length ?? 0;
+  const prevTrackCount = useRef(0);
+  useEffect(() => {
+    if (prevTrackCount.current === 0 && trackCount2 > 0 && phase === "edit") {
+      setMasterPulse(true);
+    }
+    prevTrackCount.current = trackCount2;
+  }, [trackCount2, phase]);
+  useEffect(() => {
+    if (phase === "master") setMasterPulse(false);
+  }, [phase]);
+
+  // Entering a phase loads its program: the phase default (Edit=source,
+  // Master=album) unless the user explicitly overrode the mode in THAT
+  // phase before — explicit choices persist across phase switches.
+  useEffect(() => {
+    if (!view) return;
+    const target =
+      modeOverride.current[phase] ?? (phase === "master" ? "album" : "edit");
+    if (target === "album" && playMode !== "album" && view.album.tracks.length > 0) {
+      enterAlbum(null);
+    } else if (target === "edit" && playMode === "album") {
+      exitAlbum();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
+
+  /// The Master phase's "album readiness": what still stands between
+  /// this session and a pressed album. Display-only, derived from view.
+  const readiness = useMemo(() => {
+    if (!view) return [];
+    const tracks = view.tracks;
+    const withIsrc = tracks.filter((t) => t.isrc).length;
+    const segues = tracks.filter((t) => t.gap_before_effective_ms === 0).length - 1;
+    const items: { key: string; label: string; ok: boolean; action?: "export" | "album" }[] = [
+      {
+        key: "tracks",
+        label:
+          tracks.length > 0
+            ? `${tracks.length} track${tracks.length > 1 ? "s" : ""}, titled`
+            : "No tracks yet",
+        ok: tracks.length > 0,
+      },
+      {
+        key: "gaps",
+        label: `Gaps set (${(view.album_gap_ms / 1000).toFixed(1)} s default${
+          segues > 0 ? `, ${segues} segue${segues > 1 ? "s" : ""}` : ""
+        })`,
+        ok: true,
+      },
+      {
+        key: "meta",
+        label: view.album_meta.album.trim()
+          ? `Album metadata ("${view.album_meta.album.trim()}")`
+          : "Album metadata missing",
+        ok: !!view.album_meta.album.trim(),
+        action: "album",
+      },
+    ];
+    if (withIsrc > 0 && withIsrc < tracks.length) {
+      items.push({
+        key: "isrc",
+        label: `ISRC: ${tracks.length - withIsrc} missing`,
+        ok: false,
+        action: "export",
+      });
+    } else if (withIsrc === tracks.length && tracks.length > 0) {
+      items.push({ key: "isrc", label: "ISRC on every track", ok: true });
+    }
+    items.push({
+      key: "chain",
+      label:
+        view.mastering_chain.length > 0
+          ? "Master chain active"
+          : "No master chain (optional)",
+      ok: true,
+    });
+    return items;
+  }, [view]);
+
   useEffect(() => {
     if (!view) {
       setPlayMode("edit");
@@ -609,6 +731,21 @@ export default function App() {
         onWaveModeChange={setWaveMode}
         onOpen={openFile}
         onRecord={() => setRecordOpen(true)}
+        phase={view ? phase : "record"}
+        masterPulse={masterPulse}
+        onPhaseChange={(p) => {
+          if (p === "record") {
+            if (view) setRecordOpen(true);
+            return;
+          }
+          if (!view) return; // no session: stay on the record screen
+          setPhase(p);
+        }}
+        readiness={readiness}
+        onReadinessAction={(a) => {
+          if (a === "export") setExportOpen(true);
+          else if (a === "album") setAlbumOpen(true);
+        }}
         onAddClips={() => void addClips()}
         onAddTake={() => void addTake()}
         onTogglePlay={() =>
@@ -629,7 +766,7 @@ export default function App() {
         <div className="wave-area">
           {view ? (
             <>
-              <div className="waveform-holder">
+              <div className={`waveform-holder ${phase === "master" ? "phase-master" : ""}`}>
               <Waveform
                 view={view}
                 viewport={viewport}
@@ -711,26 +848,35 @@ export default function App() {
                 playheadSample={playMode === "album" ? -1 : playheadSample}
                 onViewportChange={onViewportChange}
               />
-              {view.album.tracks.length > 0 && (
-                <AlbumStrip
-                  album={view.album}
-                  sampleRate={view.audio.sample_rate}
-                  albumGapMs={view.album_gap_ms}
-                  discBreaks={view.album_meta.disc_breaks}
-                  playheadSample={playheadSample}
-                  playMode={playMode}
-                  playing={playback.playing}
-                  onEnterAlbum={enterAlbum}
-                  onExitAlbum={exitAlbum}
-                  onSeek={(sample) =>
-                    void api.playerSeek(sample).then(playback.adopt).catch((e) => showError(String(e)))
-                  }
-                  onTogglePlay={() =>
-                    void api.playerToggle().then(playback.adopt).catch((e) => showError(String(e)))
-                  }
-                  onSetTrackGap={(id, ms) => void apply(() => api.setTrackGap(id, ms))}
-                />
-              )}
+              <AlbumStrip
+                tall={phase === "master"}
+                isrcById={Object.fromEntries(view.tracks.map((t) => [t.id, t.isrc]))}
+                album={view.album}
+                sampleRate={view.audio.sample_rate}
+                albumGapMs={view.album_gap_ms}
+                discBreaks={view.album_meta.disc_breaks}
+                sourceTracks={view.tracks.map((t) => ({
+                  id: t.id,
+                  start_sample: t.start_sample,
+                  end_sample: t.end_sample,
+                }))}
+                playheadSample={playheadSample}
+                playMode={playMode}
+                playing={playback.playing}
+                onSetMode={(m) => {
+                  modeOverride.current[phase] = m;
+                  if (m === "album") enterAlbum(null);
+                  else exitAlbum();
+                }}
+                onTrackPlay={seekToAndPlay}
+                onSeek={(sample) =>
+                  void api.playerSeek(sample).then(playback.adopt).catch((e) => showError(String(e)))
+                }
+                onTogglePlay={() =>
+                  void api.playerToggle().then(playback.adopt).catch((e) => showError(String(e)))
+                }
+                onSetTrackGap={(id, ms) => void apply(() => api.setTrackGap(id, ms))}
+              />
               {selection && !proposals && (
                 <div className="proposal-bar">
                   <input
@@ -980,6 +1126,7 @@ export default function App() {
             onTrackLayerSolo={(trackId, layerId, so) =>
               void apply(() => api.setTrackLayerSolo(trackId, layerId, so))
             }
+            showDelivery={phase === "master"}
             onTrackGap={(id, ms) => void apply(() => api.setTrackGap(id, ms))}
             onDiscBreaksChange={(breaks) =>
               view &&
@@ -990,7 +1137,7 @@ export default function App() {
           />
         )}
 
-        {view && (
+        {view && phase === "master" && (
           <MasteringPanel
             view={view}
             playheadSample={playheadSample}
@@ -998,6 +1145,9 @@ export default function App() {
             onError={showError}
             onViewChange={setView}
           />
+        )}
+        {view && phase === "edit" && (
+          <MeterRail playing={playback.playing} onOpen={() => setPhase("master")} />
         )}
       </div>
 
