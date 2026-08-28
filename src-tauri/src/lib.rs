@@ -119,6 +119,8 @@ pub fn run() {
             commands::move_region_edge,
             commands::remove_region,
             commands::rename_track,
+            commands::remove_clip,
+            commands::clips_to_tracks,
             commands::set_track_isrc,
             commands::list_input_devices,
             commands::mic_permission,

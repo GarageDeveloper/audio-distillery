@@ -78,6 +78,10 @@ export const api = {
   removeRegion: (id: number) => invoke<ProjectView>("remove_region", { id }),
   renameLayer: (id: number, name: string) =>
     invoke<ProjectView>("rename_layer", { id, name }),
+  removeClip: (clipIndex: number) =>
+    invoke<ProjectView>("remove_clip", { clipIndex }),
+  clipsToTracks: (clipIndices: number[] | null) =>
+    invoke<ProjectView>("clips_to_tracks", { clipIndices }),
   renameTrack: (id: number, title: string) =>
     invoke<ProjectView>("rename_track", { id, title }),
   setTrackIsrc: (id: number, isrc: string) =>
