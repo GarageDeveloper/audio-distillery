@@ -54,6 +54,11 @@ export function AboutDialog({ onClose }: Props) {
             </li>
             <li>Audio Units and macOS are technologies of Apple Inc.</li>
             <li>
+              Windows builds may include ASIO Interface Technology by
+              Steinberg Media Technologies GmbH (ASIO is a trademark of
+              Steinberg Media Technologies GmbH).
+            </li>
+            <li>
               Exports are performed by a bundled{" "}
               <Ext href="https://ffmpeg.org">FFmpeg</Ext> binary (separate
               process), built under the GPL by{" "}

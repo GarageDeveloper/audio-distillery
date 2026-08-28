@@ -17,6 +17,14 @@ cpal = "0.15"
 rtrb = "0.3"
 ebur128 = "0.1.10"
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-core = "0.61"
+windows = { version = "0.61", features = [
+    "Win32_Media_Audio",
+    "Win32_System_Com",
+    "Win32_Foundation",
+] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 coreaudio-sys = "0.2"
 core-foundation-sys = "0.8"
@@ -26,3 +34,8 @@ libloading = "0.8"
 [dev-dependencies]
 hound = "3"
 tempfile = "3"
+
+[features]
+# ASIO input backend (Windows): needs Steinberg's ASIO SDK at build time
+# (CPAL_ASIO_DIR) — see the CI workflow for the wiring.
+asio = ["cpal/asio"]

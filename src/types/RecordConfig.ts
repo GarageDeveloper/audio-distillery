@@ -3,6 +3,10 @@ import type { RecordLane } from "./RecordLane";
 
 export type RecordConfig = { 
 /**
+ * Audio host of the device; "" = the platform's default host.
+ */
+host: string, 
+/**
  * Device name; "" = system default input.
  */
 device: string, 
