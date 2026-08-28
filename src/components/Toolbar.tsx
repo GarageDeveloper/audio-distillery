@@ -221,10 +221,10 @@ export function Toolbar(p: Props) {
                 title={
                   p.view.tracks.length === 0
                     ? "Mark at least one track region first"
-                    : "Export tracks (⌘E)"
+                    : "Export tracks, stems, CD image or DDP (⌘E)"
                 }
               >
-                {p.phase === "master" ? "Export album…" : "Export…"}
+                Export…
                 {p.phase === "master" && p.readiness.some((r) => !r.ok) && (
                   <span className="readiness-badge">
                     ○ {p.readiness.filter((r) => !r.ok).length}
