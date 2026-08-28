@@ -24,7 +24,8 @@ interface Props {
   onOpen: () => void;
   onAddClips: () => void;
   onAddTake: () => void;
-  onRecord: () => void;
+  /** Elapsed seconds of a rolling take (null = none). */
+  recSeconds: number | null;
   phase: "record" | "edit" | "master";
   masterPulse: boolean;
   onPhaseChange: (phase: "record" | "edit" | "master") => void;
@@ -80,12 +81,29 @@ export function Toolbar(p: Props) {
             className={`phase-seg ${p.phase === ph ? "on" : ""} ${
               ph === "master" && p.masterPulse ? "pulse" : ""
             }`}
+            disabled={!p.view && ph !== "record"}
+            title={
+              !p.view && ph !== "record"
+                ? "Record a take or add audio files first — there is nothing to edit yet"
+                : undefined
+            }
             onClick={() => p.onPhaseChange(ph)}
           >
             {ph === "record" ? "Record" : ph === "edit" ? "Edit" : "Master"}
           </button>
         ))}
       </div>
+      {p.recSeconds != null && p.phase !== "record" && (
+        <button
+          className="rec-chip"
+          title="A take is rolling — click to return to the Record surface"
+          onClick={() => p.onPhaseChange("record")}
+        >
+          <span className="record-dot" />
+          {String(Math.floor(p.recSeconds / 60)).padStart(2, "0")}:
+          {String(Math.floor(p.recSeconds % 60)).padStart(2, "0")}
+        </button>
+      )}
       {p.view && (
         <>
           <button
@@ -203,10 +221,10 @@ export function Toolbar(p: Props) {
                 title={
                   p.view.tracks.length === 0
                     ? "Mark at least one track region first"
-                    : "Export tracks (⌘E)"
+                    : "Export tracks, stems, CD image or DDP (⌘E)"
                 }
               >
-                {p.phase === "master" ? "Export album…" : "Export…"}
+                Export…
                 {p.phase === "master" && p.readiness.some((r) => !r.ok) && (
                   <span className="readiness-badge">
                     ○ {p.readiness.filter((r) => !r.ok).length}

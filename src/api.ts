@@ -134,6 +134,10 @@ export const api = {
   requestMicAccess: (reset: boolean) =>
     invoke<void>("request_mic_access", { reset }),
   getDefaultRecordingDir: () => invoke<string>("get_default_recording_dir"),
+  recordMonitor: (config: RecordConfig) =>
+    invoke<RecordStatus>("record_monitor", { config }),
+  recordRenameLane: (index: number, name: string) =>
+    invoke<void>("record_rename_lane", { index, name }),
   recordStart: (config: RecordConfig) =>
     invoke<RecordStatus>("record_start", { config }),
   recordStatus: () => invoke<RecordStatus | null>("record_status"),

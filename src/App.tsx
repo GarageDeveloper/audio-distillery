@@ -18,8 +18,7 @@ import { AlbumMetaForm } from "./components/AlbumMetaForm";
 import { Backdrop } from "./components/Backdrop";
 import { MasteringPanel } from "./components/MasteringPanel";
 import { clampSpanToFreeHole } from "./lib/spans";
-import { EmptyState } from "./components/EmptyState";
-import { RecordDialog } from "./components/RecordDialog";
+import { RecordSurface } from "./components/RecordSurface";
 import { StatusBar } from "./components/StatusBar";
 import { AboutDialog } from "./components/AboutDialog";
 import { usePlayback } from "./hooks/usePlayback";
@@ -64,7 +63,9 @@ export default function App() {
   /// playback run moves the review focus.
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const [dropChoice, setDropChoice] = useState<string[] | null>(null);
-  const [recordOpen, setRecordOpen] = useState(false);
+  /// Elapsed seconds of a rolling take (null = none) — slow app-level
+  /// poll so the toolbar can flag a recording from any phase.
+  const [recSeconds, setRecSeconds] = useState<number | null>(null);
   const [minTrackSecs, setMinTrackSecs] = useState(120);
   const [waveMode, setWaveMode] = useState<"mix" | "layers">("mix");
   const [selection, setSelection] = useState<RegionSpan | null>(null);
@@ -76,9 +77,9 @@ export default function App() {
   /// Transport program: the source timeline or the album (target) one.
   const [playMode, setPlayMode] = useState<"edit" | "album">("edit");
   /// Workflow phase (Option A): pure display emphasis, derived + chosen,
-  /// never persisted. "record" is not stored: no session = record screen;
-  /// with a session the Record segment opens the record dialog.
-  const [phase, setPhase] = useState<"edit" | "master">("edit");
+  /// never persisted. Record is a real phase: the full-pane surface,
+  /// over the dimmed timeline when a session is open.
+  const [phase, setPhase] = useState<"record" | "edit" | "master">("record");
   const [masterPulse, setMasterPulse] = useState(false);
   /// Explicit program choices, remembered PER PHASE: once you force a
   /// mode inside a phase, coming back to that phase restores it.
@@ -288,6 +289,22 @@ export default function App() {
     }
   }, [pickAudioPaths, loadPaths]);
 
+  /// The Record surface's import zone: same routing as a file drop —
+  /// one file on an empty app is unambiguous, anything else goes through
+  /// the layout choice (clips / album tracks / multitrack / layers).
+  const importFiles = useCallback(async () => {
+    const paths = await pickAudioPaths(true);
+    if (paths.length === 0) return;
+    const still = paths.find((pth) => pth.toLowerCase().endsWith(".still"));
+    if (still) {
+      void loadPaths([still], "project");
+    } else if (!viewRef.current && paths.length === 1) {
+      void loadPaths(paths, "open");
+    } else {
+      setDropChoice(paths);
+    }
+  }, [pickAudioPaths, loadPaths]);
+
   const addClips = useCallback(async () => {
     const paths = await pickAudioPaths(false);
     if (paths.length > 0) void loadPaths(paths, "append");
@@ -450,11 +467,11 @@ export default function App() {
         e.preventDefault();
         setExportOpen(true);
       } else if (e.key === "1" && !mod) {
-        setRecordOpen(true);
+        setPhase("record");
       } else if (e.key === "2" && !mod) {
-        setPhase("edit");
+        if (view) setPhase("edit");
       } else if (e.key === "3" && !mod) {
-        setPhase("master");
+        if (view) setPhase("master");
       }
     };
     window.addEventListener("keydown", onKey);
@@ -604,6 +621,28 @@ export default function App() {
     [selection, pendingStart, playheadSample]
   );
 
+  // A fresh session lands in Edit; closing everything returns to the
+  // Record surface (the app's empty screen). User choices in between
+  // are never overridden.
+  const hadView = useRef(false);
+  useEffect(() => {
+    if (view && !hadView.current) setPhase("edit");
+    else if (!view && hadView.current) setPhase("record");
+    hadView.current = !!view;
+  }, [view]);
+
+  // Slow heartbeat: is a take rolling? Feeds the toolbar's REC chip so
+  // a recording started in the Record phase stays visible everywhere.
+  useEffect(() => {
+    const t = window.setInterval(() => {
+      api
+        .recordStatus()
+        .then((st) => setRecSeconds(st?.recording ? st.elapsed_seconds : null))
+        .catch(() => {});
+    }, 1000);
+    return () => window.clearInterval(t);
+  }, []);
+
   const trackCount2 = view?.tracks.length ?? 0;
   const prevTrackCount = useRef(0);
   useEffect(() => {
@@ -620,7 +659,7 @@ export default function App() {
   // Master=album) unless the user explicitly overrode the mode in THAT
   // phase before — explicit choices persist across phase switches.
   useEffect(() => {
-    if (!view) return;
+    if (!view || phase === "record") return;
     const target =
       modeOverride.current[phase] ?? (phase === "master" ? "album" : "edit");
     if (target === "album" && playMode !== "album" && view.album.tracks.length > 0) {
@@ -730,15 +769,11 @@ export default function App() {
         waveMode={waveMode}
         onWaveModeChange={setWaveMode}
         onOpen={openFile}
-        onRecord={() => setRecordOpen(true)}
-        phase={view ? phase : "record"}
+        recSeconds={recSeconds}
+        phase={phase}
         masterPulse={masterPulse}
         onPhaseChange={(p) => {
-          if (p === "record") {
-            if (view) setRecordOpen(true);
-            return;
-          }
-          if (!view) return; // no session: stay on the record screen
+          if (!view && p !== "record") return; // no session: nothing to edit yet
           setPhase(p);
         }}
         readiness={readiness}
@@ -764,9 +799,30 @@ export default function App() {
 
       <div className="main">
         <div className="wave-area">
+          {phase === "record" && (
+            <RecordSurface
+              hasSession={!!view}
+              onImport={() => void importFiles()}
+              onError={showError}
+              onRecorded={(paths) => {
+                if (paths.length === 0) return;
+                if (view) {
+                  // A session is open: adding recorded lanes has real
+                  // alternatives (append, layers, take) — keep the choice.
+                  setDropChoice(paths);
+                } else {
+                  // A fresh recording IS a synced multitrack session by
+                  // construction: skip the question and land on the
+                  // per-layer view, where the take is actually visible.
+                  setWaveMode("layers");
+                  void loadPaths(paths, "multitrack");
+                }
+              }}
+            />
+          )}
           {view ? (
             <>
-              <div className={`waveform-holder ${phase === "master" ? "phase-master" : ""}`}>
+              <div className={`waveform-holder ${phase === "master" ? "phase-master" : phase === "record" ? "phase-record" : ""}`}>
               <Waveform
                 view={view}
                 viewport={viewport}
@@ -841,6 +897,7 @@ export default function App() {
                 </>
               )}
               </div>
+              {phase !== "record" && (
               <Minimap
                 view={view}
                 viewport={viewport}
@@ -848,6 +905,8 @@ export default function App() {
                 playheadSample={playMode === "album" ? -1 : playheadSample}
                 onViewportChange={onViewportChange}
               />
+              )}
+              {phase !== "record" && (
               <AlbumStrip
                 tall={phase === "master"}
                 isrcById={Object.fromEntries(view.tracks.map((t) => [t.id, t.isrc]))}
@@ -877,7 +936,8 @@ export default function App() {
                 }
                 onSetTrackGap={(id, ms) => void apply(() => api.setTrackGap(id, ms))}
               />
-              {selection && !proposals && (
+              )}
+              {phase !== "record" && selection && !proposals && (
                 <div className="proposal-bar">
                   <input
                     className="text-input add-track-title"
@@ -913,7 +973,7 @@ export default function App() {
                   </button>
                 </div>
               )}
-              {pendingStart != null && !selection && (
+              {phase !== "record" && pendingStart != null && !selection && (
                 <div className="proposal-bar">
                   <span>
                     Track start set — press <kbd>M</kbd> again at the end position
@@ -923,7 +983,7 @@ export default function App() {
                   </button>
                 </div>
               )}
-              {proposals && (
+              {phase !== "record" && proposals && (
                 <div className="proposal-bar">
                   <div className="proposal-controls">
                   {(view?.layers.length ?? 0) > 1 && (
@@ -1071,9 +1131,7 @@ export default function App() {
                 </div>
               )}
             </>
-          ) : (
-            <EmptyState onOpen={openFile} onRecord={() => setRecordOpen(true)} />
-          )}
+          ) : null}
           {loading.active && (
             <div className="loading-overlay">
               <div className="loading-card">
@@ -1101,7 +1159,7 @@ export default function App() {
           )}
         </div>
 
-        {view && panelOpen && (
+        {view && panelOpen && phase !== "record" && (
           <TrackList
             view={view}
             playheadSample={playheadSample}
@@ -1158,28 +1216,6 @@ export default function App() {
       />
 
       {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} />}
-
-      {recordOpen && (
-        <RecordDialog
-          onClose={() => setRecordOpen(false)}
-          onError={showError}
-          onRecorded={(paths) => {
-            setRecordOpen(false);
-            if (paths.length === 0) return;
-            if (view) {
-              // A session is open: adding recorded lanes has real
-              // alternatives (append, layers, take) — keep the choice.
-              setDropChoice(paths);
-            } else {
-              // A fresh recording IS a synced multitrack session by
-              // construction: skip the question and land on the
-              // per-layer view, where the take is actually visible.
-              setWaveMode("layers");
-              void loadPaths(paths, "multitrack");
-            }
-          }}
-        />
-      )}
 
       {error && (
         <div className="toast toast-error" onClick={() => setError(null)}>

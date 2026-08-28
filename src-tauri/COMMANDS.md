@@ -244,6 +244,16 @@ returns the file paths, which the frontend feeds into the usual layout
 choice (synced multitrack). The cpal stream lives on a dedicated
 thread (callback = copy into a ring buffer, nothing else).
 
+The Record surface adds two commands. `record_monitor(RecordConfig)`
+opens the same stream in **monitor mode**: meters live, nothing
+written (no folder, no files) — `RecordStatus.monitoring` tells it
+apart from `recording`. A new monitor (or `record_start`) displaces
+the previous monitor atomically; both refuse while a real take runs.
+`record_rename_lane(index, name)` renames a lane **during** a take:
+the name is stored and applied at `record_stop` time by renaming the
+finalized file (`"NN - name.wav"`, sanitized) — the stream itself is
+never disturbed.
+
 ### Clip editing (M1)
 
 `remove_clip(clip_index)` removes a BASE-layer clip and ripples: later
