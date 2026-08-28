@@ -94,6 +94,19 @@ export function RecordDialog({ onClose, onError, onRecorded }: Props) {
     return () => window.clearInterval(t);
   }, [micPerm]);
 
+  // Esc closes the dialog — except while arming or recording, exactly
+  // like the Close button.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !recording && !starting) {
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [recording, starting, onClose]);
+
   // Hot-plug: the backend watcher (CoreAudio listener + off-thread
   // enumeration) pushes an event ONLY when the topology changes — no
   // polling, nothing on the UI thread.
