@@ -37,7 +37,10 @@
     "externalBin": [
       "binaries/ffmpeg"
     ],
-    "copyright": "© 2026 Raphaël Enrici — MIT License"
+    "copyright": "© 2026 Raphaël Enrici — MIT License",
+    "macOS": {
+      "entitlements": "Entitlements.plist"
+    }
   },
   "mainBinaryName": "AudioDistillery"
 }

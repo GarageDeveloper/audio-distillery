@@ -959,6 +959,12 @@ mod tests {
             "lanes not sample-synced: {durations:?}"
         );
         eprintln!("recorded {files:?}");
+        // Signal sanity: an open mic in a room is NEVER digital silence.
+        for f in &files {
+            let mut r = hound::WavReader::open(f).unwrap();
+            let peak = r.samples::<i32>().map(|v| v.unwrap().abs()).max().unwrap_or(0);
+            eprintln!("peak {f:?} = {peak} ({:.1} dBFS)", 20.0 * ((peak.max(1) as f64) / 8388607.0).log10());
+        }
     }
 
     /// Print the input devices this machine exposes (manual check).

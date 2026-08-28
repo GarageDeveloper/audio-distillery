@@ -38,6 +38,8 @@ export function RecordDialog({ onClose, onError, onRecorded }: Props) {
   const [starting, setStarting] = useState(false);
   // Max-hold per lane so short peaks stay visible between polls.
   const holds = useRef<number[]>([]);
+  // True once ANY lane has shown signal during this take.
+  const sawSignal = useRef(false);
 
   const recording = status?.recording ?? false;
   const selected = devices.find((d) => keyOf(d) === device);
@@ -97,6 +99,7 @@ export function RecordDialog({ onClose, onError, onRecorded }: Props) {
             s.levels.forEach((v, i) => {
               holds.current[i] = Math.max(v, (holds.current[i] ?? 0) * 0.82);
             });
+            if (s.levels.some((v) => v > 0)) sawSignal.current = true;
             setStatus(s);
           }
         })
@@ -131,6 +134,7 @@ export function RecordDialog({ onClose, onError, onRecorded }: Props) {
   const start = async () => {
     setStarting(true);
     holds.current = [];
+    sawSignal.current = false;
     try {
       const s = await api.recordStart({
         host: selected?.host ?? "",
@@ -362,6 +366,13 @@ export function RecordDialog({ onClose, onError, onRecorded }: Props) {
             {status.dropped_frames > 0 && (
               <div className="record-dropped">
                 ⚠ {status.dropped_frames} frames dropped — the disk cannot keep up
+              </div>
+            )}
+            {!sawSignal.current && elapsed > 3 && (
+              <div className="record-dropped">
+                ⚠ No signal on any input — the OS may be blocking microphone
+                access (macOS: System Settings → Privacy &amp; Security →
+                Microphone), or the wrong interface is selected.
               </div>
             )}
             {status.error && <div className="record-dropped">⚠ {status.error}</div>}
