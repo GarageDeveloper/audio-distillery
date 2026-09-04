@@ -522,11 +522,37 @@ export default function App() {
     [playMode, sourceToAlbum, playback, showError]
   );
 
+  /// Bring a SOURCE-timeline position into view without touching the
+  /// zoom: if the playhead would land off-screen, scroll the viewport
+  /// to center it; if it is already visible, leave the view alone.
+  const focusViewportOn = useCallback(
+    (sample: number) => {
+      const v = viewRef.current;
+      if (!v) return;
+      setViewport((vp) => {
+        const visible = waveWidth * vp.spp;
+        const margin = visible * 0.04;
+        if (sample >= vp.start + margin && sample <= vp.start + visible - margin) {
+          return vp;
+        }
+        return clampViewport(
+          { start: sample - visible / 2, spp: vp.spp },
+          waveWidth,
+          v.audio.duration_samples,
+          1
+        );
+      });
+    },
+    [waveWidth]
+  );
+
   /// Track-list / album-block clicks: jump to the track AND start
-  /// playback if stopped — in whichever program is loaded.
+  /// playback if stopped — in whichever program is loaded. The waveform
+  /// follows (same zoom) so the playhead is always in sight.
   const seekToAndPlay = useCallback(
     (sample: number) => {
       const target = playMode === "album" ? sourceToAlbum(sample) : sample;
+      focusViewportOn(sample);
       api
         .playerSeek(target)
         .then((s) => {
@@ -537,7 +563,7 @@ export default function App() {
         })
         .catch((e) => showError(String(e)));
     },
-    [playMode, sourceToAlbum, playback, showError]
+    [playMode, sourceToAlbum, playback, showError, focusViewportOn]
   );
 
   /** Enter the album program; optionally seek; `play` starts playback
