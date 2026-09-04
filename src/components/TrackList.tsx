@@ -60,6 +60,9 @@ export function TrackList({
   showDelivery,
 }: Props) {
   const [editing, setEditing] = useState<number | null>(null);
+  /// Single-click seeks are delayed one beat so a double-click (rename)
+  /// can cancel them — renaming must never touch playback.
+  const clickTimer = useRef<number | undefined>(undefined);
   const [gapEdit, setGapEdit] = useState<{ id: number; draft: string } | null>(null);
   const [mixOpen, setMixOpen] = useState<number | null>(null);
   const overrideThrottle = useRef<Record<string, number>>({});
@@ -250,12 +253,18 @@ export function TrackList({
               className={`track-row ${isPlaying ? "playing" : ""} ${
                 selectedTrack === t.id ? "selected" : ""
               }`}
-              onClick={() => {
+              onClick={(e) => {
                 onSelectTrack(t.id);
-                onSeek(t.start_sample);
+                if (e.detail > 1) return; // second click of a double-click
+                window.clearTimeout(clickTimer.current);
+                clickTimer.current = window.setTimeout(
+                  () => onSeek(t.start_sample),
+                  230
+                );
               }}
               onDoubleClick={(e) => {
                 e.stopPropagation();
+                window.clearTimeout(clickTimer.current);
                 setDraft(t.title);
                 setEditing(t.id);
               }}
