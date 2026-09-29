@@ -1,20 +1,36 @@
-//! Minimal MP4/M4A box walker: reads the audio track's edit-list start
-//! offset (encoder priming, e.g. 1024 frames for AAC).
+//! Minimal MP4/M4A box walker: reads the audio track's edit list — where
+//! the real audio starts (after encoder priming, e.g. 1024 frames for AAC)
+//! and how long it lasts (before the encoder's trailing padding).
 //!
 //! Symphonia parses `elst` but does not apply it, while FFmpeg (which renders
 //! the exports) does. Without this, an M4A waveform would sit ~23 ms late
-//! relative to the exported audio. Read-only, like every source access.
+//! relative to the exported audio. Recent FFmpeg versions also drop the
+//! trailing padding and older ones don't: applying the duration here makes
+//! the timeline the true audio length either way. Read-only, like every
+//! source access.
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
-/// Frames (at `sample_rate`) the audio track's edit list skips at the start
-/// of the stream. 0 when absent, unreadable, or not an MP4 container.
-pub(crate) fn lead_skip_frames(path: &Path, sample_rate: u32) -> u64 {
-    let Ok(mut f) = File::open(path) else { return 0 };
-    let Ok(len) = f.seek(SeekFrom::End(0)) else { return 0 };
-    let Some(moov) = find_box(&mut f, 0, len, b"moov") else { return 0 };
+/// The audio track's edit, in frames at the track's sample rate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Edit {
+    /// Frames to skip at the start of the stream (priming).
+    pub(crate) lead_skip: u64,
+    /// Frames to play after the skip (None = up to the end of the stream).
+    pub(crate) frames: Option<u64>,
+}
+
+/// The audio track's first non-empty edit. None when absent, unreadable,
+/// or not an MP4 container.
+pub(crate) fn audio_edit(path: &Path, sample_rate: u32) -> Option<Edit> {
+    let mut f = File::open(path).ok()?;
+    let len = f.seek(SeekFrom::End(0)).ok()?;
+    let moov = find_box(&mut f, 0, len, b"moov")?;
+    // Edit durations are in the MOVIE timescale, media times in the track's.
+    let movie_timescale = find_box(&mut f, moov.0, moov.1, b"mvhd")
+        .and_then(|mvhd| timescale_at(&mut f, mvhd.0))?;
     let mut pos = moov.0;
     while let Some((body, end, kind)) = next_box(&mut f, pos, moov.1) {
         pos = end;
@@ -25,17 +41,21 @@ pub(crate) fn lead_skip_frames(path: &Path, sample_rate: u32) -> u64 {
         if handler_type(&mut f, mdia).as_ref() != Some(b"soun") {
             continue;
         }
-        let Some(timescale) = mdhd_timescale(&mut f, mdia) else { return 0 };
-        let media_time = find_box(&mut f, body, end, b"edts")
-            .and_then(|edts| find_box(&mut f, edts.0, edts.1, b"elst"))
-            .and_then(|elst| elst_media_time(&mut f, elst.0))
-            .unwrap_or(0);
-        if media_time <= 0 || timescale == 0 {
-            return 0;
-        }
-        return (media_time as u128 * sample_rate as u128 / timescale as u128) as u64;
+        let (mdhd, _) = find_box(&mut f, mdia.0, mdia.1, b"mdhd")?;
+        let media_timescale = timescale_at(&mut f, mdhd)?;
+        let edts = find_box(&mut f, body, end, b"edts")?;
+        let elst = find_box(&mut f, edts.0, edts.1, b"elst")?;
+        let (duration, media_time) = elst_first_edit(&mut f, elst.0)?;
+        let to_frames = |v: u64, scale: u32| {
+            (v as u128 * sample_rate as u128 / scale.max(1) as u128) as u64
+        };
+        return Some(Edit {
+            lead_skip: to_frames(media_time.max(0) as u64, media_timescale),
+            // A zero duration means "the rest of the media".
+            frames: (duration > 0).then(|| to_frames(duration, movie_timescale)),
+        });
     }
-    0
+    None
 }
 
 /// Box header at `pos` (bounded by `limit`): (body start, box end, type).
@@ -90,29 +110,36 @@ fn handler_type(f: &mut File, mdia: (u64, u64)) -> Option<[u8; 4]> {
     read_at::<4>(f, body + 8)
 }
 
-/// `mdhd` timescale (units per second of the track's media timeline).
-fn mdhd_timescale(f: &mut File, mdia: (u64, u64)) -> Option<u32> {
-    let (body, _) = find_box(f, mdia.0, mdia.1, b"mdhd")?;
+/// Timescale (units per second) of a `mvhd` or `mdhd` box — same layout.
+fn timescale_at(f: &mut File, body: u64) -> Option<u32> {
     let version = read_at::<1>(f, body)?[0];
     // version/flags (4) + creation/modification times (2×4 or 2×8).
     let off = if version == 1 { 4 + 16 } else { 4 + 8 };
-    Some(u32::from_be_bytes(read_at::<4>(f, body + off)?))
+    let scale = u32::from_be_bytes(read_at::<4>(f, body + off)?);
+    (scale > 0).then_some(scale)
 }
 
-/// `media_time` of the first non-empty edit (-1 marks an empty edit).
-fn elst_media_time(f: &mut File, body: u64) -> Option<i64> {
+/// (segment_duration, media_time) of the first non-empty edit (media_time
+/// -1 marks an empty edit).
+fn elst_first_edit(f: &mut File, body: u64) -> Option<(u64, i64)> {
     let version = read_at::<1>(f, body)?[0];
     let count = u32::from_be_bytes(read_at::<4>(f, body + 4)?);
     let entry_len = if version == 1 { 20 } else { 12 };
     for i in 0..count.min(16) as u64 {
         let e = body + 8 + i * entry_len;
-        let media_time = if version == 1 {
-            i64::from_be_bytes(read_at::<8>(f, e + 8)?)
+        let (duration, media_time) = if version == 1 {
+            (
+                u64::from_be_bytes(read_at::<8>(f, e)?),
+                i64::from_be_bytes(read_at::<8>(f, e + 8)?),
+            )
         } else {
-            i32::from_be_bytes(read_at::<4>(f, e + 4)?) as i64
+            (
+                u32::from_be_bytes(read_at::<4>(f, e)?) as u64,
+                i32::from_be_bytes(read_at::<4>(f, e + 4)?) as i64,
+            )
         };
         if media_time != -1 {
-            return Some(media_time);
+            return Some((duration, media_time));
         }
     }
     None

@@ -134,8 +134,13 @@ pub(crate) struct Opened {
     /// edit list: AAC encoder priming). Position 0 is the first frame AFTER
     /// them — the same origin FFmpeg uses at export.
     pub(crate) lead_skip: u64,
+    /// Frames of real audio after the lead skip (MP4 edit duration: stops
+    /// before the encoder's trailing padding). None = to the end of stream.
+    play_frames: Option<u64>,
     /// Lead frames still to discard from the next decoded packets.
     pending_skip: u64,
+    /// In-file position (post-skip origin) of the next frame handed out.
+    cursor: u64,
 }
 
 impl Opened {
@@ -158,19 +163,24 @@ impl Opened {
             .map_err(|e| StillError::Decode(e.to_string()))?
             .actual_ts;
         self.pending_skip = self.lead_skip.saturating_sub(landed);
-        Ok(landed.saturating_sub(self.lead_skip))
+        self.cursor = landed.saturating_sub(self.lead_skip);
+        Ok(self.cursor)
     }
 
-    /// Drop any remaining lead (priming) frames from a decoded interleaved
-    /// buffer; returns what is left to consume.
-    pub(crate) fn trim_lead<'a>(&mut self, samples: &'a [f32], channels: usize) -> &'a [f32] {
-        if self.pending_skip == 0 {
-            return samples;
+    /// Apply the container's edit to a decoded interleaved buffer: drop the
+    /// remaining lead (priming) frames and anything past the edit's end
+    /// (trailing padding). Returns what is left to consume.
+    pub(crate) fn trim_edit<'a>(&mut self, samples: &'a [f32], channels: usize) -> &'a [f32] {
+        let ch = channels.max(1);
+        let frames = (samples.len() / ch) as u64;
+        let skip = self.pending_skip.min(frames);
+        self.pending_skip -= skip;
+        let mut keep = frames - skip;
+        if let Some(total) = self.play_frames {
+            keep = keep.min(total.saturating_sub(self.cursor));
         }
-        let frames = (samples.len() / channels.max(1)) as u64;
-        let n = self.pending_skip.min(frames);
-        self.pending_skip -= n;
-        &samples[n as usize * channels.max(1)..]
+        self.cursor += keep;
+        &samples[skip as usize * ch..(skip + keep) as usize * ch]
     }
 }
 
@@ -221,20 +231,22 @@ pub(crate) fn open(path: &Path) -> Result<Opened> {
         .extension()
         .map(|e| matches!(e.to_string_lossy().to_lowercase().as_str(), "m4a" | "mp4"))
         .unwrap_or(false);
-    let lead_skip = if is_mp4 {
-        crate::mp4::lead_skip_frames(path, sample_rate)
-    } else {
-        0
-    };
+    let edit = is_mp4
+        .then(|| crate::mp4::audio_edit(path, sample_rate))
+        .flatten();
+    let lead_skip = edit.map(|e| e.lead_skip).unwrap_or(0);
+    let play_frames = edit.and_then(|e| e.frames);
     Ok(Opened {
         format,
         decoder,
         track_id,
         sample_rate,
         channels,
-        n_frames_hint: n_frames_hint.map(|n| n.saturating_sub(lead_skip)),
+        n_frames_hint: play_frames.or(n_frames_hint.map(|n| n.saturating_sub(lead_skip))),
         lead_skip,
+        play_frames,
         pending_skip: lead_skip,
+        cursor: 0,
     })
 }
 
@@ -308,7 +320,7 @@ fn decode_into(
                     _ => sample_buf.insert(SampleBuffer::new(needed, spec)),
                 };
                 buf.copy_interleaved_ref(decoded);
-                builder.push_interleaved(o.trim_lead(buf.samples(), spec.channels.count()));
+                builder.push_interleaved(o.trim_edit(buf.samples(), spec.channels.count()));
                 if let Some(nf) = o.n_frames_hint {
                     if nf > 0 {
                         let done = builder.total_frames() - start_frames;
@@ -564,7 +576,7 @@ fn snap_inner(path: &Path, position: u64, window_ms: u32) -> Result<Option<u64>>
             _ => sample_buf.insert(SampleBuffer::new(needed, spec)),
         };
         buf.copy_interleaved_ref(decoded);
-        for frame in o.trim_lead(buf.samples(), ch).chunks_exact(ch) {
+        for frame in o.trim_edit(buf.samples(), ch).chunks_exact(ch) {
             let v: f32 = frame.iter().sum::<f32>() / ch as f32;
             mono.push(v);
         }
