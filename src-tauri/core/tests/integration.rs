@@ -166,7 +166,7 @@ fn full_scenario_is_non_destructive_and_sample_accurate() {
     assert_eq!(checksum(&wav), checksum_before);
 }
 
-/// Compressed formats (FLAC, MP3) must scan too — generated with ffmpeg when
+/// Compressed formats (FLAC, MP3, M4A/AAC) must scan too — generated with ffmpeg when
 /// available, skipped otherwise.
 #[test]
 fn scans_compressed_formats() {
@@ -177,11 +177,18 @@ fn scans_compressed_formats() {
     let dir = tempfile::tempdir().unwrap();
     let wav = dir.path().join("src.wav");
     write_wav(&wav, &[(5.0, 0.6)]);
-    for ext in ["flac", "mp3"] {
-        let out = dir.path().join(format!("src.{ext}"));
+    // (label, file name, codec) — M4A comes as AAC (lossy) or ALAC (lossless).
+    for (ext, file, codec) in [
+        ("flac", "src.flac", "flac"),
+        ("mp3", "src.mp3", "libmp3lame"),
+        ("m4a/aac", "src_aac.m4a", "aac"),
+        ("m4a/alac", "src_alac.m4a", "alac"),
+    ] {
+        let out = dir.path().join(file);
         let status = std::process::Command::new(&ffmpeg)
             .args(["-hide_banner", "-v", "error", "-i"])
             .arg(&wav)
+            .args(["-c:a", codec])
             .arg(&out)
             .status()
             .unwrap();
@@ -189,10 +196,68 @@ fn scans_compressed_formats() {
         let (info, peaks) = scan_file(&out, |_| {}).unwrap();
         assert_eq!(info.sample_rate, SR, "{ext}");
         assert_eq!(info.channels, 2, "{ext}");
-        // MP3 adds encoder padding; duration must still be within ~100 ms.
+        // MP3/AAC add encoder padding; duration must still be within ~100 ms.
         let secs = info.duration_seconds;
         assert!((secs - 5.0).abs() < 0.1, "{ext}: duration {secs}");
         assert_eq!(peaks.channel_count(), 2, "{ext}");
+    }
+}
+
+/// M4A/AAC carries encoder priming that FFmpeg (the export renderer) drops
+/// via the MP4 edit list. The scan and the playback engine must use the SAME
+/// origin, or markers placed on the waveform would cut ~23 ms off at export.
+#[test]
+fn m4a_timeline_matches_ffmpeg() {
+    use still_core::engine::decode::{LayerDecoder, PlayItem};
+    let Ok(ffmpeg) = resolve_ffmpeg(&[]) else {
+        eprintln!("ffmpeg not found — M4A alignment test skipped");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let wav = dir.path().join("src.wav");
+    // 1 s of silence, then a tone: its onset is the alignment probe.
+    write_wav(&wav, &[(1.0, 0.0), (2.0, 0.6)]);
+    let threshold = 1000.0 / 32768.0;
+    for codec in ["aac", "alac"] {
+        let m4a = dir.path().join(format!("src_{codec}.m4a"));
+        let decoded = dir.path().join(format!("ref_{codec}.wav"));
+        for (input, args, output) in [
+            (&wav, ["-c:a", codec], &m4a),
+            (&m4a, ["-c:a", "pcm_s16le"], &decoded),
+        ] {
+            let status = std::process::Command::new(&ffmpeg)
+                .args(["-hide_banner", "-v", "error", "-i"])
+                .arg(input)
+                .args(args)
+                .arg(output)
+                .status()
+                .unwrap();
+            assert!(status.success(), "{codec}: ffmpeg failed");
+        }
+        let reference: Vec<i16> = hound::WavReader::open(&decoded)
+            .unwrap()
+            .into_samples()
+            .map(|s| s.unwrap())
+            .collect();
+        let ref_onset = (reference.iter().position(|v| v.abs() > 1000).unwrap() / 2) as u64;
+
+        let (info, _) = scan_file(&m4a, |_| {}).unwrap();
+        assert_eq!(info.duration_samples, reference.len() as u64 / 2, "{codec}: length");
+
+        let item = PlayItem::File {
+            path: m4a.clone(),
+            samples: info.duration_samples,
+            offset: 0,
+        };
+        let mut d = LayerDecoder::new(vec![item], 2);
+        let onset = |d: &mut LayerDecoder, from: u64, frames: usize| {
+            let mut buf = vec![0f32; frames * 2];
+            d.read(&mut buf, frames);
+            from + (buf.iter().position(|v| v.abs() > threshold).unwrap() / 2) as u64
+        };
+        assert_eq!(onset(&mut d, 0, 60_000), ref_onset, "{codec}: playback onset");
+        d.seek(40_000);
+        assert_eq!(onset(&mut d, 40_000, 10_000), ref_onset, "{codec}: onset after seek");
     }
 }
 

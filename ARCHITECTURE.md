@@ -16,7 +16,7 @@ A desktop application (macOS today; the core is platform-agnostic) that
 turns long continuous recordings — concerts, rehearsals, vinyl sides,
 multitrack field recordings — into finished, tagged, mastered albums:
 
-1. **Load** one or more audio files (WAV, FLAC, MP3, AIFF): sequential
+1. **Load** one or more audio files (WAV, FLAC, MP3, M4A, AIFF): sequential
    clips on a timeline, and/or time-synchronized **layers** (e.g. the
    separate inputs of a field recorder), including chained multitrack
    "takes".

@@ -31,7 +31,7 @@ fn check_extensions(paths: &[String]) -> CmdResult<()> {
             .unwrap_or_default();
         if !still_core::SUPPORTED_EXTENSIONS.contains(&ext.as_str()) {
             return Err(format!(
-                "Unsupported file type \".{ext}\". Supported formats: WAV, FLAC, MP3, AIFF."
+                "Unsupported file type \".{ext}\". Supported formats: WAV, FLAC, MP3, M4A, AIFF."
             ));
         }
     }

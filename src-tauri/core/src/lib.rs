@@ -13,6 +13,7 @@ pub mod error;
 pub mod export;
 pub mod ffmpeg;
 pub mod metadata;
+mod mp4;
 pub mod naming;
 pub mod engine;
 pub mod peaks;

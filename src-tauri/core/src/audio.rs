@@ -16,7 +16,7 @@ use ts_rs::TS;
 use crate::error::{Result, StillError};
 use crate::peaks::{PeakBuilder, PeakPyramid};
 
-pub const SUPPORTED_EXTENSIONS: &[&str] = &["wav", "flac", "mp3", "aiff", "aif"];
+pub const SUPPORTED_EXTENSIONS: &[&str] = &["wav", "flac", "mp3", "m4a", "aiff", "aif"];
 
 /// One source file placed on the session timeline. Clips are laid out
 /// back-to-back in order; all positions are timeline samples.
@@ -130,6 +130,48 @@ pub(crate) struct Opened {
     pub(crate) sample_rate: u32,
     pub(crate) channels: u16,
     pub(crate) n_frames_hint: Option<u64>,
+    /// Frames the container says to drop at the start of the stream (MP4
+    /// edit list: AAC encoder priming). Position 0 is the first frame AFTER
+    /// them — the same origin FFmpeg uses at export.
+    pub(crate) lead_skip: u64,
+    /// Lead frames still to discard from the next decoded packets.
+    pending_skip: u64,
+}
+
+impl Opened {
+    /// Seek to in-file frame `frame` (relative to the post-priming origin)
+    /// and reset the decoder. Returns the frame the reader actually landed
+    /// on, which may precede `frame` (decode-and-discard the difference).
+    pub(crate) fn seek_frame(&mut self, frame: u64) -> Result<u64> {
+        let raw = frame + self.lead_skip;
+        let secs = raw as f64 / self.sample_rate.max(1) as f64;
+        let seeked = self.format.seek(
+            SeekMode::Accurate,
+            SeekTo::Time {
+                time: Time::from(secs),
+                track_id: Some(self.track_id),
+            },
+        );
+        self.decoder.reset();
+        // actual_ts is in the track's timebase; for audio this is frames.
+        let landed = seeked
+            .map_err(|e| StillError::Decode(e.to_string()))?
+            .actual_ts;
+        self.pending_skip = self.lead_skip.saturating_sub(landed);
+        Ok(landed.saturating_sub(self.lead_skip))
+    }
+
+    /// Drop any remaining lead (priming) frames from a decoded interleaved
+    /// buffer; returns what is left to consume.
+    pub(crate) fn trim_lead<'a>(&mut self, samples: &'a [f32], channels: usize) -> &'a [f32] {
+        if self.pending_skip == 0 {
+            return samples;
+        }
+        let frames = (samples.len() / channels.max(1)) as u64;
+        let n = self.pending_skip.min(frames);
+        self.pending_skip -= n;
+        &samples[n as usize * channels.max(1)..]
+    }
 }
 
 /// Open a source file strictly read-only and prepare a decoder.
@@ -164,23 +206,74 @@ pub(crate) fn open(path: &Path) -> Result<Opened> {
     let sample_rate = params
         .sample_rate
         .ok_or_else(|| StillError::Decode("unknown sample rate".into()))?;
-    let channels = params
-        .channels
-        .map(|c| c.count())
-        .filter(|&c| c > 0)
-        .ok_or_else(|| StillError::Decode("unknown channel layout".into()))? as u16;
     let n_frames_hint = params.n_frames;
-    let decoder = symphonia::default::get_codecs()
+    let mut format = format;
+    let mut decoder = symphonia::default::get_codecs()
         .make(&params, &DecoderOptions::default())
         .map_err(|e| StillError::Decode(e.to_string()))?;
+    let channels = match params.channels.map(|c| c.count()).filter(|&c| c > 0) {
+        Some(c) => c as u16,
+        // Some containers (M4A/AAC, ALAC) leave the channel count to the
+        // codec config: decode the first packet to learn it, then rewind.
+        None => probe_channels(&mut format, &mut decoder, track_id)?,
+    };
+    let is_mp4 = path
+        .extension()
+        .map(|e| matches!(e.to_string_lossy().to_lowercase().as_str(), "m4a" | "mp4"))
+        .unwrap_or(false);
+    let lead_skip = if is_mp4 {
+        crate::mp4::lead_skip_frames(path, sample_rate)
+    } else {
+        0
+    };
     Ok(Opened {
         format,
         decoder,
         track_id,
         sample_rate,
         channels,
-        n_frames_hint,
+        n_frames_hint: n_frames_hint.map(|n| n.saturating_sub(lead_skip)),
+        lead_skip,
+        pending_skip: lead_skip,
     })
+}
+
+/// Channel count from the first decodable packet, leaving the reader and
+/// decoder rewound to the start of the stream.
+fn probe_channels(
+    format: &mut Box<dyn FormatReader>,
+    decoder: &mut Box<dyn Decoder>,
+    track_id: u32,
+) -> Result<u16> {
+    let unknown = || StillError::Decode("unknown channel layout".into());
+    let channels = loop {
+        let packet = match format.next_packet() {
+            Ok(p) => p,
+            Err(SymError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                return Err(unknown())
+            }
+            Err(e) => return Err(StillError::Decode(e.to_string())),
+        };
+        if packet.track_id() != track_id {
+            continue;
+        }
+        match decoder.decode(&packet) {
+            Ok(decoded) => break decoded.spec().channels.count(),
+            Err(SymError::DecodeError(_)) => continue,
+            Err(e) => return Err(StillError::Decode(e.to_string())),
+        }
+    };
+    if channels == 0 {
+        return Err(unknown());
+    }
+    format
+        .seek(
+            SeekMode::Accurate,
+            SeekTo::TimeStamp { ts: 0, track_id },
+        )
+        .map_err(|e| StillError::Decode(e.to_string()))?;
+    decoder.reset();
+    Ok(channels as u16)
 }
 
 /// Decode one opened file to the end, feeding the shared peak builder.
@@ -215,7 +308,7 @@ fn decode_into(
                     _ => sample_buf.insert(SampleBuffer::new(needed, spec)),
                 };
                 buf.copy_interleaved_ref(decoded);
-                builder.push_interleaved(buf.samples());
+                builder.push_interleaved(o.trim_lead(buf.samples(), spec.channels.count()));
                 if let Some(nf) = o.n_frames_hint {
                     if nf > 0 {
                         let done = builder.total_frames() - start_frames;
@@ -443,20 +536,7 @@ fn snap_inner(path: &Path, position: u64, window_ms: u32) -> Result<Option<u64>>
     let start = position.saturating_sub(window);
     let end = position + window;
 
-    let seek_secs = start as f64 / sr as f64;
-    let seeked = o
-        .format
-        .seek(
-            SeekMode::Accurate,
-            SeekTo::Time {
-                time: Time::from(seek_secs),
-                track_id: Some(o.track_id),
-            },
-        )
-        .map_err(|e| StillError::Decode(e.to_string()))?;
-    o.decoder.reset();
-    // actual_ts is in the track's timebase; for PCM-style audio this is frames.
-    let mut cursor = seeked.actual_ts;
+    let mut cursor = o.seek_frame(start)?;
     if cursor > end {
         return Ok(None);
     }
@@ -484,7 +564,7 @@ fn snap_inner(path: &Path, position: u64, window_ms: u32) -> Result<Option<u64>>
             _ => sample_buf.insert(SampleBuffer::new(needed, spec)),
         };
         buf.copy_interleaved_ref(decoded);
-        for frame in buf.samples().chunks_exact(ch) {
+        for frame in o.trim_lead(buf.samples(), ch).chunks_exact(ch) {
             let v: f32 = frame.iter().sum::<f32>() / ch as f32;
             mono.push(v);
         }

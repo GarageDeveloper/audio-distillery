@@ -25,7 +25,7 @@ import { usePlayback } from "./hooks/usePlayback";
 import type { Viewport } from "./lib/viewport";
 import { clampViewport } from "./lib/viewport";
 
-const AUDIO_EXTS = ["wav", "flac", "mp3", "aiff", "aif"];
+const AUDIO_EXTS = ["wav", "flac", "mp3", "m4a", "aiff", "aif"];
 const THEME_KEY = "still-theme";
 
 interface LoadState {
@@ -255,7 +255,7 @@ export default function App() {
             setDropChoice(audio);
           }
         } else {
-          showError("Unsupported file type. Drop WAV, FLAC, MP3, AIFF files or a .still project.");
+          showError("Unsupported file type. Drop WAV, FLAC, MP3, M4A, AIFF files or a .still project.");
         }
       }
     });
