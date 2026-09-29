@@ -6,8 +6,6 @@ use std::path::PathBuf;
 
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::errors::Error as SymError;
-use symphonia::core::formats::{SeekMode, SeekTo};
-use symphonia::core::units::Time;
 
 use crate::audio::{open, Opened};
 
@@ -114,17 +112,8 @@ impl LayerDecoder {
         // In-file position = the item's offset plus playback progress.
         let target = offset + self.item_pos;
         if target > 0 {
-            let secs = target as f64 / o.sample_rate.max(1) as f64;
-            let seeked = o.format.seek(
-                SeekMode::Accurate,
-                SeekTo::Time {
-                    time: Time::from(secs),
-                    track_id: Some(o.track_id),
-                },
-            );
-            o.decoder.reset();
             // Decode-and-discard from the packet boundary to the exact frame.
-            let landed = seeked.map(|s| s.actual_ts).unwrap_or(0);
+            let landed = o.seek_frame(target).unwrap_or(0);
             let mut to_skip = target.saturating_sub(landed);
             self.opened = Some(o);
             while to_skip > 0 {
@@ -176,7 +165,7 @@ impl LayerDecoder {
                         _ => self.sample_buf.insert(SampleBuffer::new(needed, spec)),
                     };
                     buf.copy_interleaved_ref(decoded);
-                    return Some(buf.samples().to_vec());
+                    return Some(o.trim_lead(buf.samples(), spec.channels.count()).to_vec());
                 }
                 Err(SymError::DecodeError(_)) => continue,
                 Err(_) => return None,

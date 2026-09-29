@@ -46,7 +46,7 @@ isn't the one that fits me. AudioDistillery only tries to nail one narrow
 job — and I hope it can help other amateur musicians at the end of a
 rehearsal too. :)
 
-- Load WAV, FLAC, MP3 or AIFF (multi-GB files stream — nothing is loaded whole
+- Load WAV, FLAC, MP3, M4A or AIFF (multi-GB files stream — nothing is loaded whole
   into RAM).
 - Navigate a fast multi-resolution waveform (wheel = zoom at cursor, minimap).
 - Mark each track as a start/end region: press `M` at the start then at the

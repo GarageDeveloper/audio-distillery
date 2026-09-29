@@ -244,7 +244,7 @@ export function RecordSurface({ hasSession, onImport, onError, onRecorded }: Pro
           <span className="record-import-text">
             <strong>{hasSession ? "Add audio files" : "Start from existing audio"}</strong>
             <span className="record-import-sub">
-              Drop WAV, FLAC, MP3 or AIFF anywhere — or click to choose files
+              Drop WAV, FLAC, MP3, M4A or AIFF anywhere — or click to choose files
               {hasSession ? ". You'll pick how they land: clips, layers or a take." : "."}
             </span>
           </span>
