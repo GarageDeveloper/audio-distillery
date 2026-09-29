@@ -165,7 +165,7 @@ impl LayerDecoder {
                         _ => self.sample_buf.insert(SampleBuffer::new(needed, spec)),
                     };
                     buf.copy_interleaved_ref(decoded);
-                    return Some(o.trim_lead(buf.samples(), spec.channels.count()).to_vec());
+                    return Some(o.trim_edit(buf.samples(), spec.channels.count()).to_vec());
                 }
                 Err(SymError::DecodeError(_)) => continue,
                 Err(_) => return None,

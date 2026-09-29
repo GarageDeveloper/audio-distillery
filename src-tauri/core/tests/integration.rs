@@ -206,6 +206,8 @@ fn scans_compressed_formats() {
 /// M4A/AAC carries encoder priming that FFmpeg (the export renderer) drops
 /// via the MP4 edit list. The scan and the playback engine must use the SAME
 /// origin, or markers placed on the waveform would cut ~23 ms off at export.
+/// The edit's duration must be honored too, so the trailing padding never
+/// shows up in the timeline.
 #[test]
 fn m4a_timeline_matches_ffmpeg() {
     use still_core::engine::decode::{LayerDecoder, PlayItem};
@@ -241,8 +243,10 @@ fn m4a_timeline_matches_ffmpeg() {
             .collect();
         let ref_onset = (reference.iter().position(|v| v.abs() > 1000).unwrap() / 2) as u64;
 
+        // Length = the original audio, trailing encoder padding excluded
+        // (FFmpeg keeps or drops that padding depending on its version).
         let (info, _) = scan_file(&m4a, |_| {}).unwrap();
-        assert_eq!(info.duration_samples, reference.len() as u64 / 2, "{codec}: length");
+        assert_eq!(info.duration_samples, 3 * SR as u64, "{codec}: length");
 
         let item = PlayItem::File {
             path: m4a.clone(),
